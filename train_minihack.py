@@ -4,17 +4,13 @@ import wandb
 import gym
 import minihack
 import numpy as np
-import dreamerv2.api as dv2
-import wandb
+import dreamerv3_api as dv3
 from input_args import parse_minihack_args
 import ast
 
-import tensorflow as tf
-gpus = tf.config.experimental.list_physical_devices('GPU')
-for gpu in gpus:
-    tf.config.experimental.set_memory_growth(gpu, True)
-
-os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+# Configure JAX memory allocation
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.8"
 
 class MiniHackObsWrapper(gym.ObservationWrapper):
     def __init__(self, env):
@@ -25,6 +21,38 @@ class MiniHackObsWrapper(gym.ObservationWrapper):
         obs = obs["pixel_crop"]
         obs = np.pad(obs, [(2, 2), (2, 2), (0, 0)])
         return obs
+
+
+class EmbeddingWrapper(gym.ObservationWrapper):
+    """
+    Wrapper that converts image observations to embeddings.
+    For actual use, replace the random projection with a proper encoder.
+    """
+
+    def __init__(self, env, embedding_dim=256):
+        super().__init__(env)
+        self.embedding_dim = embedding_dim
+        if hasattr(env.observation_space, 'shape'):
+            self.orig_shape = env.observation_space.shape
+        else:
+            self.orig_shape = (84, 84, 3)
+
+        self.observation_space = gym.spaces.Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=(embedding_dim,),
+            dtype=np.float32,
+        )
+
+        np.random.seed(42)
+        flat_dim = int(np.prod(self.orig_shape))
+        self.projection = np.random.randn(flat_dim, embedding_dim).astype(np.float32)
+        self.projection /= np.sqrt(flat_dim)
+
+    def observation(self, obs):
+        flat = obs.flatten().astype(np.float32) / 255.0
+        embedding = np.dot(flat, self.projection)
+        return embedding
 
 # from https://github.com/MiniHackPlanet/MiniHack/blob/e9c8c20fb2449d1f87163314f9b3617cf4f0e088/minihack/scripts/venv_demo.py#L28
 class MiniHackMakeVecSafeWrapper(gym.Wrapper):
@@ -84,22 +112,17 @@ def make_minihack(
     return env
 
 def run_minihack(args):
-
-    config = dv2.defaults
-    config = config.update(dv2.configs['crafter'])
     tag = args.tag + str(args.seed)
 
-    config = config.update({
+    config = dv3.defaults.update({
         'logdir': '{0}/minihack_{1}'.format(args.logdir, tag),
         'log_every': 1e3,
         'log_every_video': 2e5,
         'train_every': args.train_every,
         'time_limit': 100,
         'prefill': 1e4,
-        # 'actor_ent': args.eta,
-        'loss_scales.kl': args.beta,
         'steps': args.steps,
-        "unbalanced_steps": args.unbalanced_steps,
+        'unbalanced_steps': str(args.unbalanced_steps) if args.unbalanced_steps else 'None',
         'cl': args.cl,
         'cl_small': args.cl_small,
         'num_tasks': args.num_tasks,
@@ -108,26 +131,24 @@ def run_minihack(args):
         'eval_every': 5e4,
         'eval_steps': 1e3,
         'tag': tag,
-        "dataset.batch": args.batch_size,
-        'replay.capacity': args.replay_capacity,
-        'replay.reservoir_sampling': args.reservoir_sampling,
-        "replay.uncertainty_sampling": args.uncertainty_sampling,
-        'replay.recent_past_sampl_thres': args.recent_past_sampl_thres,
-        'replay.reward_sampling': args.reward_sampling,
-        'replay.coverage_sampling': args.coverage_sampling,
-        'replay.coverage_sampling_args': args.coverage_sampling_args,
-        'replay.minlen': args.minlen,
-        'sep_exp_eval_policies': args.sep_exp_eval_policies,
-        "rssm.stoch": args.rssm_stoch,
-        "rssm.discrete": args.rssm_discrete,
-        "actor_ent": args.actor_ent,
-        "discount": args.discount,
-        'wandb.group': args.wandb_group,
-        'wandb.name': f"{dv2.defaults.expl_behavior}_cl-small={args.cl_small}_{tag}" if args.cl else f"{dv2.defaults.expl_behavior}_single-env={args.env}_{tag}", 
-        'wandb.project': args.wandb_proj_name,
-    }).parse_flags()
+        'input_type': args.input_type,
+        'embedding_dim': args.embedding_dim,
+        'dataset': {
+            'batch': args.batch_size,
+        },
+        'replay': {
+            'capacity': int(args.replay_capacity),
+            'reservoir_sampling': args.reservoir_sampling,
+            'recent_past_sampl_thres': args.recent_past_sampl_thres,
+            'minlen': args.minlen,
+        },
+        'wandb': {
+            'group': args.wandb_group,
+            'name': f"DreamerV3_cl-small={args.cl_small}_{tag}" if args.cl else f"DreamerV3_single-env={args.env}_{tag}",
+            'project': args.wandb_proj_name,
+        },
+    })
 
-    # from https://github.com/danijar/crafter-baselines/blob/main/plan2explore/main.py
     if args.plan2explore:
         config = config.update({
             'expl_behavior': 'Plan2Explore',
@@ -136,8 +157,12 @@ def run_minihack(args):
             'expl_intr_scale': args.expl_intr_scale,
             'expl_extr_scale': args.expl_extr_scale,
             'discount': 0.99,
-            'wandb.name': f"Plan2Explore_cl-small={args.cl_small}_{tag}" if args.cl else f"Plan2Explore_single-env={args.env}_{tag}",
-        }).parse_flags()
+            'wandb': {
+                'name': f"Plan2Explore_cl-small={args.cl_small}_{tag}" if args.cl else f"Plan2Explore_single-env={args.env}_{tag}",
+            },
+        })
+
+    config = config.parse_flags()
     
     unbalanced_steps = ast.literal_eval(config.unbalanced_steps)
     if config.cl:
@@ -166,10 +191,10 @@ def run_minihack(args):
             ]
 
         wandb.init(
-            config=config,
+            config=dict(config),
             reinit=True,
             resume=False,
-            sync_tensorboard=True,
+            dir=args.wandb_dir,
             **config.wandb,
         )
 
@@ -177,10 +202,12 @@ def run_minihack(args):
         for i in range(config.num_tasks):
             name = env_names[i]
             env = make_minihack(name)
+            if args.input_type == 'embedding':
+                env = EmbeddingWrapper(env, embedding_dim=args.embedding_dim)
             print("env {0}, action space: {1}".format(name, env.action_space.n))
             envs.append(env)
 
-        dv2.cl_train_loop(envs, config)
+        dv3.cl_train_loop(envs, config)
     else:
         envs = [
             "Room-Random-15x15-v0",
@@ -201,18 +228,20 @@ def run_minihack(args):
         }).parse_flags()
 
         wandb.init(
-            config=config,
+            config=dict(config),
             reinit=True,
             resume=False,
-            sync_tensorboard=True,
+            dir=args.wandb_dir,
             **config.wandb,
         )
 
         env = make_minihack(envs[args.env])
-        dv2.train(env, config)
+        if args.input_type == 'embedding':
+            env = EmbeddingWrapper(env, embedding_dim=args.embedding_dim)
+        dv3.train(env, config)
 
     if args.del_exp_replay:
-        shutil.rmtree(os.path.join(config['logdir'], 'train_episodes'))
+        shutil.rmtree(os.path.join(config['logdir'], 'replay'), ignore_errors=True)
 
     wandb.finish()
 

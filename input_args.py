@@ -23,6 +23,11 @@ def parse_minigrid_args(args=None):
                         help='unique str for wandb directory.')
     parser.add_argument('--state_bonus', default=False, action='store_true',
                     help='Flag to decide whether to use a state bonus.')
+    # Input type
+    parser.add_argument('--input_type', type=str, default='embedding', choices=['embedding', 'pixel'],
+                        help='Observation input type. Default is embedding.')
+    parser.add_argument('--embedding_dim', type=int, default=256,
+                        help='Dimension of the embedding input.')
     # DV2
     parser.add_argument('--replay_capacity', type=int, default=2e6)
     parser.add_argument('--reservoir_sampling', default=False, action='store_true',
@@ -82,6 +87,12 @@ def parse_minihack_args(args=None):
                         help='unique str for wandb projs.')
     parser.add_argument('--wandb_dir', type=str, default=None,
                         help='unique str for wandb directory.')
+
+    # Input type
+    parser.add_argument('--input_type', type=str, default='embedding', choices=['embedding', 'pixel'],
+                        help='Observation input type. Default is embedding.')
+    parser.add_argument('--embedding_dim', type=int, default=256,
+                        help='Dimension of the embedding input.')
 
 
     # DV2
