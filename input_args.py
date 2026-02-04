@@ -191,9 +191,30 @@ def parse_craftax_args(args=None):
     parser.add_argument('--unbalanced_steps', type=list, default=None,
                         help="number of steps per each task")
 
+    # Replay sampling strategies
+    parser.add_argument('--reservoir_sampling', default=False, action='store_true',
+                        help='Flag for using reservoir sampling (random eviction).')
+    parser.add_argument('--reward_sampling', default=False, action='store_true',
+                        help='Flag for using reward-weighted sampling.')
+    parser.add_argument('--recency_sampling', default=False, action='store_true',
+                        help='Flag for using recency-biased sampling.')
+    parser.add_argument('--uniform_frac', type=float, default=1.0,
+                        help='Fraction of samples from uniform distribution (for Mixture selector).')
+    parser.add_argument('--recency_frac', type=float, default=0.0,
+                        help='Fraction of samples from recency distribution (for Mixture selector).')
+    # 50:50 sampling strategy (Continual-Dreamer paper)
+    parser.add_argument('--recent_frac', type=float, default=0.0,
+                        help='Fraction of mini-batch from recent experience (0.5 for 50:50 sampling).')
+    parser.add_argument('--recent_window', type=int, default=1000,
+                        help='Window size for recent experience sampling.')
+
     # Exploration
     parser.add_argument('--plan2explore', default=False, action='store_true',
                         help='Enable plan2explore exploration strategy.')
+    parser.add_argument('--disag_models', type=int, default=10,
+                        help='Number of ensemble models for Plan2Explore.')
+    parser.add_argument('--disag_target', type=str, default='stoch', choices=['stoch', 'deter', 'feat'],
+                        help='Target for ensemble disagreement prediction.')
     parser.add_argument('--expl_intr_scale', type=float, default=1.0,
                         help="scale of the intrinsic reward.")
     parser.add_argument('--expl_extr_scale', type=float, default=0.0,
@@ -250,9 +271,30 @@ def parse_navix_args(args=None):
     parser.add_argument('--unbalanced_steps', type=list, default=None,
                         help="number of steps per each task")
 
+    # Replay sampling strategies
+    parser.add_argument('--reservoir_sampling', default=False, action='store_true',
+                        help='Flag for using reservoir sampling (random eviction).')
+    parser.add_argument('--reward_sampling', default=False, action='store_true',
+                        help='Flag for using reward-weighted sampling.')
+    parser.add_argument('--recency_sampling', default=False, action='store_true',
+                        help='Flag for using recency-biased sampling.')
+    parser.add_argument('--uniform_frac', type=float, default=1.0,
+                        help='Fraction of samples from uniform distribution (for Mixture selector).')
+    parser.add_argument('--recency_frac', type=float, default=0.0,
+                        help='Fraction of samples from recency distribution (for Mixture selector).')
+    # 50:50 sampling strategy (Continual-Dreamer paper)
+    parser.add_argument('--recent_frac', type=float, default=0.0,
+                        help='Fraction of mini-batch from recent experience (0.5 for 50:50 sampling).')
+    parser.add_argument('--recent_window', type=int, default=1000,
+                        help='Window size for recent experience sampling.')
+
     # Exploration
     parser.add_argument('--plan2explore', default=False, action='store_true',
                         help='Enable plan2explore exploration strategy.')
+    parser.add_argument('--disag_models', type=int, default=10,
+                        help='Number of ensemble models for Plan2Explore.')
+    parser.add_argument('--disag_target', type=str, default='stoch', choices=['stoch', 'deter', 'feat'],
+                        help='Target for ensemble disagreement prediction.')
     parser.add_argument('--expl_intr_scale', type=float, default=1.0,
                         help="scale of the intrinsic reward.")
     parser.add_argument('--expl_extr_scale', type=float, default=0.0,

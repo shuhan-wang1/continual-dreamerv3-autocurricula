@@ -15,12 +15,26 @@ class Replay:
 
   def __init__(
       self, length, capacity=None, directory=None, chunksize=1024,
-      online=False, selector=None, save_wait=False, name='unnamed', seed=0):
-
+      online=False, selector=None, save_wait=False, name='unnamed', seed=0,
+      eviction='fifo'):
+    """
+    Args:
+      length: Sequence length to sample
+      capacity: Maximum number of items in buffer
+      directory: Directory to save/load chunks
+      chunksize: Size of each chunk
+      online: Whether to use online queue
+      selector: Selector for sampling (default: Uniform)
+      save_wait: Whether to wait for saves to complete
+      name: Name of the replay buffer
+      seed: Random seed
+      eviction: Eviction strategy - 'fifo' (default) or 'reservoir'
+    """
     self.length = length
     self.capacity = capacity
     self.chunksize = chunksize
     self.name = name
+    self.eviction = eviction
 
     self.sampler = selector or selectors.Uniform(seed)
 
@@ -29,8 +43,11 @@ class Replay:
     self.refs_lock = threading.RLock()
 
     self.items = {}
-    self.fifo = deque()
+    self.fifo = deque()  # Used for FIFO eviction
+    self.item_keys = []  # Used for reservoir eviction (random access)
     self.itemid = 0
+    self.total_seen = 0  # For reservoir sampling probability
+    self._eviction_rng = np.random.default_rng(seed + 1000)  # Separate RNG for eviction
 
     self.current = {}
     self.streams = defaultdict(deque)
@@ -169,17 +186,49 @@ class Replay:
         continue
 
   def _insert(self, chunkid, index):
-    while self.capacity and len(self.items) >= self.capacity:
+    self.total_seen += 1
+
+    if self.eviction == 'reservoir' and self.capacity and len(self.items) >= self.capacity:
+      # Reservoir sampling: decide whether to include this item
+      # Probability of inclusion = capacity / total_seen
+      j = self._eviction_rng.integers(0, self.total_seen)
+      if j >= self.capacity:
+        # Reject this item - don't add it
+        return
+      # Accept: remove a random existing item and add this one
+      self._remove_random(j)
+    elif self.capacity and len(self.items) >= self.capacity:
+      # FIFO eviction
       self._remove()
+
     itemid = self.itemid
     self.itemid += 1
     self.items[itemid] = (chunkid, index)
     stepids = self._getseq(chunkid, index, ['stepid'])['stepid']
     self.sampler[itemid] = stepids
     self.fifo.append(itemid)
+    self.item_keys.append(itemid)
 
   def _remove(self):
+    """Remove the oldest item (FIFO eviction)."""
     itemid = self.fifo.popleft()
+    self._remove_item(itemid)
+
+  def _remove_random(self, index):
+    """Remove item at random index (reservoir eviction)."""
+    if index >= len(self.item_keys):
+      index = self._eviction_rng.integers(0, len(self.item_keys))
+    itemid = self.item_keys[index]
+    self._remove_item(itemid)
+    # Remove from item_keys and fifo
+    self.item_keys.remove(itemid)
+    try:
+      self.fifo.remove(itemid)
+    except ValueError:
+      pass
+
+  def _remove_item(self, itemid):
+    """Remove a specific item from the buffer."""
     del self.sampler[itemid]
     chunkid, index = self.items.pop(itemid)
     with self.refs_lock:

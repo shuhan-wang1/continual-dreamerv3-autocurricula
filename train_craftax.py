@@ -242,16 +242,88 @@ def make_agent(config, env):
     return Agent(obs_space, act_space, agent_config)
 
 
-def make_replay(config, directory):
-    """Create a replay buffer."""
+def make_selector(args, capacity, seed=0):
+    """Create a replay selector based on sampling strategy args.
+
+    Supports:
+    - Uniform sampling (default)
+    - Reservoir sampling (random eviction) - use with eviction='reservoir' in make_replay
+    - Recency-biased sampling
+    - 50:50 sampling (half random, half recent) - Continual-Dreamer strategy
+    - Mixture of multiple strategies
+    """
+    from embodied.core import selectors
+
+    # Check if using 50:50 sampling (Continual-Dreamer strategy)
+    # This is the recommended setup for continual learning with 8+ tasks
+    recent_frac = getattr(args, 'recent_frac', 0.0)
+    if recent_frac > 0:
+        # Mixture of uniform (random from buffer) and recent (recent experience)
+        window_size = getattr(args, 'recent_window', 1000)
+        selector_dict = {
+            'uniform': selectors.Uniform(seed=seed),
+            'recent': selectors.Recent(window_size=window_size, seed=seed + 1),
+        }
+        fractions = {
+            'uniform': 1.0 - recent_frac,
+            'recent': recent_frac,
+        }
+        return selectors.Mixture(selector_dict, fractions, seed=seed + 2)
+
+    # Check if using recency sampling (different from 50:50)
+    if getattr(args, 'recency_sampling', False):
+        # Create recency distribution - more recent items have higher probability
+        uprobs = np.linspace(1.0, 0.1, min(capacity, 100000))
+        return selectors.Recency(uprobs, seed=seed)
+
+    # Check if using mixture of uniform and recency
+    uniform_frac = getattr(args, 'uniform_frac', 1.0)
+    recency_frac = getattr(args, 'recency_frac', 0.0)
+
+    if recency_frac > 0 and uniform_frac < 1.0:
+        # Mixture of uniform and recency
+        uprobs = np.linspace(1.0, 0.1, min(capacity, 100000))
+        selector_dict = {
+            'uniform': selectors.Uniform(seed=seed),
+            'recency': selectors.Recency(uprobs, seed=seed + 1),
+        }
+        fractions = {
+            'uniform': uniform_frac,
+            'recency': recency_frac,
+        }
+        return selectors.Mixture(selector_dict, fractions, seed=seed + 2)
+
+    # Default to uniform sampling
+    return selectors.Uniform(seed=seed)
+
+
+def make_replay(config, directory, args=None):
+    """Create a replay buffer with configurable sampling and eviction strategy.
+
+    Supports:
+    - FIFO eviction (default)
+    - Reservoir eviction (random eviction for continual learning)
+    """
     length = config.batch_length + config.replay_context
     capacity = int(config.replay.size)
+
+    # Create selector based on args
+    selector = None
+    eviction = 'fifo'
+    if args is not None:
+        selector = make_selector(args, capacity, seed=config.seed)
+        # Use reservoir eviction if flag is set
+        if getattr(args, 'reservoir_sampling', False):
+            eviction = 'reservoir'
+
     return embodied.replay.Replay(
         length=length,
         capacity=capacity,
         directory=directory,
         online=config.replay.online,
         chunksize=config.replay.chunksize,
+        selector=selector,
+        eviction=eviction,
     )
 
 
@@ -308,7 +380,7 @@ def train_single(env, config, args):
 
     wrapped_env = wrap_env(env)
     agent = make_agent(config, wrapped_env)
-    replay = make_replay(config, logdir / 'replay')
+    replay = make_replay(config, logdir / 'replay', args)
 
     step = elements.Counter()
     logger = make_logger(config, step)
@@ -404,7 +476,7 @@ def cl_train_loop(envs, config, args):
     env = wrapped_envs[0]
 
     agent = make_agent(config, env)
-    replay = make_replay(config, logdir / 'replay')
+    replay = make_replay(config, logdir / 'replay', args)
 
     total_step = elements.Counter()
     logger = make_logger(config, total_step)

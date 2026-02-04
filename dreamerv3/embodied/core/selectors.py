@@ -26,6 +26,58 @@ class Fifo:
       self.queue.remove(key)
 
 
+class Reservoir:
+  """Reservoir sampling selector - random eviction instead of FIFO.
+
+  Implements Algorithm 2 from https://arxiv.org/pdf/1902.10486.pdf
+  Each item has equal probability of being evicted when capacity is reached.
+  """
+
+  def __init__(self, capacity, seed=0):
+    self.capacity = capacity
+    self.indices = {}
+    self.keys = []
+    self.rng = np.random.default_rng(seed)
+    self.lock = threading.Lock()
+    self.total_seen = 0
+
+  def __len__(self):
+    return len(self.keys)
+
+  def __call__(self):
+    with self.lock:
+      index = self.rng.integers(0, len(self.keys)).item()
+      return self.keys[index]
+
+  def __setitem__(self, key, stepids):
+    with self.lock:
+      self.total_seen += 1
+      if len(self.keys) < self.capacity:
+        # Buffer not full yet, just add
+        self.indices[key] = len(self.keys)
+        self.keys.append(key)
+      else:
+        # Reservoir sampling: randomly decide whether to include
+        j = self.rng.integers(0, self.total_seen)
+        if j < self.capacity:
+          # Replace item at position j
+          old_key = self.keys[j]
+          del self.indices[old_key]
+          self.keys[j] = key
+          self.indices[key] = j
+
+  def __delitem__(self, key):
+    with self.lock:
+      if key not in self.indices:
+        return
+      assert 2 <= len(self), len(self)
+      index = self.indices.pop(key)
+      last = self.keys.pop()
+      if index != len(self.keys):
+        self.keys[index] = last
+        self.indices[last] = index
+
+
 class Uniform:
 
   def __init__(self, seed=0):
@@ -197,6 +249,106 @@ class Prioritized:
       return mean
 
 
+class Recent:
+  """Samples from the N most recent items uniformly.
+
+  Used for the 50:50 sampling strategy in Continual-Dreamer:
+  half from random buffer samples, half from recent experience.
+  """
+
+  def __init__(self, window_size=1000, seed=0):
+    self.window_size = window_size
+    self.indices = {}
+    self.keys = []  # All keys in insertion order
+    self.rng = np.random.default_rng(seed)
+    self.lock = threading.Lock()
+
+  def __len__(self):
+    return len(self.keys)
+
+  def __call__(self):
+    with self.lock:
+      # Sample uniformly from the most recent window_size items
+      recent_count = min(len(self.keys), self.window_size)
+      if recent_count == 0:
+        raise IndexError("Empty selector")
+      # Sample from the end of the list (most recent items)
+      start_idx = len(self.keys) - recent_count
+      index = self.rng.integers(start_idx, len(self.keys)).item()
+      return self.keys[index]
+
+  def __setitem__(self, key, stepids):
+    with self.lock:
+      self.indices[key] = len(self.keys)
+      self.keys.append(key)
+
+  def __delitem__(self, key):
+    with self.lock:
+      if key not in self.indices:
+        return
+      assert 2 <= len(self), len(self)
+      index = self.indices.pop(key)
+      last = self.keys.pop()
+      if index != len(self.keys):
+        self.keys[index] = last
+        self.indices[last] = index
+
+
+class RewardWeighted:
+  """Samples episodes weighted by cumulative reward (softmax).
+
+  Higher reward episodes have higher probability of being sampled.
+  """
+
+  def __init__(self, temperature=1.0, seed=0):
+    self.temperature = temperature
+    self.indices = {}
+    self.keys = []
+    self.rewards = []  # Store cumulative rewards
+    self.rng = np.random.default_rng(seed)
+    self.lock = threading.Lock()
+
+  def __len__(self):
+    return len(self.keys)
+
+  def __call__(self):
+    with self.lock:
+      if len(self.keys) == 0:
+        raise IndexError("Empty selector")
+      rewards = np.array(self.rewards)
+      # Softmax with temperature
+      scaled = rewards / self.temperature
+      e_r = np.exp(scaled - np.max(scaled))
+      probs = e_r / e_r.sum()
+      index = self.rng.choice(len(self.keys), p=probs)
+      return self.keys[index]
+
+  def __setitem__(self, key, stepids):
+    with self.lock:
+      self.indices[key] = len(self.keys)
+      self.keys.append(key)
+      self.rewards.append(0.0)  # Initialize with 0, will be updated
+
+  def __delitem__(self, key):
+    with self.lock:
+      if key not in self.indices:
+        return
+      assert 2 <= len(self), len(self)
+      index = self.indices.pop(key)
+      last_key = self.keys.pop()
+      last_reward = self.rewards.pop()
+      if index != len(self.keys):
+        self.keys[index] = last_key
+        self.rewards[index] = last_reward
+        self.indices[last_key] = index
+
+  def update_reward(self, key, reward):
+    """Update the cumulative reward for an episode."""
+    with self.lock:
+      if key in self.indices:
+        self.rewards[self.indices[key]] = reward
+
+
 class Mixture:
 
   def __init__(self, selectors, fractions, seed=0):
@@ -210,6 +362,10 @@ class Mixture:
     self.selectors = [selectors[key] for key in keys]
     self.fractions = np.array([fractions[key] for key in keys], np.float32)
     self.rng = np.random.default_rng(seed)
+
+  def __len__(self):
+    # All selectors have the same items, so return length of first one
+    return len(self.selectors[0]) if self.selectors else 0
 
   def __call__(self):
     return self.rng.choice(self.selectors, p=self.fractions)()
