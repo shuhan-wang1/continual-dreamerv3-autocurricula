@@ -26,15 +26,100 @@ from dreamerv3.agent import Agent
 _configs_path = root / 'dreamerv3' / 'dreamerv3' / 'configs.yaml'
 _configs = yaml.YAML(typ='safe').load(_configs_path.read_text())
 configs = {k: v for k, v in _configs.items() if k != 'defaults'}
-defaults = elements.Config(_configs['defaults'])
 
 
-class Config(elements.Config):
-    """Extended config class with DreamerV2-style interface."""
+def _to_tuple(obj):
+    """
+    Recursively convert ALL lists to tuples, including nested ones.
+    This is required because elements.Config does not accept empty lists.
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, bool):
+        return obj
+    if isinstance(obj, (int, float, str, bytes)):
+        return obj
+    if isinstance(obj, list):
+        return tuple(_to_tuple(x) for x in obj)
+    if isinstance(obj, tuple):
+        return tuple(_to_tuple(x) for x in obj)
+    if isinstance(obj, dict):
+        return {str(k): _to_tuple(v) for k, v in obj.items()}
+    # Handle numpy arrays
+    if hasattr(obj, 'tolist'):
+        return tuple(_to_tuple(x) for x in obj.tolist())
+    # Handle numpy scalars
+    if hasattr(obj, 'item'):
+        return obj.item()
+    # Handle other dict-like objects
+    if hasattr(obj, 'items'):
+        return {str(k): _to_tuple(v) for k, v in obj.items()}
+    # Handle other iterables (but not strings which are already handled)
+    if hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
+        try:
+            return tuple(_to_tuple(x) for x in obj)
+        except TypeError:
+            pass
+    return obj
+
+
+def _merge_dicts(base, updates):
+    """Deep merge two dictionaries, with updates overriding base."""
+    result = dict(base)
+    for key, value in updates.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _merge_dicts(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+class Config(dict):
+    """
+    Simple config class that wraps a dictionary.
+    Provides attribute-style access and DreamerV2-compatible interface.
+    Does NOT inherit from elements.Config to avoid empty list issues.
+    """
+
+    def __init__(self, mapping=None, **kwargs):
+        if mapping is None:
+            mapping = {}
+        if kwargs:
+            mapping = {**mapping, **kwargs}
+        mapping = _to_tuple(mapping)
+        super().__init__(mapping)
+
+    def __getattr__(self, name):
+        try:
+            value = self[name]
+            if isinstance(value, dict) and not isinstance(value, Config):
+                return Config(value)
+            return value
+        except KeyError:
+            raise AttributeError(f"Config has no attribute '{name}'")
+
+    def __setattr__(self, name, value):
+        self[name] = value
+
+    def get(self, key, default=None):
+        try:
+            keys = key.split('.')
+            value = self
+            for k in keys:
+                if isinstance(value, dict):
+                    value = value.get(k, default)
+                else:
+                    return default
+            return value
+        except (KeyError, TypeError):
+            return default
 
     def parse_flags(self, argv=None):
         """Parse command line flags and return updated config."""
-        return elements.Flags(self).parse(argv)
+        # Convert to elements.Config for parsing, then back
+        elem_config = elements.Config(_to_tuple(dict(self)))
+        parsed = elements.Flags(elem_config).parse(argv)
+        return Config(dict(parsed))
 
     def save(self, path):
         """Save config to yaml file."""
@@ -43,12 +128,33 @@ class Config(elements.Config):
         with open(path, 'w') as f:
             yaml.YAML().dump(dict(self), f)
 
+    def update(self, *args, **kwargs):
+        """Update config and return a new Config instance."""
+        if args:
+            if len(args) == 1 and isinstance(args[0], dict):
+                updates = dict(args[0])
+            else:
+                updates = dict(args[0]) if args else {}
+        else:
+            updates = {}
+        updates.update(kwargs)
+        updates = _to_tuple(updates)
+        current = _to_tuple(dict(self))
+        merged = _merge_dicts(current, updates)
+        return Config(merged)
 
-# Convert defaults to our Config class
-defaults = Config(dict(defaults))
+    def __repr__(self):
+        return f"Config({super().__repr__()})"
+
+
+# Convert defaults from YAML to plain Python with tuples instead of lists
+_raw_defaults = _configs.get('defaults', {})
+if _raw_defaults is None:
+    _raw_defaults = {}
+_defaults_dict = _to_tuple(_raw_defaults)
 
 # Add continual learning specific defaults
-defaults = defaults.update({
+_cl_defaults = {
     'cl': False,
     'cl_small': False,
     'num_tasks': 1,
@@ -72,12 +178,11 @@ defaults = defaults.update({
     'expl_intr_scale': 1.0,
     'expl_extr_scale': 0.0,
     'pred_discount': True,
-    'grad_heads': ['decoder', 'reward', 'discount'],
-    'skipped_metrics': [],
-    # Embedding input config (default to embedding mode)
-    'input_type': 'embedding',  # 'embedding' or 'pixel'
-    'embedding_dim': 256,  # dimension of input embeddings
-    # Wandb config
+    'grad_heads': ('decoder', 'reward', 'discount'),
+    'skipped_metrics': (),
+    'input_type': 'embedding',
+    'embedding_dim': 256,
+    'steps': 1e6,
     'wandb': {
         'mode': 'online',
         'project': 'continual-dreamerv3',
@@ -87,18 +192,16 @@ defaults = defaults.update({
         'tags': None,
         'notes': None,
     },
-    # Replay buffer config
-    'replay': {
-        'capacity': 2e6,
-        'minlen': 50,
-        'maxlen': 50,
-        'prioritize_ends': True,
-        'reservoir_sampling': False,
-        'recent_past_sampl_thres': 0.0,
-    },
     'dataset': {'batch': 16, 'length': 50},
-    'log_keys_video': ['image'],
-})
+    'log_keys_video': ('image',),
+}
+
+# Merge defaults with CL-specific defaults
+_full_defaults = _merge_dicts(_defaults_dict, _cl_defaults)
+_full_defaults = _to_tuple(_full_defaults)
+
+# Create the defaults Config
+defaults = Config(_full_defaults)
 
 
 class GymWrapper(embodied.Env):
