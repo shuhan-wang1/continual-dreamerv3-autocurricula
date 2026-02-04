@@ -1,6 +1,6 @@
-# On The Effectiveness of World Models For Continual Reinforcement Learning
+# Continual DreamerV3 Autocurricula
 
-This repository contains code to reproduce the experiments in our 2023 Collas paper: [On The Effectiveness of World Models For Continual Reinforcement Learning(https://arxiv.org/abs/2211.15944)]. The training scripts are now aligned with [DreamerV3](https://github.com/danijar/dreamerv3) and default to embedding inputs.
+This repository contains code for continual reinforcement learning experiments using DreamerV3 with JAX-based environments (Craftax and NAVIX). Based on the original Continual DreamerV2 work: [On The Effectiveness of World Models For Continual Reinforcement Learning](https://arxiv.org/abs/2211.15944).
 
 ```
 @article{kessler2022surprising,
@@ -11,100 +11,145 @@ This repository contains code to reproduce the experiments in our 2023 Collas pa
 }
 ```
 
-## Using the Package
+## Installation
 
-Create a conda package iwht `python==3.8` and the following packages and versions in `requirements.txt`.
-
-To install `nle` on a machine without root access these [steps](https://github.com/facebookresearch/nle/issues/246) are helpful.
-
-## Minigrid
-
-To install `gym-minigrid`:
-
-```sh 
-cd gym_minigrid
-pip install -e .
-cd ..
-```
-
-To run DreamerV3 and DreamerV3 + Plan2Explore (default input is embeddings):
+Create a conda environment with Python >= 3.9:
 
 ```sh
-# DV3
-python train_minigrid.py --cl --num_tasks=3 --tag=mg_new_cl_s1_1M --steps=750000 --seed=1 --logdir=logs_cl --del_exp_replay --sep_exp_eval_policies --wandb_proj_name=minigrid_new --minlen=5 --rssm_full_recon
+conda create -n continual-dv3 python=3.10
+conda activate continual-dv3
+pip install -r requirements.txt
 ```
 
+## Supported Environments
+
+This codebase now uses **JAX-based environments** for faster training:
+
+### Craftax
+[Craftax](https://github.com/MichaelTMatthews/Craftax) is a JAX-based reimplementation of Crafter with ~100x speedup.
+
+Available environments:
+- `CraftaxSymbolic-v1` - Symbolic observation (flat vector)
+- `CraftaxPixels-v1` - Pixel observation
+- `CraftaxClassicSymbolic-v1` - Classic version with symbolic obs
+- `CraftaxClassicPixels-v1` - Classic version with pixels
+
+### NAVIX
+[NAVIX](https://github.com/epignatelli/navix) is a JAX-based reimplementation of MiniGrid with ~1000x speedup.
+
+Available environments:
+- `Navix-Empty-8x8-v0`
+- `Navix-DoorKey-6x6-v0`
+- `Navix-LavaCrossing-9x9-v0`
+- `Navix-KeyCorridor-S3R1-v0`
+- `Navix-Dynamic-Obstacles-6x6-v0`
+- `Navix-MultiRoom-N2S4-v0`
+
+## Training
+
+### Unified Training Script
+
+Use the unified training script to select environment type:
+
 ```sh
-# DV3 + state_bonus
-python train_minigrid.py --cl --num_tasks=3 --tag=mg_sb_fr_cl_s0_1M --wandb_proj_name=minigrid_state_bonus --steps=1000000 --seed=0 --logdir=logs_cl --del_exp_replay --sep_exp_eval_policies --wandb_proj_name=minigrid_new --minlen=5 --state_bonus --rssm_full_recon
+# Train on Craftax (single environment)
+python train.py --env_type craftax --env 0 --steps 500000 --seed 42
+
+# Train on NAVIX (single environment)
+python train.py --env_type navix --env 0 --steps 500000 --seed 42
+
+# Continual learning on Craftax
+python train.py --env_type craftax --cl --num_tasks 2 --num_task_repeats 3 --steps 250000
+
+# Continual learning on NAVIX
+python train.py --env_type navix --cl --num_tasks 3 --num_task_repeats 2 --steps 200000
 ```
 
+### Direct Training Scripts
+
+You can also use the environment-specific scripts directly:
+
+## Craftax Training
+
 ```sh
-# DV3 + p2e
-#     + random sampling of expl replay buffer
-#     + grad heads for obs only
-#     + same expl and eval policies
-python train_minigrid.py --wandb_proj_name=minigrid_new --cl --num_tasks=3 --tag=mg_new_cl_p2e0.9_s6_1M --steps=750000 --seed=6 --plan2explore --expl_intr_scale=0.9 --expl_extr_scale=0.9 --logdir=logs --del_exp_replay --minlen=50 --rssm_full_recon --sep_exp_eval_policies
+# Single environment training
+python train_craftax.py --env 0 --steps 500000 --seed 42 --tag craftax_single
+
+# Continual learning (multiple tasks)
+python train_craftax.py --cl --num_tasks 2 --num_task_repeats 3 --steps 250000 --tag craftax_cl
+
+# Small configuration for testing
+python train_craftax.py --cl --cl_small --num_tasks 2 --steps 100000 --tag craftax_small
 ```
 
-## Training on Minihack
-
-To run DreamerV3 on cl-small:
+## NAVIX Training (MiniGrid replacement)
 
 ```sh
-# DV3 
-python train_minihack.py --cl --cl_small --num_tasks=4 --tag=mh_cl_small_s0_1M --wandb_proj_name=minihack_task_dist --steps=1000000 --seed=0 --logdir=logs_cl --del_exp_replay --sep_exp_eval_policies --rssm_full_recon --minlen=5 --replay_capacity=1000000
+# Single environment training
+python train_navix.py --env 0 --steps 500000 --seed 42 --tag navix_single
+
+# Continual learning
+python train_navix.py --cl --num_tasks 3 --num_task_repeats 2 --steps 200000 --tag navix_cl
+
+# With Plan2Explore
+python train_navix.py --cl --num_tasks 3 --plan2explore --expl_intr_scale 0.9 --steps 300000
 ```
 
-To run DreamerV3 + p2e on cl-small:
+## Key Arguments
 
-```sh
-# DV3  + p2e
-python train_minihack.py --cl --cl_small --num_tasks=4 --tag=mh_cl_small_s0_1M --wandb_proj_name=minihack --steps=1000000 --seed=0 --logdir=logs_cl --del_exp_replay --minlen=5 --replay_capacity=1000000  --plan2explore --expl_intr_scale=0.9 --expl_extr_scale=0.9
-```
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--cl` | Enable continual learning mode | False |
+| `--cl_small` | Use small CL configuration | False |
+| `--num_tasks` | Number of tasks for CL | 1 |
+| `--num_task_repeats` | Number of times to repeat task sequence | 1 |
+| `--steps` | Training steps per task | 500000 |
+| `--seed` | Random seed | 42 |
+| `--env` | Environment index for single-task training | 0 |
+| `--input_type` | Observation type: 'embedding' or 'pixel' | embedding |
+| `--embedding_dim` | Embedding dimension | 256 |
+| `--batch_size` | Mini-batch size | 16 |
+| `--replay_capacity` | Replay buffer size | 2000000 |
+| `--plan2explore` | Enable Plan2Explore exploration | False |
+| `--wandb_proj_name` | W&B project name | craftax/navix |
+| `--wandb_group` | W&B experiment group | experiment |
+| `--logdir` | Log directory | logs |
 
-To run DreamerV3 and rs aka continual-dreamer on cl-small:
+## Embedding Mode
 
-```sh
-# DV3 + rs 
-python train_minihack.py --cl --cl_small --num_tasks=4 --tag=mh_cl_small_rs_s0_1M --wandb_proj_name=minihack_task_dist --steps=1000000 --seed=0 --logdir=logs_cl --del_exp_replay --sep_exp_eval_policies --minlen=5 --replay_capacity=1000000 --reservoir_sampling
-```
+By default, all environments output **embeddings** instead of raw pixels for more efficient training:
+- Image observations are flattened and projected to a lower-dimensional embedding space
+- Set `--input_type pixel` to use raw pixel observations
 
-To run DreamerV3 + p2e + rs aka continual dreamer on cl-small:
+## Legacy Scripts
 
-```sh
-# DV3  + p2e + rs
-python train_minihack.py --cl --cl_small --num_tasks=4 --tag=mh_cl_small_rs_s0_1M --wandb_proj_name=minihack --steps=1000000 --seed=0 --logdir=logs_cl --del_exp_replay --minlen=5 --replay_capacity=1000000  --plan2explore --expl_intr_scale=0.9 --expl_extr_scale=0.9 --reservoir_sampling
-```
+The original MiniGrid and MiniHack training scripts are still available but deprecated:
+- `train_minigrid.py` - Uses gym-minigrid (CPU-based)
+- `train_minihack.py` - Uses MiniHack/NLE (CPU-based)
 
-To run DreamerV3 + reservoir sampling + 50:50 on cl-small:
+We recommend using `train_navix.py` (NAVIX) and `train_craftax.py` (Craftax) for significantly faster training with JAX acceleration.
 
-```sh
-# DV3 + reservoir sampling + 50:50
-python train_minihack.py --cl --cl_small --num_tasks=4 --tag=mh_cl_small_rs_5050_s0_1M --wandb_proj_name=minihack --steps=1000000 --seed=0 --logdir=logs_cl --del_exp_replay --sep_exp_eval_policies --minlen=5 --replay_capacity=1000000 --reservoir_sampling --recent_past_sampl_thres=0.5 
-```
+## Logging
 
-To run DreamerV3 + coverage maximization on cl-small:
+Training logs are saved to:
+- `{logdir}/{env_type}_{tag}/` - Contains config, metrics, and checkpoints
+- W&B: Real-time training visualization (configure with `--wandb_*` args)
 
-```sh
-# DV3 + coverage maximization
-python train_minihack.py --cl --cl_small --num_tasks=4 --tag=mh_cl_small_cm_s0_1M --wandb_proj_name=minihack_task_dist --steps=1000000 --seed=0 --logdir=logs_cl --del_exp_replay --sep_exp_eval_policies --minlen=5 --replay_capacity=1000000 --coverage_sampling
-```
+## Performance Comparison
 
-To run DreamerV3 + reward sampling on cl-small:
+JAX-based environments offer significant speedups:
+- **NAVIX** (MiniGrid replacement): ~1000x faster than gym-minigrid
+- **Craftax** (Crafter replacement): ~100x faster than original Crafter
 
-```sh
-python train_minihack.py --cl --cl_small --num_tasks=4 --tag=mh_cl_small_rwd_new_s0_1M --wandb_proj_name=minihack_task_dist --steps=1000000 --seed=0 --logdir=logs_cl --del_exp_replay --sep_exp_eval_policies --minlen=5 --replay_capacity=1000000 --reward_sampling
-```
+## Citation
 
-### 8 task Minihack
+If you use this code, please cite:
 
-```sh
-# DV3
-python train_minihack.py --cl --num_tasks=8 --tag=mh_cl_s0_1M --wandb_proj_name=cl_8_tasks_RS --wandb_group=dv2 --steps=1000000 --seed=0 --logdir=logs_cl --del_exp_replay --sep_exp_eval_policies --minlen=5 --replay_capacity=2000000
-```
-
-```sh
-# DV3 + p2e
-python train_minihack.py --cl --num_tasks=8 --tag=mh_cl_p2e_s0_1M --wandb_proj_name=cl_8_tasks_RS --steps=1000000 --seed=0 --logdir=logs_cl --del_exp_replay --minlen=5 --replay_capacity=2000000 --reservoir_sampling
+```bibtex
+@article{kessler2022surprising,
+  title={The surprising effectiveness of latent world models for continual reinforcement learning},
+  author={Kessler, Samuel and Mi{\l}o{\'s}, Piotr and Parker-Holder, Jack and Roberts, Stephen J},
+  journal={arXiv preprint arXiv:2211.15944},
+  year={2022}
+}
 ```

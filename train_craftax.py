@@ -1,3 +1,7 @@
+"""
+Train DreamerV3 on Craftax environments.
+Craftax is a JAX-based reimplementation of Crafter with better performance.
+"""
 import collections
 import os
 import pathlib
@@ -13,45 +17,86 @@ sys.path.insert(0, str(root / 'dreamerv3' / 'dreamerv3'))
 import ast
 import elements
 import embodied
-import gym
-import minihack
 import numpy as np
 import ruamel.yaml as yaml
 import wandb
+import jax
+import jax.numpy as jnp
 
 from dreamerv3.agent import Agent
-from input_args import parse_minihack_args
+from input_args import parse_craftax_args
 
 # Configure JAX memory allocation
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.8"
 
+# Import Craftax
+try:
+    import craftax
+    from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
+    from craftax.craftax.envs.craftax_pixels_env import CraftaxPixelsEnv
+    from craftax.craftax_classic.envs.craftax_symbolic_env import CraftaxClassicSymbolicEnv
+    from craftax.craftax_classic.envs.craftax_pixels_env import CraftaxClassicPixelsEnv
+    CRAFTAX_AVAILABLE = True
+except ImportError:
+    CRAFTAX_AVAILABLE = False
+    print("Warning: Craftax not installed. Install with: pip install craftax")
 
-# ============== GymWrapper for embodied interface ==============
-class GymWrapper(embodied.Env):
-    """Wrapper to convert gym environments to embodied interface."""
 
-    def __init__(self, env, obs_key='image', embedding_key='embedding'):
-        self._env = env
-        self._obs_key = obs_key
-        self._embedding_key = embedding_key
+# ============== Craftax Environment Wrapper ==============
+class CraftaxWrapper(embodied.Env):
+    """Wrapper to convert Craftax JAX environments to embodied interface."""
+
+    def __init__(self, env_name='CraftaxSymbolic-v1', embedding_dim=256, use_embedding=True, seed=42):
+        self._env_name = env_name
+        self._embedding_dim = embedding_dim
+        self._use_embedding = use_embedding
+        self._seed = seed
         self._done = True
-        self._info = None
-        self._obs_dict = hasattr(env.observation_space, 'spaces')
-        self._act_dict = hasattr(env.action_space, 'spaces')
+        self._rng_key = jax.random.PRNGKey(seed)
+        
+        # Create the appropriate Craftax environment
+        if 'Classic' in env_name:
+            if 'Symbolic' in env_name:
+                self._env = CraftaxClassicSymbolicEnv()
+            else:
+                self._env = CraftaxClassicPixelsEnv()
+        else:
+            if 'Symbolic' in env_name:
+                self._env = CraftaxSymbolicEnv()
+            else:
+                self._env = CraftaxPixelsEnv()
+        
+        # Get environment parameters
+        self._env_params = self._env.default_params
+        
+        # Initialize state for space inference
+        self._rng_key, init_key = jax.random.split(self._rng_key)
+        self._obs, self._state = self._env.reset(init_key, self._env_params)
+        
+        # Determine observation shape
+        if isinstance(self._obs, dict):
+            self._obs_shape = self._obs['obs'].shape if 'obs' in self._obs else self._obs['pixels'].shape
+        else:
+            self._obs_shape = self._obs.shape
+        
+        # Setup embedding projection if needed
+        if use_embedding:
+            np.random.seed(42)
+            flat_dim = int(np.prod(self._obs_shape))
+            self._projection = np.random.randn(flat_dim, embedding_dim).astype(np.float32)
+            self._projection /= np.sqrt(flat_dim)
+        
+        # Number of actions
+        self._num_actions = self._env.action_space(self._env_params).n
 
     @property
     def obs_space(self):
         spaces = {}
-        if self._obs_dict:
-            for k, v in self._env.observation_space.spaces.items():
-                spaces[k] = self._convert_space(v)
+        if self._use_embedding:
+            spaces['embedding'] = elements.Space(np.float32, (self._embedding_dim,), -np.inf, np.inf)
         else:
-            space = self._env.observation_space
-            if len(space.shape) == 3:
-                spaces[self._obs_key] = self._convert_space(space)
-            else:
-                spaces[self._embedding_key] = self._convert_space(space)
+            spaces['image'] = elements.Space(np.float32, self._obs_shape, 0.0, 1.0)
         spaces.update({
             'reward': elements.Space(np.float32),
             'is_first': elements.Space(bool),
@@ -62,64 +107,71 @@ class GymWrapper(embodied.Env):
 
     @property
     def act_space(self):
-        if self._act_dict:
-            spaces = {k: self._convert_space(v)
-                     for k, v in self._env.action_space.spaces.items()}
-        else:
-            spaces = {'action': self._convert_space(self._env.action_space)}
-        spaces['reset'] = elements.Space(bool)
-        return spaces
+        return {
+            'action': elements.Space(np.int32, (), 0, self._num_actions),
+            'reset': elements.Space(bool),
+        }
 
-    def _convert_space(self, space):
-        if isinstance(space, gym.spaces.Discrete):
-            return elements.Space(np.int32, (), 0, space.n)
-        elif isinstance(space, gym.spaces.Box):
-            return elements.Space(space.dtype, space.shape, space.low, space.high)
+    def _process_obs(self, obs):
+        """Process observation: convert to numpy and optionally embed."""
+        if isinstance(obs, dict):
+            obs_array = np.array(obs.get('obs', obs.get('pixels')))
         else:
-            raise NotImplementedError(f"Space type {type(space)} not supported")
+            obs_array = np.array(obs)
+        
+        # Normalize to [0, 1] if needed
+        if obs_array.dtype == np.uint8:
+            obs_array = obs_array.astype(np.float32) / 255.0
+        else:
+            obs_array = obs_array.astype(np.float32)
+        
+        if self._use_embedding:
+            flat = obs_array.flatten()
+            embedding = np.dot(flat, self._projection)
+            return embedding
+        else:
+            return obs_array
 
     def step(self, action):
         if action['reset'] or self._done:
+            self._rng_key, reset_key = jax.random.split(self._rng_key)
+            self._obs, self._state = self._env.reset(reset_key, self._env_params)
             self._done = False
-            obs = self._env.reset()
-            return self._obs(obs, 0.0, is_first=True)
-        if self._act_dict:
-            act = action
-        else:
-            act = action['action']
-            if hasattr(self._env.action_space, 'n'):
-                if isinstance(act, np.ndarray):
-                    act = int(act.item() if act.ndim == 0 else np.argmax(act))
-        obs, reward, done, info = self._env.step(act)
-        self._done = done
-        self._info = info
-        return self._obs(obs, reward, is_last=bool(done),
-                        is_terminal=bool(info.get('is_terminal', done)))
-
-    def _obs(self, obs, reward, is_first=False, is_last=False, is_terminal=False):
-        if self._obs_dict:
-            result = {k: np.asarray(v) for k, v in obs.items()}
-        else:
-            obs = np.asarray(obs)
-            if len(obs.shape) == 3:
-                result = {self._obs_key: obs}
-            else:
-                result = {self._embedding_key: obs}
-        result.update(reward=np.float32(reward), is_first=is_first,
-                     is_last=is_last, is_terminal=is_terminal)
+            obs_processed = self._process_obs(self._obs)
+            result = {'embedding': obs_processed} if self._use_embedding else {'image': obs_processed}
+            result.update(reward=np.float32(0.0), is_first=True, is_last=False, is_terminal=False)
+            return result
+        
+        # Get action
+        act = action['action']
+        if isinstance(act, np.ndarray):
+            act = int(act.item() if act.ndim == 0 else act[0])
+        
+        # Step environment
+        self._rng_key, step_key = jax.random.split(self._rng_key)
+        self._obs, self._state, reward, done, info = self._env.step(
+            step_key, self._state, act, self._env_params
+        )
+        
+        self._done = bool(done)
+        obs_processed = self._process_obs(self._obs)
+        result = {'embedding': obs_processed} if self._use_embedding else {'image': obs_processed}
+        result.update(
+            reward=np.float32(reward),
+            is_first=False,
+            is_last=self._done,
+            is_terminal=self._done,
+        )
         return result
 
     def close(self):
-        try:
-            self._env.close()
-        except Exception:
-            pass
+        pass
 
 
 # ============== Helper functions ==============
-def wrap_env(gym_env):
-    """Wrap a gym environment for DreamerV3."""
-    env = GymWrapper(gym_env)
+def wrap_env(craftax_env):
+    """Wrap a Craftax environment for DreamerV3."""
+    env = craftax_env
     for name, space in env.act_space.items():
         if name != 'reset' and not space.discrete:
             env = embodied.wrappers.NormalizeAction(env, name)
@@ -185,7 +237,7 @@ def load_config(args):
     
     # Build overrides from args
     overrides = {
-        'logdir': f'{args.logdir}/minihack_{tag}',
+        'logdir': f'{args.logdir}/craftax_{tag}',
         'seed': args.seed,
         'batch_size': args.batch_size,
         'run': {
@@ -203,7 +255,7 @@ def load_config(args):
     return config, tag
 
 
-def train_single(gym_env, config, args):
+def train_single(env, config, args):
     """Train DreamerV3 on a single environment."""
     np.random.seed(config.seed)
     logdir = elements.Path(config.logdir)
@@ -211,8 +263,8 @@ def train_single(gym_env, config, args):
     config.save(logdir / 'config.yaml')
     print('Logdir:', logdir)
 
-    env = wrap_env(gym_env)
-    agent = make_agent(config, env)
+    wrapped_env = wrap_env(env)
+    agent = make_agent(config, wrapped_env)
     replay = make_replay(config, logdir / 'replay')
 
     step = elements.Counter()
@@ -236,7 +288,7 @@ def train_single(gym_env, config, args):
             logger.add({'score': result.pop('score'), 'length': result.pop('length')}, prefix='episode')
             logger.write()
 
-    driver = embodied.Driver([lambda: env], parallel=False)
+    driver = embodied.Driver([lambda: wrapped_env], parallel=False)
     driver.on_step(lambda tran, _: step.increment())
     driver.on_step(replay.add)
     driver.on_step(logfn)
@@ -248,7 +300,7 @@ def train_single(gym_env, config, args):
         random_policy = lambda carry, obs: (
             carry,
             {k: np.stack([v.sample() for _ in range(len(obs['is_first']))])
-             for k, v in env.act_space.items() if k != 'reset'},
+             for k, v in wrapped_env.act_space.items() if k != 'reset'},
             {}
         )
         driver.reset()
@@ -292,7 +344,7 @@ def train_single(gym_env, config, args):
     logger.close()
 
 
-def cl_train_loop(gym_envs, config, args):
+def cl_train_loop(envs, config, args):
     """Continual learning training loop for DreamerV3."""
     np.random.seed(config.seed)
 
@@ -305,8 +357,8 @@ def cl_train_loop(gym_envs, config, args):
     config.save(logdir / 'config.yaml')
     print('Logdir:', logdir)
 
-    envs = [wrap_env(e) for e in gym_envs]
-    env = envs[0]
+    wrapped_envs = [wrap_env(e) for e in envs]
+    env = wrapped_envs[0]
 
     agent = make_agent(config, env)
     replay = make_replay(config, logdir / 'replay')
@@ -329,7 +381,7 @@ def cl_train_loop(gym_envs, config, args):
     stats = replay.stats()
     total_steps_done = stats.get('total_steps', 0)
     steps_per_task = int(args.steps)
-    num_tasks = len(envs)
+    num_tasks = len(wrapped_envs)
 
     if unbalanced_steps is not None:
         tot_steps_after_task = np.cumsum(unbalanced_steps)
@@ -353,7 +405,7 @@ def cl_train_loop(gym_envs, config, args):
         while task_id < num_tasks:
             print(f"\n=== Task {task_id + 1}/{num_tasks}, Rep {rep + 1}/{args.num_task_repeats} ===\n")
 
-            current_env = envs[task_id]
+            current_env = wrapped_envs[task_id]
             step = elements.Counter()
             episodes = collections.defaultdict(elements.Agg)
 
@@ -420,134 +472,21 @@ def cl_train_loop(gym_envs, config, args):
     logger.close()
 
 
-# ============== Original Wrappers ==============
-class MiniHackObsWrapper(gym.ObservationWrapper):
-    def __init__(self, env):
-        super().__init__(env)
-        self.observation_space = gym.spaces.Box(low=0, high=255, dtype=np.uint8, shape=(84, 84, 3))
-
-    def observation(self, obs):
-        obs = obs["pixel_crop"]
-        obs = np.pad(obs, [(2, 2), (2, 2), (0, 0)])
-        return obs
-
-
-# from https://github.com/MiniHackPlanet/MiniHack/blob/e9c8c20fb2449d1f87163314f9b3617cf4f0e088/minihack/scripts/venv_demo.py#L28
-# Updated to use self.env.nethack._vardir instead of self.env.env._vardir for newer MiniHack versions
-class MiniHackMakeVecSafeWrapper(gym.Wrapper):
-    def __init__(self, env):
-        super().__init__(env)
-        self.basedir = os.getcwd()
-
-    def _get_vardir(self):
-        """Get vardir from the underlying nethack environment, compatible with different MiniHack versions."""
-        # Try newer MiniHack versions (nethack attribute)
-        if hasattr(self.env, 'nethack') and hasattr(self.env.nethack, '_vardir'):
-            return self.env.nethack._vardir
-        # Try older MiniHack versions (env attribute)
-        elif hasattr(self.env, 'env') and hasattr(self.env.env, '_vardir'):
-            return self.env.env._vardir
-        # Fallback to current directory if neither exists
-        else:
-            return self.basedir
-
-    def step(self, action: int):
-        vardir = self._get_vardir()
-        os.chdir(vardir)
-        x = self.env.step(action)
-        os.chdir(self.basedir)
-        return x
-
-    def reset(self, **kwargs):
-        vardir = self._get_vardir()
-        os.chdir(vardir)
-        x = self.env.reset(**kwargs)
-        os.chdir(self.basedir)
-        return x
-
-    def close(self):
-        vardir = self._get_vardir()
-        os.chdir(vardir)
-        self.env.close()
-        os.chdir(self.basedir)
-
-    def seed(self, core=None, disp=None, reseed=False):
-        vardir = self._get_vardir()
-        os.chdir(vardir)
-        self.env.seed(core, disp, reseed)
-        os.chdir(self.basedir)
+def make_craftax(env_name, embedding_dim=256, use_embedding=True, seed=42):
+    """Create a Craftax environment with proper wrappers."""
+    if not CRAFTAX_AVAILABLE:
+        raise ImportError("Craftax is not installed. Install with: pip install craftax")
+    
+    return CraftaxWrapper(
+        env_name=env_name,
+        embedding_dim=embedding_dim,
+        use_embedding=use_embedding,
+        seed=seed,
+    )
 
 
-class EmbeddingWrapper(gym.ObservationWrapper):
-    """
-    Wrapper that converts image observations to embeddings.
-    For actual use, replace the random projection with a proper encoder.
-    """
-
-    def __init__(self, env, embedding_dim=256):
-        super().__init__(env)
-        self.embedding_dim = embedding_dim
-        if hasattr(env.observation_space, 'shape'):
-            self.orig_shape = env.observation_space.shape
-        else:
-            self.orig_shape = (84, 84, 3)
-
-        self.observation_space = gym.spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(embedding_dim,),
-            dtype=np.float32,
-        )
-
-        np.random.seed(42)
-        flat_dim = int(np.prod(self.orig_shape))
-        self.projection = np.random.randn(flat_dim, embedding_dim).astype(np.float32)
-        self.projection /= np.sqrt(flat_dim)
-
-    def observation(self, obs):
-        flat = obs.flatten().astype(np.float32) / 255.0
-        embedding = np.dot(flat, self.projection)
-        return embedding
-
-
-
-def make_minihack(
-    env_name,
-    observation_keys=["pixel_crop", "pixel", "glyphs"],
-    reward_win=1,
-    reward_lose=0,
-    penalty_time=0.0,
-    penalty_step=-0.001,  # MiniHack uses different than -0.01 default of NLE
-    penalty_mode="constant",
-    character="mon-hum-neu-mal",
-    savedir=None,
-    embedding_dim=256,
-    use_embedding=True,
-    # save_tty=False -> savedir=None, see https://github.com/MiniHackPlanet/MiniHack/blob/e124ae4c98936d0c0b3135bf5f202039d9074508/minihack/agent/common/envs/tasks.py#L168
-    **kwargs,
-):
-    env = gym.make(
-        f"MiniHack-{env_name}",
-        observation_keys=observation_keys,
-        reward_win=reward_win,
-        reward_lose=reward_lose,
-        penalty_time=penalty_time,
-        penalty_step=penalty_step,
-        penalty_mode=penalty_mode,
-        character=character,
-        savedir=savedir,
-        **kwargs,
-    )  # each env specifies its own self._max_episode_steps
-    # Apply safety wrapper for directory handling
-    env = MiniHackMakeVecSafeWrapper(env)
-    # Apply observation wrapper to convert to 84x84x3 image
-    env = MiniHackObsWrapper(env)
-    # Always apply embedding wrapper for embedding-level interaction
-    if use_embedding:
-        env = EmbeddingWrapper(env, embedding_dim=embedding_dim)
-    return env
-
-def run_minihack(args):
+def run_craftax(args):
+    """Main entry point for Craftax training."""
     tag = args.tag + str(args.seed)
     config, tag = load_config(args)
 
@@ -555,29 +494,34 @@ def run_minihack(args):
     if args.unbalanced_steps not in [None, 'None', 'none']:
         unbalanced_steps = ast.literal_eval(str(args.unbalanced_steps))
 
+    # Available Craftax environments
+    all_envs = [
+        'CraftaxSymbolic-v1',       # Symbolic observation (flat vector)
+        'CraftaxPixels-v1',          # Pixel observation
+        'CraftaxClassicSymbolic-v1', # Classic version symbolic
+        'CraftaxClassicPixels-v1',   # Classic version pixels
+    ]
+
+    use_embedding = (args.input_type == 'embedding')
+
     if args.cl:
+        # For continual learning, use different configurations
         if args.cl_small:
             env_names = [
-                "Room-Random-15x15-v0",
-                "Room-Trap-15x15-v0",
-                "River-Narrow-v0",
-                "River-Monster-v0",
+                'CraftaxClassicSymbolic-v1',
+                'CraftaxSymbolic-v1',
             ]
         elif unbalanced_steps is not None:
             env_names = [
-                "Room-Random-15x15-v0",
-                "River-Narrow-v0",
+                'CraftaxSymbolic-v1',
+                'CraftaxClassicSymbolic-v1',
             ]
         else:
             env_names = [
-                "Room-Random-15x15-v0",
-                "Room-Monster-15x15-v0",
-                "Room-Trap-15x15-v0",
-                "Room-Ultimate-15x15-v0",
-                "River-Narrow-v0",
-                "River-v0",
-                "River-Monster-v0",
-                "HideNSeek-v0",
+                'CraftaxSymbolic-v1',
+                'CraftaxClassicSymbolic-v1',
+                'CraftaxPixels-v1',
+                'CraftaxClassicPixels-v1',
             ]
 
         wandb.init(
@@ -588,38 +532,24 @@ def run_minihack(args):
             mode=getattr(args, 'wandb_mode', 'online'),
             project=args.wandb_proj_name,
             group=args.wandb_group,
-            name=f"DreamerV3_cl-small={args.cl_small}_{tag}",
+            name=f"DreamerV3_craftax_cl-small={args.cl_small}_{tag}",
         )
 
         envs = []
         for i in range(args.num_tasks):
             name = env_names[i % len(env_names)]
-            use_embedding = (args.input_type == 'embedding')
-            env = make_minihack(
+            env = make_craftax(
                 name,
                 embedding_dim=args.embedding_dim,
                 use_embedding=use_embedding,
+                seed=args.seed + i,
             )
-            print(f"env {name}, action space: {env.action_space.n}, use_embedding: {use_embedding}")
+            print(f"env {name}, action space: {env.act_space['action'].high}, use_embedding: {use_embedding}")
             envs.append(env)
 
         cl_train_loop(envs, config, args)
     else:
-        all_envs = [
-            "Room-Random-15x15-v0",
-            "Room-Monster-15x15-v0",
-            "Room-Trap-15x15-v0",
-            "Room-Ultimate-15x15-v0",
-            "River-Narrow-v0",
-            "River-v0",
-            "River-Monster-v0",
-            "HideNSeek-v0",
-            "CorridorBattle-v0",
-            "River-Lava-v0",
-            "River-MonsterLava-v0",
-        ]
-
-        env_name = all_envs[args.env]
+        env_name = all_envs[args.env % len(all_envs)]
 
         wandb.init(
             config=dict(config),
@@ -629,14 +559,14 @@ def run_minihack(args):
             mode=getattr(args, 'wandb_mode', 'online'),
             project=args.wandb_proj_name,
             group=args.wandb_group,
-            name=f"DreamerV3_single-env={env_name}_{tag}",
+            name=f"DreamerV3_craftax_single-env={env_name}_{tag}",
         )
 
-        use_embedding = (args.input_type == 'embedding')
-        env = make_minihack(
+        env = make_craftax(
             env_name,
             embedding_dim=args.embedding_dim,
             use_embedding=use_embedding,
+            seed=args.seed,
         )
 
         train_single(env, config, args)
@@ -646,6 +576,7 @@ def run_minihack(args):
 
     wandb.finish()
 
+
 if __name__ == "__main__":
-    args = parse_minihack_args()
-    run_minihack(args)
+    args = parse_craftax_args()
+    run_craftax(args)

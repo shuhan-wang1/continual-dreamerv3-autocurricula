@@ -1,3 +1,7 @@
+"""
+Train DreamerV3 on NAVIX environments.
+NAVIX is a JAX-based reimplementation of MiniGrid with better performance.
+"""
 import collections
 import os
 import pathlib
@@ -13,45 +17,167 @@ sys.path.insert(0, str(root / 'dreamerv3' / 'dreamerv3'))
 import ast
 import elements
 import embodied
-import gym
-import minihack
 import numpy as np
 import ruamel.yaml as yaml
 import wandb
+import jax
+import jax.numpy as jnp
 
 from dreamerv3.agent import Agent
-from input_args import parse_minihack_args
+from input_args import parse_navix_args
 
 # Configure JAX memory allocation
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.8"
 
+# Import NAVIX
+try:
+    import navix as nx
+    from navix import observations
+    NAVIX_AVAILABLE = True
+except ImportError:
+    NAVIX_AVAILABLE = False
+    print("Warning: NAVIX not installed. Install with: pip install navix")
 
-# ============== GymWrapper for embodied interface ==============
-class GymWrapper(embodied.Env):
-    """Wrapper to convert gym environments to embodied interface."""
 
-    def __init__(self, env, obs_key='image', embedding_key='embedding'):
-        self._env = env
-        self._obs_key = obs_key
-        self._embedding_key = embedding_key
+# ============== NAVIX Environment Wrapper ==============
+class NavixWrapper(embodied.Env):
+    """Wrapper to convert NAVIX JAX environments to embodied interface."""
+
+    def __init__(self, env_name='NavixEmpty-8x8-v0', embedding_dim=256, use_embedding=True, 
+                 seed=42, max_steps=500, obs_type='symbolic'):
+        self._env_name = env_name
+        self._embedding_dim = embedding_dim
+        self._use_embedding = use_embedding
+        self._seed = seed
+        self._max_steps = max_steps
+        self._obs_type = obs_type
         self._done = True
-        self._info = None
-        self._obs_dict = hasattr(env.observation_space, 'spaces')
-        self._act_dict = hasattr(env.action_space, 'spaces')
+        self._step_count = 0
+        self._rng_key = jax.random.PRNGKey(seed)
+        
+        # Create the NAVIX environment based on name
+        self._env = self._create_env(env_name)
+        
+        # Initialize to get observation shape
+        self._rng_key, init_key = jax.random.split(self._rng_key)
+        self._timestep = self._env.reset(init_key)
+        self._state = self._timestep
+        
+        # Get observation shape from initial observation
+        obs = self._get_obs(self._timestep)
+        self._obs_shape = obs.shape
+        
+        # Setup embedding projection if needed
+        if use_embedding:
+            np.random.seed(42)
+            flat_dim = int(np.prod(self._obs_shape))
+            self._projection = np.random.randn(flat_dim, embedding_dim).astype(np.float32)
+            self._projection /= np.sqrt(flat_dim)
+        
+        # Number of actions (NAVIX typically has 6 or 7 actions)
+        self._num_actions = self._env.action_space.maximum + 1
+
+    def _create_env(self, env_name):
+        """Create a NAVIX environment based on name."""
+        # Parse environment name to get configuration
+        # Format: Navix{EnvType}-{Size}-v0 or custom names
+        
+        # Default parameters
+        height, width = 8, 8
+        
+        # Try to parse size from name
+        parts = env_name.split('-')
+        for part in parts:
+            if 'x' in part:
+                try:
+                    h, w = part.split('x')
+                    height, width = int(h), int(w)
+                except:
+                    pass
+        
+        # Determine environment type
+        env_name_lower = env_name.lower()
+        
+        if 'empty' in env_name_lower:
+            env = nx.make(
+                'Navix-Empty-Random-5x5-v0',  # Base environment
+                max_steps=self._max_steps,
+            )
+        elif 'doorkey' in env_name_lower:
+            env = nx.make(
+                'Navix-DoorKey-Random-6x6-v0',
+                max_steps=self._max_steps,
+            )
+        elif 'lava' in env_name_lower or 'crossing' in env_name_lower:
+            env = nx.make(
+                'Navix-LavaCrossing-Random-9x9-v0',
+                max_steps=self._max_steps,
+            )
+        elif 'keycorridor' in env_name_lower:
+            env = nx.make(
+                'Navix-KeyCorridor-S3R1-v0',
+                max_steps=self._max_steps,
+            )
+        elif 'dynamic' in env_name_lower or 'obstacle' in env_name_lower:
+            env = nx.make(
+                'Navix-Dynamic-Obstacles-Random-6x6-v0',
+                max_steps=self._max_steps,
+            )
+        elif 'multiroom' in env_name_lower:
+            env = nx.make(
+                'Navix-MultiRoom-N2-S4-v0',
+                max_steps=self._max_steps,
+            )
+        else:
+            # Default to empty environment
+            env = nx.make(
+                'Navix-Empty-Random-5x5-v0',
+                max_steps=self._max_steps,
+            )
+        
+        return env
+
+    def _get_obs(self, timestep):
+        """Extract observation from timestep."""
+        obs = timestep.observation
+        
+        # Handle different observation types
+        if hasattr(obs, 'grid'):
+            # Symbolic observation
+            obs_array = np.array(obs.grid)
+        elif hasattr(obs, 'image'):
+            obs_array = np.array(obs.image)
+        elif isinstance(obs, (np.ndarray, jnp.ndarray)):
+            obs_array = np.array(obs)
+        elif hasattr(obs, '__array__'):
+            obs_array = np.array(obs)
+        else:
+            # Try to convert observation to array
+            obs_array = np.array(obs.grid if hasattr(obs, 'grid') else obs)
+        
+        return obs_array.astype(np.float32)
+
+    def _process_obs(self, obs_array):
+        """Process observation: normalize and optionally embed."""
+        # Normalize
+        if obs_array.max() > 1.0:
+            obs_array = obs_array / 255.0 if obs_array.max() > 1.0 else obs_array
+        
+        if self._use_embedding:
+            flat = obs_array.flatten()
+            embedding = np.dot(flat, self._projection)
+            return embedding
+        else:
+            return obs_array
 
     @property
     def obs_space(self):
         spaces = {}
-        if self._obs_dict:
-            for k, v in self._env.observation_space.spaces.items():
-                spaces[k] = self._convert_space(v)
+        if self._use_embedding:
+            spaces['embedding'] = elements.Space(np.float32, (self._embedding_dim,), -np.inf, np.inf)
         else:
-            space = self._env.observation_space
-            if len(space.shape) == 3:
-                spaces[self._obs_key] = self._convert_space(space)
-            else:
-                spaces[self._embedding_key] = self._convert_space(space)
+            spaces['image'] = elements.Space(np.float32, self._obs_shape, 0.0, 1.0)
         spaces.update({
             'reward': elements.Space(np.float32),
             'is_first': elements.Space(bool),
@@ -62,64 +188,73 @@ class GymWrapper(embodied.Env):
 
     @property
     def act_space(self):
-        if self._act_dict:
-            spaces = {k: self._convert_space(v)
-                     for k, v in self._env.action_space.spaces.items()}
-        else:
-            spaces = {'action': self._convert_space(self._env.action_space)}
-        spaces['reset'] = elements.Space(bool)
-        return spaces
-
-    def _convert_space(self, space):
-        if isinstance(space, gym.spaces.Discrete):
-            return elements.Space(np.int32, (), 0, space.n)
-        elif isinstance(space, gym.spaces.Box):
-            return elements.Space(space.dtype, space.shape, space.low, space.high)
-        else:
-            raise NotImplementedError(f"Space type {type(space)} not supported")
+        return {
+            'action': elements.Space(np.int32, (), 0, self._num_actions),
+            'reset': elements.Space(bool),
+        }
 
     def step(self, action):
         if action['reset'] or self._done:
+            self._rng_key, reset_key = jax.random.split(self._rng_key)
+            self._timestep = self._env.reset(reset_key)
+            self._state = self._timestep
             self._done = False
-            obs = self._env.reset()
-            return self._obs(obs, 0.0, is_first=True)
-        if self._act_dict:
-            act = action
-        else:
-            act = action['action']
-            if hasattr(self._env.action_space, 'n'):
-                if isinstance(act, np.ndarray):
-                    act = int(act.item() if act.ndim == 0 else np.argmax(act))
-        obs, reward, done, info = self._env.step(act)
+            self._step_count = 0
+            
+            obs_array = self._get_obs(self._timestep)
+            obs_processed = self._process_obs(obs_array)
+            result = {'embedding': obs_processed} if self._use_embedding else {'image': obs_processed}
+            result.update(reward=np.float32(0.0), is_first=True, is_last=False, is_terminal=False)
+            return result
+        
+        # Get action
+        act = action['action']
+        if isinstance(act, np.ndarray):
+            act = int(act.item() if act.ndim == 0 else act[0])
+        
+        # Step environment
+        self._rng_key, step_key = jax.random.split(self._rng_key)
+        self._timestep = self._env.step(self._state, jnp.array(act))
+        self._state = self._timestep
+        self._step_count += 1
+        
+        # Get reward and done
+        reward = float(self._timestep.reward) if hasattr(self._timestep, 'reward') else 0.0
+        
+        # Check if done
+        done = False
+        if hasattr(self._timestep, 'is_done'):
+            done = bool(self._timestep.is_done())
+        elif hasattr(self._timestep, 'last'):
+            done = bool(self._timestep.last())
+        elif hasattr(self._timestep, 'step_type'):
+            from dm_env import StepType
+            done = self._timestep.step_type == StepType.LAST
+        
+        if self._step_count >= self._max_steps:
+            done = True
+        
         self._done = done
-        self._info = info
-        return self._obs(obs, reward, is_last=bool(done),
-                        is_terminal=bool(info.get('is_terminal', done)))
-
-    def _obs(self, obs, reward, is_first=False, is_last=False, is_terminal=False):
-        if self._obs_dict:
-            result = {k: np.asarray(v) for k, v in obs.items()}
-        else:
-            obs = np.asarray(obs)
-            if len(obs.shape) == 3:
-                result = {self._obs_key: obs}
-            else:
-                result = {self._embedding_key: obs}
-        result.update(reward=np.float32(reward), is_first=is_first,
-                     is_last=is_last, is_terminal=is_terminal)
+        
+        obs_array = self._get_obs(self._timestep)
+        obs_processed = self._process_obs(obs_array)
+        result = {'embedding': obs_processed} if self._use_embedding else {'image': obs_processed}
+        result.update(
+            reward=np.float32(reward),
+            is_first=False,
+            is_last=self._done,
+            is_terminal=self._done,
+        )
         return result
 
     def close(self):
-        try:
-            self._env.close()
-        except Exception:
-            pass
+        pass
 
 
 # ============== Helper functions ==============
-def wrap_env(gym_env):
-    """Wrap a gym environment for DreamerV3."""
-    env = GymWrapper(gym_env)
+def wrap_env(navix_env):
+    """Wrap a NAVIX environment for DreamerV3."""
+    env = navix_env
     for name, space in env.act_space.items():
         if name != 'reset' and not space.discrete:
             env = embodied.wrappers.NormalizeAction(env, name)
@@ -185,7 +320,7 @@ def load_config(args):
     
     # Build overrides from args
     overrides = {
-        'logdir': f'{args.logdir}/minihack_{tag}',
+        'logdir': f'{args.logdir}/navix_{tag}',
         'seed': args.seed,
         'batch_size': args.batch_size,
         'run': {
@@ -203,7 +338,7 @@ def load_config(args):
     return config, tag
 
 
-def train_single(gym_env, config, args):
+def train_single(env, config, args):
     """Train DreamerV3 on a single environment."""
     np.random.seed(config.seed)
     logdir = elements.Path(config.logdir)
@@ -211,8 +346,8 @@ def train_single(gym_env, config, args):
     config.save(logdir / 'config.yaml')
     print('Logdir:', logdir)
 
-    env = wrap_env(gym_env)
-    agent = make_agent(config, env)
+    wrapped_env = wrap_env(env)
+    agent = make_agent(config, wrapped_env)
     replay = make_replay(config, logdir / 'replay')
 
     step = elements.Counter()
@@ -236,7 +371,7 @@ def train_single(gym_env, config, args):
             logger.add({'score': result.pop('score'), 'length': result.pop('length')}, prefix='episode')
             logger.write()
 
-    driver = embodied.Driver([lambda: env], parallel=False)
+    driver = embodied.Driver([lambda: wrapped_env], parallel=False)
     driver.on_step(lambda tran, _: step.increment())
     driver.on_step(replay.add)
     driver.on_step(logfn)
@@ -248,7 +383,7 @@ def train_single(gym_env, config, args):
         random_policy = lambda carry, obs: (
             carry,
             {k: np.stack([v.sample() for _ in range(len(obs['is_first']))])
-             for k, v in env.act_space.items() if k != 'reset'},
+             for k, v in wrapped_env.act_space.items() if k != 'reset'},
             {}
         )
         driver.reset()
@@ -292,7 +427,7 @@ def train_single(gym_env, config, args):
     logger.close()
 
 
-def cl_train_loop(gym_envs, config, args):
+def cl_train_loop(envs, config, args):
     """Continual learning training loop for DreamerV3."""
     np.random.seed(config.seed)
 
@@ -305,8 +440,8 @@ def cl_train_loop(gym_envs, config, args):
     config.save(logdir / 'config.yaml')
     print('Logdir:', logdir)
 
-    envs = [wrap_env(e) for e in gym_envs]
-    env = envs[0]
+    wrapped_envs = [wrap_env(e) for e in envs]
+    env = wrapped_envs[0]
 
     agent = make_agent(config, env)
     replay = make_replay(config, logdir / 'replay')
@@ -329,7 +464,7 @@ def cl_train_loop(gym_envs, config, args):
     stats = replay.stats()
     total_steps_done = stats.get('total_steps', 0)
     steps_per_task = int(args.steps)
-    num_tasks = len(envs)
+    num_tasks = len(wrapped_envs)
 
     if unbalanced_steps is not None:
         tot_steps_after_task = np.cumsum(unbalanced_steps)
@@ -353,7 +488,7 @@ def cl_train_loop(gym_envs, config, args):
         while task_id < num_tasks:
             print(f"\n=== Task {task_id + 1}/{num_tasks}, Rep {rep + 1}/{args.num_task_repeats} ===\n")
 
-            current_env = envs[task_id]
+            current_env = wrapped_envs[task_id]
             step = elements.Counter()
             episodes = collections.defaultdict(elements.Agg)
 
@@ -420,134 +555,22 @@ def cl_train_loop(gym_envs, config, args):
     logger.close()
 
 
-# ============== Original Wrappers ==============
-class MiniHackObsWrapper(gym.ObservationWrapper):
-    def __init__(self, env):
-        super().__init__(env)
-        self.observation_space = gym.spaces.Box(low=0, high=255, dtype=np.uint8, shape=(84, 84, 3))
-
-    def observation(self, obs):
-        obs = obs["pixel_crop"]
-        obs = np.pad(obs, [(2, 2), (2, 2), (0, 0)])
-        return obs
-
-
-# from https://github.com/MiniHackPlanet/MiniHack/blob/e9c8c20fb2449d1f87163314f9b3617cf4f0e088/minihack/scripts/venv_demo.py#L28
-# Updated to use self.env.nethack._vardir instead of self.env.env._vardir for newer MiniHack versions
-class MiniHackMakeVecSafeWrapper(gym.Wrapper):
-    def __init__(self, env):
-        super().__init__(env)
-        self.basedir = os.getcwd()
-
-    def _get_vardir(self):
-        """Get vardir from the underlying nethack environment, compatible with different MiniHack versions."""
-        # Try newer MiniHack versions (nethack attribute)
-        if hasattr(self.env, 'nethack') and hasattr(self.env.nethack, '_vardir'):
-            return self.env.nethack._vardir
-        # Try older MiniHack versions (env attribute)
-        elif hasattr(self.env, 'env') and hasattr(self.env.env, '_vardir'):
-            return self.env.env._vardir
-        # Fallback to current directory if neither exists
-        else:
-            return self.basedir
-
-    def step(self, action: int):
-        vardir = self._get_vardir()
-        os.chdir(vardir)
-        x = self.env.step(action)
-        os.chdir(self.basedir)
-        return x
-
-    def reset(self, **kwargs):
-        vardir = self._get_vardir()
-        os.chdir(vardir)
-        x = self.env.reset(**kwargs)
-        os.chdir(self.basedir)
-        return x
-
-    def close(self):
-        vardir = self._get_vardir()
-        os.chdir(vardir)
-        self.env.close()
-        os.chdir(self.basedir)
-
-    def seed(self, core=None, disp=None, reseed=False):
-        vardir = self._get_vardir()
-        os.chdir(vardir)
-        self.env.seed(core, disp, reseed)
-        os.chdir(self.basedir)
+def make_navix(env_name, embedding_dim=256, use_embedding=True, seed=42, max_steps=500):
+    """Create a NAVIX environment with proper wrappers."""
+    if not NAVIX_AVAILABLE:
+        raise ImportError("NAVIX is not installed. Install with: pip install navix")
+    
+    return NavixWrapper(
+        env_name=env_name,
+        embedding_dim=embedding_dim,
+        use_embedding=use_embedding,
+        seed=seed,
+        max_steps=max_steps,
+    )
 
 
-class EmbeddingWrapper(gym.ObservationWrapper):
-    """
-    Wrapper that converts image observations to embeddings.
-    For actual use, replace the random projection with a proper encoder.
-    """
-
-    def __init__(self, env, embedding_dim=256):
-        super().__init__(env)
-        self.embedding_dim = embedding_dim
-        if hasattr(env.observation_space, 'shape'):
-            self.orig_shape = env.observation_space.shape
-        else:
-            self.orig_shape = (84, 84, 3)
-
-        self.observation_space = gym.spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(embedding_dim,),
-            dtype=np.float32,
-        )
-
-        np.random.seed(42)
-        flat_dim = int(np.prod(self.orig_shape))
-        self.projection = np.random.randn(flat_dim, embedding_dim).astype(np.float32)
-        self.projection /= np.sqrt(flat_dim)
-
-    def observation(self, obs):
-        flat = obs.flatten().astype(np.float32) / 255.0
-        embedding = np.dot(flat, self.projection)
-        return embedding
-
-
-
-def make_minihack(
-    env_name,
-    observation_keys=["pixel_crop", "pixel", "glyphs"],
-    reward_win=1,
-    reward_lose=0,
-    penalty_time=0.0,
-    penalty_step=-0.001,  # MiniHack uses different than -0.01 default of NLE
-    penalty_mode="constant",
-    character="mon-hum-neu-mal",
-    savedir=None,
-    embedding_dim=256,
-    use_embedding=True,
-    # save_tty=False -> savedir=None, see https://github.com/MiniHackPlanet/MiniHack/blob/e124ae4c98936d0c0b3135bf5f202039d9074508/minihack/agent/common/envs/tasks.py#L168
-    **kwargs,
-):
-    env = gym.make(
-        f"MiniHack-{env_name}",
-        observation_keys=observation_keys,
-        reward_win=reward_win,
-        reward_lose=reward_lose,
-        penalty_time=penalty_time,
-        penalty_step=penalty_step,
-        penalty_mode=penalty_mode,
-        character=character,
-        savedir=savedir,
-        **kwargs,
-    )  # each env specifies its own self._max_episode_steps
-    # Apply safety wrapper for directory handling
-    env = MiniHackMakeVecSafeWrapper(env)
-    # Apply observation wrapper to convert to 84x84x3 image
-    env = MiniHackObsWrapper(env)
-    # Always apply embedding wrapper for embedding-level interaction
-    if use_embedding:
-        env = EmbeddingWrapper(env, embedding_dim=embedding_dim)
-    return env
-
-def run_minihack(args):
+def run_navix(args):
+    """Main entry point for NAVIX training."""
     tag = args.tag + str(args.seed)
     config, tag = load_config(args)
 
@@ -555,29 +578,37 @@ def run_minihack(args):
     if args.unbalanced_steps not in [None, 'None', 'none']:
         unbalanced_steps = ast.literal_eval(str(args.unbalanced_steps))
 
+    # Available NAVIX environments (similar to MiniGrid)
+    all_envs = [
+        'Navix-Empty-8x8-v0',
+        'Navix-DoorKey-6x6-v0',
+        'Navix-LavaCrossing-9x9-v0',
+        'Navix-KeyCorridor-S3R1-v0',
+        'Navix-Dynamic-Obstacles-6x6-v0',
+        'Navix-MultiRoom-N2S4-v0',
+    ]
+
+    use_embedding = (args.input_type == 'embedding')
+
     if args.cl:
+        # For continual learning
         if args.cl_small:
             env_names = [
-                "Room-Random-15x15-v0",
-                "Room-Trap-15x15-v0",
-                "River-Narrow-v0",
-                "River-Monster-v0",
+                'Navix-DoorKey-6x6-v0',
+                'Navix-LavaCrossing-9x9-v0',
+                'Navix-Empty-8x8-v0',
             ]
         elif unbalanced_steps is not None:
             env_names = [
-                "Room-Random-15x15-v0",
-                "River-Narrow-v0",
+                'Navix-Empty-8x8-v0',
+                'Navix-DoorKey-6x6-v0',
             ]
         else:
             env_names = [
-                "Room-Random-15x15-v0",
-                "Room-Monster-15x15-v0",
-                "Room-Trap-15x15-v0",
-                "Room-Ultimate-15x15-v0",
-                "River-Narrow-v0",
-                "River-v0",
-                "River-Monster-v0",
-                "HideNSeek-v0",
+                'Navix-Empty-8x8-v0',
+                'Navix-DoorKey-6x6-v0',
+                'Navix-LavaCrossing-9x9-v0',
+                'Navix-Dynamic-Obstacles-6x6-v0',
             ]
 
         wandb.init(
@@ -588,38 +619,25 @@ def run_minihack(args):
             mode=getattr(args, 'wandb_mode', 'online'),
             project=args.wandb_proj_name,
             group=args.wandb_group,
-            name=f"DreamerV3_cl-small={args.cl_small}_{tag}",
+            name=f"DreamerV3_navix_cl-small={args.cl_small}_{tag}",
         )
 
         envs = []
         for i in range(args.num_tasks):
             name = env_names[i % len(env_names)]
-            use_embedding = (args.input_type == 'embedding')
-            env = make_minihack(
+            env = make_navix(
                 name,
                 embedding_dim=args.embedding_dim,
                 use_embedding=use_embedding,
+                seed=args.seed + i,
+                max_steps=args.max_steps,
             )
-            print(f"env {name}, action space: {env.action_space.n}, use_embedding: {use_embedding}")
+            print(f"env {name}, action space: {env.act_space['action'].high}, use_embedding: {use_embedding}")
             envs.append(env)
 
         cl_train_loop(envs, config, args)
     else:
-        all_envs = [
-            "Room-Random-15x15-v0",
-            "Room-Monster-15x15-v0",
-            "Room-Trap-15x15-v0",
-            "Room-Ultimate-15x15-v0",
-            "River-Narrow-v0",
-            "River-v0",
-            "River-Monster-v0",
-            "HideNSeek-v0",
-            "CorridorBattle-v0",
-            "River-Lava-v0",
-            "River-MonsterLava-v0",
-        ]
-
-        env_name = all_envs[args.env]
+        env_name = all_envs[args.env % len(all_envs)]
 
         wandb.init(
             config=dict(config),
@@ -629,14 +647,15 @@ def run_minihack(args):
             mode=getattr(args, 'wandb_mode', 'online'),
             project=args.wandb_proj_name,
             group=args.wandb_group,
-            name=f"DreamerV3_single-env={env_name}_{tag}",
+            name=f"DreamerV3_navix_single-env={env_name}_{tag}",
         )
 
-        use_embedding = (args.input_type == 'embedding')
-        env = make_minihack(
+        env = make_navix(
             env_name,
             embedding_dim=args.embedding_dim,
             use_embedding=use_embedding,
+            seed=args.seed,
+            max_steps=args.max_steps,
         )
 
         train_single(env, config, args)
@@ -646,6 +665,7 @@ def run_minihack(args):
 
     wandb.finish()
 
+
 if __name__ == "__main__":
-    args = parse_minihack_args()
-    run_minihack(args)
+    args = parse_navix_args()
+    run_navix(args)

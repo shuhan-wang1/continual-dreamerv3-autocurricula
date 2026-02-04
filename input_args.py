@@ -148,3 +148,123 @@ def parse_minihack_args(args=None):
                         
     args = parser.parse_known_args(args=args)[0]
     return args
+
+
+def parse_craftax_args(args=None):
+    """Parse arguments for Craftax training."""
+    parser = argparse.ArgumentParser(description="Continual DreamerV3 Craftax")
+
+    parser.add_argument('--cl', default=False, action='store_true',
+                        help='Flag for continual learning loop.')
+    parser.add_argument('--cl_small', default=False, action='store_true',
+                        help='Flag for small continual learning configuration.')
+    parser.add_argument('--del_exp_replay', default=False, action='store_true',
+                        help='Flag to delete the training episodes after running the script to save storage space.')
+    parser.add_argument('--num_tasks', type=int, default=1)
+    parser.add_argument('--num_task_repeats', type=int, default=1)
+    parser.add_argument('--steps', type=int, default=5e5)
+
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--env', type=int, default=0, help='picks the env for the single task training.')
+    parser.add_argument('--tag', type=str, default='', help='unique str to tag runs.')
+    parser.add_argument('--logdir', type=str, default='logs', help='directory for the logs and exp replay episodes.')
+
+    # wandb
+    parser.add_argument('--wandb_group', type=str, default='craftax_experiment', help='name of the group in wandb')
+    parser.add_argument('--wandb_proj_name', type=str, default='craftax',
+                        help='unique str for wandb projs.')
+    parser.add_argument('--wandb_dir', type=str, default=None,
+                        help='unique str for wandb directory.')
+    parser.add_argument('--wandb_mode', type=str, default='online', choices=['online', 'offline', 'disabled'],
+                        help='wandb logging mode.')
+
+    # Input type
+    parser.add_argument('--input_type', type=str, default='embedding', choices=['embedding', 'pixel'],
+                        help='Observation input type. Default is embedding.')
+    parser.add_argument('--embedding_dim', type=int, default=256,
+                        help='Dimension of the embedding input.')
+
+    # Training
+    parser.add_argument('--replay_capacity', type=int, default=2e6)
+    parser.add_argument('--batch_size', type=int, default=16,
+                        help="mini-batch size")
+    parser.add_argument('--unbalanced_steps', type=list, default=None,
+                        help="number of steps per each task")
+
+    # Exploration
+    parser.add_argument('--plan2explore', default=False, action='store_true',
+                        help='Enable plan2explore exploration strategy.')
+    parser.add_argument('--expl_intr_scale', type=float, default=1.0,
+                        help="scale of the intrinsic reward.")
+    parser.add_argument('--expl_extr_scale', type=float, default=0.0,
+                        help="scale of the extrinsic reward.")
+    parser.add_argument('--sep_exp_eval_policies', default=False, action='store_true',
+                        help='Whether to use separate exploration and evaluation policies.')
+    parser.add_argument('--rssm_full_recon', default=False, action='store_true',
+                        help='Whether to have the WM reconstruct the obs, discount and rewards.')
+
+    args = parser.parse_known_args(args=args)[0]
+    return args
+
+
+def parse_navix_args(args=None):
+    """Parse arguments for NAVIX training."""
+    parser = argparse.ArgumentParser(description="Continual DreamerV3 NAVIX")
+
+    parser.add_argument('--cl', default=False, action='store_true',
+                        help='Flag for continual learning loop.')
+    parser.add_argument('--cl_small', default=False, action='store_true',
+                        help='Flag for small continual learning configuration.')
+    parser.add_argument('--del_exp_replay', default=False, action='store_true',
+                        help='Flag to delete the training episodes after running the script to save storage space.')
+    parser.add_argument('--num_tasks', type=int, default=1)
+    parser.add_argument('--num_task_repeats', type=int, default=1)
+    parser.add_argument('--steps', type=int, default=5e5)
+    parser.add_argument('--max_steps', type=int, default=500,
+                        help='Maximum steps per episode in NAVIX environment.')
+
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--env', type=int, default=0, help='picks the env for the single task training.')
+    parser.add_argument('--tag', type=str, default='', help='unique str to tag runs.')
+    parser.add_argument('--logdir', type=str, default='logs', help='directory for the logs and exp replay episodes.')
+
+    # wandb
+    parser.add_argument('--wandb_group', type=str, default='navix_experiment', help='name of the group in wandb')
+    parser.add_argument('--wandb_proj_name', type=str, default='navix',
+                        help='unique str for wandb projs.')
+    parser.add_argument('--wandb_dir', type=str, default=None,
+                        help='unique str for wandb directory.')
+    parser.add_argument('--wandb_mode', type=str, default='online', choices=['online', 'offline', 'disabled'],
+                        help='wandb logging mode.')
+
+    # Input type
+    parser.add_argument('--input_type', type=str, default='embedding', choices=['embedding', 'pixel'],
+                        help='Observation input type. Default is embedding.')
+    parser.add_argument('--embedding_dim', type=int, default=256,
+                        help='Dimension of the embedding input.')
+
+    # Training
+    parser.add_argument('--replay_capacity', type=int, default=2e6)
+    parser.add_argument('--batch_size', type=int, default=16,
+                        help="mini-batch size")
+    parser.add_argument('--unbalanced_steps', type=list, default=None,
+                        help="number of steps per each task")
+
+    # Exploration
+    parser.add_argument('--plan2explore', default=False, action='store_true',
+                        help='Enable plan2explore exploration strategy.')
+    parser.add_argument('--expl_intr_scale', type=float, default=1.0,
+                        help="scale of the intrinsic reward.")
+    parser.add_argument('--expl_extr_scale', type=float, default=0.0,
+                        help="scale of the extrinsic reward.")
+    parser.add_argument('--sep_exp_eval_policies', default=False, action='store_true',
+                        help='Whether to use separate exploration and evaluation policies.')
+    parser.add_argument('--rssm_full_recon', default=False, action='store_true',
+                        help='Whether to have the WM reconstruct the obs, discount and rewards.')
+    parser.add_argument('--state_bonus', default=False, action='store_true',
+                        help='Flag to decide whether to use a state bonus.')
+    parser.add_argument('--eval_skills', default=False, action='store_true',
+                        help='Flag evaluating our model on the multiskill envs.')
+
+    args = parser.parse_known_args(args=args)[0]
+    return args
