@@ -23,6 +23,9 @@ import wandb
 import jax
 import jax.numpy as jnp
 
+# Allow implicit host-to-device transfers (needed for passing Python scalars to JIT functions)
+jax.config.update("jax_transfer_guard", "allow")
+
 from dreamerv3.agent import Agent
 from input_args import parse_craftax_args
 
@@ -53,7 +56,10 @@ class CraftaxWrapper(embodied.Env):
         self._use_embedding = use_embedding
         self._seed = seed
         self._done = True
-        self._rng_key = jax.random.PRNGKey(seed)
+        
+        # Use a base key and step counter for deterministic key generation
+        self._base_key = jax.random.PRNGKey(seed)
+        self._step_count = 0
         
         # Create the appropriate Craftax environment
         if 'Classic' in env_name:
@@ -70,15 +76,36 @@ class CraftaxWrapper(embodied.Env):
         # Get environment parameters
         self._env_params = self._env.default_params
         
-        # Initialize state for space inference
-        self._rng_key, init_key = jax.random.split(self._rng_key)
-        self._obs, self._state = self._env.reset(init_key, self._env_params)
+        # JIT compile the key generation function to avoid host-to-device transfers
+        @jax.jit
+        def make_key(base_key, step):
+            return jax.random.fold_in(base_key, step)
+        self._make_key = make_key
         
-        # Determine observation shape
-        if isinstance(self._obs, dict):
-            self._obs_shape = self._obs['obs'].shape if 'obs' in self._obs else self._obs['pixels'].shape
+        # Initialize state for space inference - use jit compiled reset
+        self._reset_fn = jax.jit(self._env.reset)
+        self._step_fn = jax.jit(self._env.step)
+        
+        # Get initial observation to determine shape
+        init_key = self._make_key(self._base_key, 0)
+        obs, self._state = self._reset_fn(init_key, self._env_params)
+        self._step_count = 1
+        self._obs = obs
+        
+        # Determine observation shape from the observation
+        if hasattr(obs, 'shape'):
+            self._obs_shape = tuple(int(x) for x in obs.shape)
+        elif isinstance(obs, dict):
+            if 'obs' in obs:
+                self._obs_shape = tuple(int(x) for x in obs['obs'].shape)
+            elif 'pixels' in obs:
+                self._obs_shape = tuple(int(x) for x in obs['pixels'].shape)
+            else:
+                self._obs_shape = tuple(int(x) for x in jax.tree_util.tree_leaves(obs)[0].shape)
         else:
-            self._obs_shape = self._obs.shape
+            # Fallback for other observation types
+            obs_array = np.asarray(obs)
+            self._obs_shape = obs_array.shape
         
         # Setup embedding projection if needed
         if use_embedding:
@@ -88,7 +115,7 @@ class CraftaxWrapper(embodied.Env):
             self._projection /= np.sqrt(flat_dim)
         
         # Number of actions
-        self._num_actions = self._env.action_space(self._env_params).n
+        self._num_actions = int(self._env.action_space(self._env_params).n)
 
     @property
     def obs_space(self):
@@ -112,12 +139,27 @@ class CraftaxWrapper(embodied.Env):
             'reset': elements.Space(bool),
         }
 
+    def _get_rng_key(self):
+        """Get next random key using JIT-compiled fold_in to avoid device transfers."""
+        step_on_device = jax.device_put(self._step_count)
+        key = self._make_key(self._base_key, step_on_device)
+        self._step_count += 1
+        return key
+
     def _process_obs(self, obs):
         """Process observation: convert to numpy and optionally embed."""
-        if isinstance(obs, dict):
-            obs_array = np.array(obs.get('obs', obs.get('pixels')))
+        # Handle different observation types
+        if hasattr(obs, 'shape'):
+            obs_array = np.asarray(obs)
+        elif isinstance(obs, dict):
+            if 'obs' in obs:
+                obs_array = np.asarray(obs['obs'])
+            elif 'pixels' in obs:
+                obs_array = np.asarray(obs['pixels'])
+            else:
+                obs_array = np.asarray(jax.tree_util.tree_leaves(obs)[0])
         else:
-            obs_array = np.array(obs)
+            obs_array = np.asarray(obs)
         
         # Normalize to [0, 1] if needed
         if obs_array.dtype == np.uint8:
@@ -134,8 +176,8 @@ class CraftaxWrapper(embodied.Env):
 
     def step(self, action):
         if action['reset'] or self._done:
-            self._rng_key, reset_key = jax.random.split(self._rng_key)
-            self._obs, self._state = self._env.reset(reset_key, self._env_params)
+            reset_key = self._get_rng_key()
+            self._obs, self._state = self._reset_fn(reset_key, self._env_params)
             self._done = False
             obs_processed = self._process_obs(self._obs)
             result = {'embedding': obs_processed} if self._use_embedding else {'image': obs_processed}
@@ -147,9 +189,9 @@ class CraftaxWrapper(embodied.Env):
         if isinstance(act, np.ndarray):
             act = int(act.item() if act.ndim == 0 else act[0])
         
-        # Step environment
-        self._rng_key, step_key = jax.random.split(self._rng_key)
-        self._obs, self._state, reward, done, info = self._env.step(
+        # Step environment using jitted step function
+        step_key = self._get_rng_key()
+        self._obs, self._state, reward, done, info = self._step_fn(
             step_key, self._state, act, self._env_params
         )
         
@@ -157,7 +199,7 @@ class CraftaxWrapper(embodied.Env):
         obs_processed = self._process_obs(self._obs)
         result = {'embedding': obs_processed} if self._use_embedding else {'image': obs_processed}
         result.update(
-            reward=np.float32(reward),
+            reward=np.float32(float(reward)),
             is_first=False,
             is_last=self._done,
             is_terminal=self._done,
@@ -240,6 +282,7 @@ def load_config(args):
         'logdir': f'{args.logdir}/craftax_{tag}',
         'seed': args.seed,
         'batch_size': args.batch_size,
+        'replay_context': 0,  # Disable replay context to avoid needing dyn/deter and dyn/stoch in replay
         'run': {
             'steps': int(args.steps),
             'log_every': 1000,

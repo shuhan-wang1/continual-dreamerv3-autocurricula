@@ -23,6 +23,9 @@ import wandb
 import jax
 import jax.numpy as jnp
 
+# Allow implicit host-to-device transfers (needed for passing Python scalars to JIT functions)
+jax.config.update("jax_transfer_guard", "allow")
+
 from dreamerv3.agent import Agent
 from input_args import parse_navix_args
 
@@ -53,20 +56,34 @@ class NavixWrapper(embodied.Env):
         self._max_steps = max_steps
         self._obs_type = obs_type
         self._done = True
+        self._episode_step_count = 0
+        
+        # Use a base key and step counter for deterministic key generation
+        self._base_key = jax.random.PRNGKey(seed)
         self._step_count = 0
-        self._rng_key = jax.random.PRNGKey(seed)
         
         # Create the NAVIX environment based on name
         self._env = self._create_env(env_name)
         
+        # JIT compile the key generation function to avoid host-to-device transfers
+        @jax.jit
+        def make_key(base_key, step):
+            return jax.random.fold_in(base_key, step)
+        self._make_key = make_key
+        
+        # JIT compile reset and step functions
+        self._reset_fn = jax.jit(self._env.reset)
+        self._step_fn = jax.jit(self._env.step)
+        
         # Initialize to get observation shape
-        self._rng_key, init_key = jax.random.split(self._rng_key)
-        self._timestep = self._env.reset(init_key)
+        init_key = self._make_key(self._base_key, 0)
+        self._timestep = self._reset_fn(init_key)
+        self._step_count = 1
         self._state = self._timestep
         
         # Get observation shape from initial observation
         obs = self._get_obs(self._timestep)
-        self._obs_shape = obs.shape
+        self._obs_shape = tuple(int(x) for x in obs.shape)
         
         # Setup embedding projection if needed
         if use_embedding:
@@ -76,7 +93,13 @@ class NavixWrapper(embodied.Env):
             self._projection /= np.sqrt(flat_dim)
         
         # Number of actions (NAVIX typically has 6 or 7 actions)
-        self._num_actions = self._env.action_space.maximum + 1
+        self._num_actions = int(self._env.action_space.maximum + 1)
+
+    def _get_rng_key(self):
+        """Get next random key using JIT-compiled fold_in to avoid device transfers."""
+        key = self._make_key(self._base_key, self._step_count)
+        self._step_count += 1
+        return key
 
     def _create_env(self, env_name):
         """Create a NAVIX environment based on name."""
@@ -195,11 +218,11 @@ class NavixWrapper(embodied.Env):
 
     def step(self, action):
         if action['reset'] or self._done:
-            self._rng_key, reset_key = jax.random.split(self._rng_key)
-            self._timestep = self._env.reset(reset_key)
+            reset_key = self._get_rng_key()
+            self._timestep = self._reset_fn(reset_key)
             self._state = self._timestep
             self._done = False
-            self._step_count = 0
+            self._episode_step_count = 0
             
             obs_array = self._get_obs(self._timestep)
             obs_processed = self._process_obs(obs_array)
@@ -212,11 +235,10 @@ class NavixWrapper(embodied.Env):
         if isinstance(act, np.ndarray):
             act = int(act.item() if act.ndim == 0 else act[0])
         
-        # Step environment
-        self._rng_key, step_key = jax.random.split(self._rng_key)
-        self._timestep = self._env.step(self._state, jnp.array(act))
+        # Step environment using jitted step function
+        self._timestep = self._step_fn(self._state, jnp.array(act))
         self._state = self._timestep
-        self._step_count += 1
+        self._episode_step_count += 1
         
         # Get reward and done
         reward = float(self._timestep.reward) if hasattr(self._timestep, 'reward') else 0.0
@@ -231,7 +253,7 @@ class NavixWrapper(embodied.Env):
             from dm_env import StepType
             done = self._timestep.step_type == StepType.LAST
         
-        if self._step_count >= self._max_steps:
+        if self._episode_step_count >= self._max_steps:
             done = True
         
         self._done = done
@@ -240,7 +262,7 @@ class NavixWrapper(embodied.Env):
         obs_processed = self._process_obs(obs_array)
         result = {'embedding': obs_processed} if self._use_embedding else {'image': obs_processed}
         result.update(
-            reward=np.float32(reward),
+            reward=np.float32(float(reward)),
             is_first=False,
             is_last=self._done,
             is_terminal=self._done,
@@ -323,6 +345,7 @@ def load_config(args):
         'logdir': f'{args.logdir}/navix_{tag}',
         'seed': args.seed,
         'batch_size': args.batch_size,
+        'replay_context': 0,  # Disable replay context to avoid needing dyn/deter and dyn/stoch in replay
         'run': {
             'steps': int(args.steps),
             'log_every': 1000,
