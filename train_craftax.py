@@ -347,7 +347,7 @@ def load_config(args):
     tag = args.tag + str(args.seed)
     
     # Build overrides from args
-    overrides = {
+    run_overrides = {
         'logdir': f'{args.logdir}/craftax_{tag}',
         'seed': args.seed,
         'batch_size': args.batch_size,
@@ -363,7 +363,11 @@ def load_config(args):
             'size': int(args.replay_capacity),
         },
     }
-    config = config.update(overrides)
+    if getattr(args, 'envs', None) is not None:
+        run_overrides['run']['envs'] = int(args.envs)
+    if getattr(args, 'eval_envs', None) is not None:
+        run_overrides['run']['eval_envs'] = int(args.eval_envs)
+    config = config.update(run_overrides)
     return config, tag
 
 
@@ -397,6 +401,8 @@ def train_single(make_env, config, args):
             num_tasks=1,
             steps_per_task=steps_per_task,
             ref_metrics_path=getattr(args, 'ref_metrics_path', None),
+            ref_metrics_dir=getattr(args, 'ref_metrics_dir', None),
+            ref_metrics_root=getattr(args, 'logdir', None),
         )
 
     batch_size = config.batch_size
@@ -515,6 +521,8 @@ def cl_train_loop(make_envs, config, args):
             num_tasks=len(make_envs),
             steps_per_task=steps_per_task,
             ref_metrics_path=getattr(args, 'ref_metrics_path', None),
+            ref_metrics_dir=getattr(args, 'ref_metrics_dir', None),
+            ref_metrics_root=getattr(args, 'logdir', None),
         )
 
     batch_size = config.batch_size

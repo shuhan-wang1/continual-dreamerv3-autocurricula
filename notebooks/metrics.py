@@ -202,6 +202,49 @@ def load_ref_metrics(path: Optional[str]) -> Dict[str, float]:
     return data.get('ref_auc', {})
 
 
+def load_ref_metrics_from_paths(paths: Optional[List[str]]) -> Dict[str, float]:
+    if not paths:
+        return {}
+    merged: Dict[str, float] = {}
+    idx = 0
+    for p in paths:
+        if not p or not os.path.exists(p):
+            continue
+        with open(p, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        ref = data.get('ref_auc', {})
+        if ref:
+            for _, v in ref.items():
+                merged[str(idx)] = float(v)
+                idx += 1
+        else:
+            if 'auc' in data:
+                merged[str(idx)] = float(data['auc'])
+                idx += 1
+    return merged
+
+
+def load_ref_metrics_from_dir(directory: Optional[str]) -> Dict[str, float]:
+    if not directory or not os.path.isdir(directory):
+        return {}
+    paths = []
+    for name in sorted(os.listdir(directory)):
+        if name.endswith('.json') and 'ref_metrics' in name:
+            paths.append(os.path.join(directory, name))
+    return load_ref_metrics_from_paths(paths)
+
+
+def load_ref_metrics_from_root(root_dir: Optional[str]) -> Dict[str, float]:
+    if not root_dir or not os.path.isdir(root_dir):
+        return {}
+    paths = []
+    for dirpath, _, filenames in os.walk(root_dir):
+        for name in filenames:
+            if name == 'ref_metrics.json':
+                paths.append(os.path.join(dirpath, name))
+    return load_ref_metrics_from_paths(sorted(paths))
+
+
 def save_ref_metrics(path: str, ref_auc: Dict[str, float], steps_per_task: Union[int, List[int]]) -> None:
     _ensure_dir(os.path.dirname(path))
     payload = {
@@ -224,6 +267,8 @@ class OnlineMetrics:
         num_tasks: int,
         steps_per_task: Union[int, List[int]],
         ref_metrics_path: Optional[str] = None,
+        ref_metrics_dir: Optional[str] = None,
+        ref_metrics_root: Optional[str] = None,
         jsonl_name: str = 'online_metrics.jsonl',
         summary_name: str = 'metrics_summary.json',
     ) -> None:
@@ -235,7 +280,14 @@ class OnlineMetrics:
         else:
             self.steps_per_task = [int(steps_per_task) for _ in range(self.num_tasks)]
 
-        self.ref_auc = load_ref_metrics(ref_metrics_path)
+        if ref_metrics_path:
+            self.ref_auc = load_ref_metrics(ref_metrics_path)
+        elif ref_metrics_dir:
+            self.ref_auc = load_ref_metrics_from_dir(ref_metrics_dir)
+        elif ref_metrics_root:
+            self.ref_auc = load_ref_metrics_from_root(ref_metrics_root)
+        else:
+            self.ref_auc = {}
         self.jsonl_path = os.path.join(self.logdir, jsonl_name)
         self.summary_path = os.path.join(self.logdir, summary_name)
 

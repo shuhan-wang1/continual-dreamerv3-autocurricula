@@ -110,10 +110,21 @@ python train_navix.py --cl --num_tasks 3 --plan2explore --expl_intr_scale 0.9 --
 | `--embedding_dim` | Embedding dimension | 256 |
 | `--batch_size` | Mini-batch size | 16 |
 | `--replay_capacity` | Replay buffer size | 2000000 |
+| `--envs` | Number of parallel environments (run.envs) | 64 |
+| `--eval_envs` | Number of evaluation environments (run.eval_envs) | 4 |
 | `--plan2explore` | Enable Plan2Explore exploration | False |
 | `--wandb_proj_name` | W&B project name | craftax/navix |
 | `--wandb_group` | W&B experiment group | experiment |
 | `--logdir` | Log directory | logs |
+
+### Reducing GPU/CPU Memory Usage
+
+The default DreamerV3 config uses 64 parallel environments. If you see high memory usage or low utilization, reduce parallelism:
+
+```sh
+python train_craftax.py --envs 8 --eval_envs 1 ...
+python train_navix.py --envs 8 --eval_envs 1 ...
+```
 
 ## Embedding Mode
 

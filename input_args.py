@@ -186,8 +186,12 @@ def parse_craftax_args(args=None):
 
     # Training
     parser.add_argument('--replay_capacity', type=int, default=2e6)
-    parser.add_argument('--batch_size', type=int, default=64,
+    parser.add_argument('--batch_size', type=int, default=8,
                         help="mini-batch size")
+    parser.add_argument('--envs', type=int, default=None,
+                        help='Number of parallel environments (override config run.envs).')
+    parser.add_argument('--eval_envs', type=int, default=None,
+                        help='Number of evaluation environments (override config run.eval_envs).')
     parser.add_argument('--unbalanced_steps', type=list, default=None,
                         help="number of steps per each task")
 
@@ -229,6 +233,8 @@ def parse_craftax_args(args=None):
                         help='Enable online continual-learning metrics logging.')
     parser.add_argument('--ref_metrics_path', type=str, default=None,
                         help='Path to reference metrics JSON for forward transfer.')
+    parser.add_argument('--ref_metrics_dir', type=str, default=None,
+                        help='Directory containing per-task ref_metrics JSON files.')
 
     args = parser.parse_known_args(args=args)[0]
     return args
@@ -264,11 +270,19 @@ def parse_navix_args(args=None):
     parser.add_argument('--wandb_mode', type=str, default='online', choices=['online', 'offline', 'disabled'],
                         help='wandb logging mode.')
 
+    # Parallelism
+    parser.add_argument('--envs', type=int, default=None,
+                        help='Number of parallel environments (override config run.envs).')
+    parser.add_argument('--eval_envs', type=int, default=None,
+                        help='Number of evaluation environments (override config run.eval_envs).')
+
     # Online metrics
     parser.add_argument('--online_metrics', default=True, action='store_true',
                         help='Enable online continual-learning metrics logging.')
     parser.add_argument('--ref_metrics_path', type=str, default=None,
                         help='Path to reference metrics JSON for forward transfer.')
+    parser.add_argument('--ref_metrics_dir', type=str, default=None,
+                        help='Directory containing per-task ref_metrics JSON files.')
 
     # Input type
     parser.add_argument('--input_type', type=str, default='embedding', choices=['embedding', 'pixel'],
@@ -278,7 +292,7 @@ def parse_navix_args(args=None):
 
     # Training
     parser.add_argument('--replay_capacity', type=int, default=2e6)
-    parser.add_argument('--batch_size', type=int, default=64,
+    parser.add_argument('--batch_size', type=int, default=8,
                         help="mini-batch size")
     parser.add_argument('--unbalanced_steps', type=list, default=None,
                         help="number of steps per each task")
