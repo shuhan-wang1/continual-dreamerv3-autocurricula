@@ -186,7 +186,7 @@ def parse_craftax_args(args=None):
 
     # Training
     parser.add_argument('--replay_capacity', type=int, default=2e6)
-    parser.add_argument('--batch_size', type=int, default=16,
+    parser.add_argument('--batch_size', type=int, default=64,
                         help="mini-batch size")
     parser.add_argument('--unbalanced_steps', type=list, default=None,
                         help="number of steps per each task")
@@ -224,6 +224,12 @@ def parse_craftax_args(args=None):
     parser.add_argument('--rssm_full_recon', default=False, action='store_true',
                         help='Whether to have the WM reconstruct the obs, discount and rewards.')
 
+    # Online metrics
+    parser.add_argument('--online_metrics', default=True, action='store_true',
+                        help='Enable online continual-learning metrics logging.')
+    parser.add_argument('--ref_metrics_path', type=str, default=None,
+                        help='Path to reference metrics JSON for forward transfer.')
+
     args = parser.parse_known_args(args=args)[0]
     return args
 
@@ -258,6 +264,12 @@ def parse_navix_args(args=None):
     parser.add_argument('--wandb_mode', type=str, default='online', choices=['online', 'offline', 'disabled'],
                         help='wandb logging mode.')
 
+    # Online metrics
+    parser.add_argument('--online_metrics', default=True, action='store_true',
+                        help='Enable online continual-learning metrics logging.')
+    parser.add_argument('--ref_metrics_path', type=str, default=None,
+                        help='Path to reference metrics JSON for forward transfer.')
+
     # Input type
     parser.add_argument('--input_type', type=str, default='embedding', choices=['embedding', 'pixel'],
                         help='Observation input type. Default is embedding.')
@@ -266,7 +278,7 @@ def parse_navix_args(args=None):
 
     # Training
     parser.add_argument('--replay_capacity', type=int, default=2e6)
-    parser.add_argument('--batch_size', type=int, default=16,
+    parser.add_argument('--batch_size', type=int, default=64,
                         help="mini-batch size")
     parser.add_argument('--unbalanced_steps', type=list, default=None,
                         help="number of steps per each task")

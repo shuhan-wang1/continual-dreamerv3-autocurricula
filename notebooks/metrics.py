@@ -1,4 +1,6 @@
-from typing import Dict, List
+from typing import Dict, List, Optional, Union
+import json
+import os
 import numpy as np
 import pandas as pd
 
@@ -181,3 +183,158 @@ def fwd_transfer(
                 print("{0} ref auc {1} auc {2}".format(e, ref_auc, cl_auc))
                 print("per task ft {0}".format(ft_i))
     return ft / num_tasks
+
+
+def _clip_perf(value: float) -> float:
+    return float(value) if value > 0 else 0.0
+
+
+def _ensure_dir(path: str) -> None:
+    if path and not os.path.exists(path):
+        os.makedirs(path, exist_ok=True)
+
+
+def load_ref_metrics(path: Optional[str]) -> Dict[str, float]:
+    if not path or not os.path.exists(path):
+        return {}
+    with open(path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    return data.get('ref_auc', {})
+
+
+def save_ref_metrics(path: str, ref_auc: Dict[str, float], steps_per_task: Union[int, List[int]]) -> None:
+    _ensure_dir(os.path.dirname(path))
+    payload = {
+        'ref_auc': ref_auc,
+        'steps_per_task': steps_per_task,
+    }
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+class OnlineMetrics:
+    """Online metrics calculator aligned with Section 5.2.
+
+    Stores JSONL records for plotting and saves a summary JSON at the end.
+    """
+
+    def __init__(
+        self,
+        logdir: str,
+        num_tasks: int,
+        steps_per_task: Union[int, List[int]],
+        ref_metrics_path: Optional[str] = None,
+        jsonl_name: str = 'online_metrics.jsonl',
+        summary_name: str = 'metrics_summary.json',
+    ) -> None:
+        self.logdir = str(logdir)
+        _ensure_dir(self.logdir)
+        self.num_tasks = int(num_tasks)
+        if isinstance(steps_per_task, (list, tuple)):
+            self.steps_per_task = [int(x) for x in steps_per_task]
+        else:
+            self.steps_per_task = [int(steps_per_task) for _ in range(self.num_tasks)]
+
+        self.ref_auc = load_ref_metrics(ref_metrics_path)
+        self.jsonl_path = os.path.join(self.logdir, jsonl_name)
+        self.summary_path = os.path.join(self.logdir, summary_name)
+
+        self.latest = {i: None for i in range(self.num_tasks)}
+        self.end_scores = {i: None for i in range(self.num_tasks)}
+        self.auc = {i: 0.0 for i in range(self.num_tasks)}
+        self.last_step = {i: None for i in range(self.num_tasks)}
+        self.last_score = {i: None for i in range(self.num_tasks)}
+
+    def _steps_for(self, task_id: int) -> int:
+        return int(self.steps_per_task[task_id])
+
+    def update(self, task_id: int, step: int, score: float, length: Optional[int] = None) -> Dict[str, float]:
+        task_id = int(task_id)
+        step = int(step)
+        score = _clip_perf(score)
+
+        last_step = self.last_step[task_id]
+        last_score = self.last_score[task_id]
+        if last_step is not None and step > last_step:
+            dt = step - last_step
+            self.auc[task_id] += dt * (last_score + score) / 2.0
+
+        self.last_step[task_id] = step
+        self.last_score[task_id] = score
+        self.latest[task_id] = score
+
+        record = {
+            'step': step,
+            'task': task_id,
+            'score': score,
+            'length': None if length is None else int(length),
+            'ap': float(self.average_performance()),
+            'forgetting': float(self.average_forgetting()),
+            'ft': float(self.forward_transfer()),
+            'per_task_latest': self.latest_list(),
+            'per_task_auc': self.auc_norm_list(),
+        }
+        with open(self.jsonl_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(record, ensure_ascii=False) + '\n')
+        return record
+
+    def mark_task_end(self, task_id: int) -> None:
+        task_id = int(task_id)
+        if self.end_scores[task_id] is None:
+            self.end_scores[task_id] = self.latest.get(task_id, None)
+
+    def latest_list(self) -> List[float]:
+        out = []
+        for i in range(self.num_tasks):
+            val = self.latest.get(i, None)
+            out.append(0.0 if val is None else float(val))
+        return out
+
+    def auc_norm_list(self) -> List[float]:
+        out = []
+        for i in range(self.num_tasks):
+            denom = max(1, self._steps_for(i))
+            out.append(float(self.auc[i] / denom))
+        return out
+
+    def average_performance(self) -> float:
+        vals = self.latest_list()
+        if not vals:
+            return 0.0
+        return float(np.mean(vals))
+
+    def average_forgetting(self) -> float:
+        diffs = []
+        for i in range(self.num_tasks):
+            end_val = self.end_scores.get(i, None)
+            end_val = 0.0 if end_val is None else float(_clip_perf(end_val))
+            cur_val = self.latest.get(i, None)
+            cur_val = 0.0 if cur_val is None else float(_clip_perf(cur_val))
+            diffs.append(end_val - cur_val)
+        return float(np.mean(diffs)) if diffs else 0.0
+
+    def forward_transfer(self) -> float:
+        if not self.ref_auc:
+            return float('nan')
+        vals = []
+        for i in range(self.num_tasks):
+            key = str(i)
+            if key not in self.ref_auc:
+                continue
+            denom = max(1, self._steps_for(i))
+            auc_cl = self.auc[i] / denom
+            auc_ref = float(self.ref_auc[key])
+            vals.append((auc_cl - auc_ref) / (1.0 - auc_ref))
+        return float(np.mean(vals)) if vals else float('nan')
+
+    def save_summary(self) -> None:
+        payload = {
+            'ap': self.average_performance(),
+            'forgetting': self.average_forgetting(),
+            'ft': self.forward_transfer(),
+            'per_task_latest': self.latest_list(),
+            'per_task_auc': self.auc_norm_list(),
+            'num_tasks': self.num_tasks,
+        }
+        with open(self.summary_path, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)

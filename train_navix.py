@@ -28,10 +28,7 @@ jax.config.update("jax_transfer_guard", "allow")
 
 from dreamerv3.agent import Agent
 from input_args import parse_navix_args
-
-# Configure JAX memory allocation
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.8"
+from notebooks.metrics import OnlineMetrics, save_ref_metrics
 
 # Import NAVIX
 try:
@@ -423,7 +420,7 @@ def load_config(args):
             'log_every': 1000,
             'save_every': 10000,
             'report_every': 50000,
-            'train_ratio': 32.0,
+            'train_ratio': 64.0,
         },
         'replay': {
             'size': int(args.replay_capacity),
@@ -433,20 +430,37 @@ def load_config(args):
     return config, tag
 
 
-def train_single(env, config, args):
-    """Train DreamerV3 on a single environment."""
+def train_single(make_env, config, args):
+    """Train DreamerV3 on a single environment.
+
+    Args:
+        make_env: Callable(seed: int) -> embodied.Env that creates one env instance.
+    """
     np.random.seed(config.seed)
     logdir = elements.Path(config.logdir)
     logdir.mkdir()
     config.save(logdir / 'config.yaml')
     print('Logdir:', logdir)
 
-    wrapped_env = wrap_env(env)
-    agent = make_agent(config, wrapped_env)
+    num_envs = config.run.envs
+    print(f'Creating {num_envs} parallel environments.')
+    env_fns = [lambda i=i: wrap_env(make_env(config.seed + i)) for i in range(num_envs)]
+    driver = embodied.Driver(env_fns, parallel=False)
+
+    agent = make_agent(config, driver.envs[0])
     replay = make_replay(config, logdir / 'replay', args)
 
     step = elements.Counter()
     logger = make_logger(config, step)
+    online = None
+    if getattr(args, 'online_metrics', True):
+        steps_per_task = int(config.run.steps)
+        online = OnlineMetrics(
+            logdir=str(logdir),
+            num_tasks=1,
+            steps_per_task=steps_per_task,
+            ref_metrics_path=getattr(args, 'ref_metrics_path', None),
+        )
 
     batch_size = config.batch_size
     batch_length = config.batch_length
@@ -463,10 +477,13 @@ def train_single(env, config, args):
         episode.add('length', 1, agg='sum')
         if tran['is_last']:
             result = episode.result()
-            logger.add({'score': result.pop('score'), 'length': result.pop('length')}, prefix='episode')
+            score = result.pop('score')
+            length = result.pop('length')
+            logger.add({'score': score, 'length': length}, prefix='episode')
+            if online is not None:
+                online.update(task_id=0, step=int(step.value), score=float(score), length=int(length))
             logger.write()
 
-    driver = embodied.Driver([lambda: wrapped_env], parallel=False)
     driver.on_step(lambda tran, _: step.increment())
     driver.on_step(replay.add)
     driver.on_step(logfn)
@@ -478,7 +495,7 @@ def train_single(env, config, args):
         random_policy = lambda carry, obs: (
             carry,
             {k: np.stack([v.sample() for _ in range(len(obs['is_first']))])
-             for k, v in wrapped_env.act_space.items() if k != 'reset'},
+             for k, v in driver.act_space.items() if k != 'reset'},
             {}
         )
         driver.reset()
@@ -518,12 +535,22 @@ def train_single(env, config, args):
             cp.save()
 
     cp.save()
+    if online is not None:
+        online.mark_task_end(0)
+        online.save_summary()
+        ref_path = os.path.join(str(logdir), 'ref_metrics.json')
+        ref_auc = {'0': online.auc_norm_list()[0]}
+        save_ref_metrics(ref_path, ref_auc, steps_per_task)
     driver.close()
     logger.close()
 
 
-def cl_train_loop(envs, config, args):
-    """Continual learning training loop for DreamerV3."""
+def cl_train_loop(make_envs, config, args):
+    """Continual learning training loop for DreamerV3.
+
+    Args:
+        make_envs: List of Callable(seed: int) -> embodied.Env, one per task.
+    """
     np.random.seed(config.seed)
 
     unbalanced_steps = None
@@ -535,14 +562,23 @@ def cl_train_loop(envs, config, args):
     config.save(logdir / 'config.yaml')
     print('Logdir:', logdir)
 
-    wrapped_envs = [wrap_env(e) for e in envs]
-    env = wrapped_envs[0]
+    num_envs = config.run.envs
+    env0 = wrap_env(make_envs[0](config.seed))
 
-    agent = make_agent(config, env)
+    agent = make_agent(config, env0)
     replay = make_replay(config, logdir / 'replay', args)
 
     total_step = elements.Counter()
     logger = make_logger(config, total_step)
+    online = None
+    if getattr(args, 'online_metrics', True):
+        steps_per_task = unbalanced_steps if unbalanced_steps is not None else int(args.steps)
+        online = OnlineMetrics(
+            logdir=str(logdir),
+            num_tasks=len(make_envs),
+            steps_per_task=steps_per_task,
+            ref_metrics_path=getattr(args, 'ref_metrics_path', None),
+        )
 
     batch_size = config.batch_size
     batch_length = config.batch_length
@@ -559,7 +595,7 @@ def cl_train_loop(envs, config, args):
     stats = replay.stats()
     total_steps_done = stats.get('total_steps', 0)
     steps_per_task = int(args.steps)
-    num_tasks = len(wrapped_envs)
+    num_tasks = len(make_envs)
 
     if unbalanced_steps is not None:
         tot_steps_after_task = np.cumsum(unbalanced_steps)
@@ -583,7 +619,8 @@ def cl_train_loop(envs, config, args):
         while task_id < num_tasks:
             print(f"\n=== Task {task_id + 1}/{num_tasks}, Rep {rep + 1}/{args.num_task_repeats} ===\n")
 
-            current_env = wrapped_envs[task_id]
+            make_task_env = make_envs[task_id]
+            env_fns = [lambda i=i, fn=make_task_env: wrap_env(fn(config.seed + i)) for i in range(num_envs)]
             step = elements.Counter()
             episodes = collections.defaultdict(elements.Agg)
 
@@ -594,10 +631,14 @@ def cl_train_loop(envs, config, args):
                 episode.add('length', 1, agg='sum')
                 if tran['is_last']:
                     result = episode.result()
-                    logger.add({'score': result.pop('score'), 'length': result.pop('length'), 'task': task_id}, prefix='episode')
+                    score = result.pop('score')
+                    length = result.pop('length')
+                    logger.add({'score': score, 'length': length, 'task': task_id}, prefix='episode')
+                    if online is not None:
+                        online.update(task_id=task_id, step=int(total_step.value), score=float(score), length=int(length))
                     logger.write()
 
-            driver = embodied.Driver([lambda e=current_env: e], parallel=False)
+            driver = embodied.Driver(env_fns, parallel=False)
             driver.on_step(lambda tran, _: total_step.increment())
             driver.on_step(lambda tran, _: step.increment())
             driver.on_step(replay.add)
@@ -610,7 +651,7 @@ def cl_train_loop(envs, config, args):
                 random_policy = lambda carry, obs: (
                     carry,
                     {k: np.stack([v.sample() for _ in range(len(obs['is_first']))])
-                     for k, v in current_env.act_space.items() if k != 'reset'},
+                     for k, v in driver.act_space.items() if k != 'reset'},
                     {}
                 )
                 driver.reset()
@@ -641,12 +682,16 @@ def cl_train_loop(envs, config, args):
                     cp.save()
 
             driver.close()
+            if online is not None:
+                online.mark_task_end(task_id)
             task_id += 1
 
         task_id = 0
         rep += 1
 
     cp.save()
+    if online is not None:
+        online.save_summary()
     logger.close()
 
 
@@ -717,20 +762,19 @@ def run_navix(args):
             name=f"DreamerV3_navix_cl-small={args.cl_small}_{tag}",
         )
 
-        envs = []
+        make_env_fns = []
         for i in range(args.num_tasks):
             name = env_names[i % len(env_names)]
-            env = make_navix(
+            make_env_fns.append(lambda seed, name=name: make_navix(
                 name,
                 embedding_dim=args.embedding_dim,
                 use_embedding=use_embedding,
-                seed=args.seed + i,
+                seed=seed,
                 max_steps=args.max_steps,
-            )
-            print(f"env {name}, action space: {env.act_space['action'].high}, use_embedding: {use_embedding}")
-            envs.append(env)
+            ))
+            print(f"Task {i}: env {name}, use_embedding: {use_embedding}")
 
-        cl_train_loop(envs, config, args)
+        cl_train_loop(make_env_fns, config, args)
     else:
         env_name = all_envs[args.env % len(all_envs)]
 
@@ -745,15 +789,15 @@ def run_navix(args):
             name=f"DreamerV3_navix_single-env={env_name}_{tag}",
         )
 
-        env = make_navix(
-            env_name,
+        make_env = lambda seed, name=env_name: make_navix(
+            name,
             embedding_dim=args.embedding_dim,
             use_embedding=use_embedding,
-            seed=args.seed,
+            seed=seed,
             max_steps=args.max_steps,
         )
 
-        train_single(env, config, args)
+        train_single(make_env, config, args)
 
     if args.del_exp_replay:
         shutil.rmtree(os.path.join(config.logdir, 'replay'), ignore_errors=True)

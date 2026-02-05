@@ -7,7 +7,7 @@ defaults:
   task: dummy_disc
   seed: 0
   script: train
-  batch_size: 16
+  batch_size: 64
   batch_length: 64
   report_length: 32
   consec_train: 1
@@ -48,11 +48,11 @@ defaults:
   run:
     steps: 1e10
     duration: 0
-    train_ratio: 32.0
+    train_ratio: 64.0
     log_every: 120
     report_every: 300
     save_every: 900
-    envs: 16
+    envs: 64
     eval_envs: 4
     eval_eps: 1
     report_batches: 1
