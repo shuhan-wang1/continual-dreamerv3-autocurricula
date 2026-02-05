@@ -42,7 +42,11 @@ except ImportError:
 
 # ============== NAVIX Environment Wrapper ==============
 class NavixWrapper(embodied.Env):
-    """Wrapper to convert NAVIX JAX environments to embodied interface."""
+    """Wrapper to convert NAVIX JAX environments to embodied interface.
+    
+    Optimized to minimize GPU<->CPU transfers by keeping data on GPU as long
+    as possible and using JIT-compiled processing functions.
+    """
 
     def __init__(self, env_name='NavixEmpty-8x8-v0', embedding_dim=256, use_embedding=True, 
                  seed=42, max_steps=500, obs_type='symbolic'):
@@ -55,47 +59,70 @@ class NavixWrapper(embodied.Env):
         self._done = True
         self._episode_step_count = 0
         
-        # Use a base key and step counter for deterministic key generation
+        # Use a base key and pre-generate key cache for zero-transfer RNG
         self._base_key = jax.random.PRNGKey(seed)
         self._step_count = 0
+        self._key_batch_size = 1024
+        self._key_cache = jax.random.split(self._base_key, self._key_batch_size)
+        self._key_idx = 0
         
         # Create the NAVIX environment based on name
         self._env = self._create_env(env_name)
-        
-        # JIT compile the key generation function to avoid host-to-device transfers
-        @jax.jit
-        def make_key(base_key, step):
-            return jax.random.fold_in(base_key, step)
-        self._make_key = make_key
         
         # JIT compile reset and step functions
         self._reset_fn = jax.jit(self._env.reset)
         self._step_fn = jax.jit(self._env.step)
         
         # Initialize to get observation shape
-        init_key = self._make_key(self._base_key, 0)
+        init_key = self._key_cache[0]
+        self._key_idx = 1
         self._timestep = self._reset_fn(init_key)
-        self._step_count = 1
         self._state = self._timestep
         
-        # Get observation shape from initial observation
-        obs = self._get_obs(self._timestep)
+        # Get observation shape from initial observation (one-time CPU transfer)
+        obs = self._get_obs_raw(self._timestep)
         self._obs_shape = tuple(int(x) for x in obs.shape)
         
-        # Setup embedding projection if needed
+        # Setup embedding projection on GPU and JIT the processing function
         if use_embedding:
             np.random.seed(42)
             flat_dim = int(np.prod(self._obs_shape))
-            self._projection = np.random.randn(flat_dim, embedding_dim).astype(np.float32)
-            self._projection /= np.sqrt(flat_dim)
+            projection_np = np.random.randn(flat_dim, embedding_dim).astype(np.float32)
+            projection_np /= np.sqrt(flat_dim)
+            # Keep projection matrix on GPU
+            self._projection = jax.device_put(jnp.array(projection_np))
+            
+            # JIT compile the full obs->embedding pipeline on GPU
+            @jax.jit
+            def process_obs_jit(obs):
+                obs_f = obs.astype(jnp.float32)
+                # Normalize if needed (values > 1.0 treated as [0,255])
+                obs_f = jnp.where(obs_f.max() > 1.0, obs_f / 255.0, obs_f)
+                obs_flat = obs_f.reshape(-1)
+                return jnp.dot(obs_flat, self._projection)
+            self._process_obs_jit = process_obs_jit
+        else:
+            @jax.jit
+            def process_obs_jit(obs):
+                obs_f = obs.astype(jnp.float32)
+                return jnp.where(obs_f.max() > 1.0, obs_f / 255.0, obs_f)
+            self._process_obs_jit = process_obs_jit
         
         # Number of actions (NAVIX typically has 6 or 7 actions)
         self._num_actions = int(self._env.action_space.maximum + 1)
 
     def _get_rng_key(self):
-        """Get next random key using JIT-compiled fold_in to avoid device transfers."""
-        key = self._make_key(self._base_key, self._step_count)
-        self._step_count += 1
+        """Get next random key from pre-generated cache (no device transfer per step)."""
+        if self._key_idx >= self._key_batch_size:
+            # Regenerate key batch on GPU (amortized cost)
+            self._step_count += self._key_batch_size
+            self._key_cache = jax.random.split(
+                jax.random.fold_in(self._base_key, self._step_count),
+                self._key_batch_size
+            )
+            self._key_idx = 0
+        key = self._key_cache[self._key_idx]
+        self._key_idx += 1
         return key
 
     def _create_env(self, env_name):
@@ -158,38 +185,37 @@ class NavixWrapper(embodied.Env):
         
         return env
 
-    def _get_obs(self, timestep):
-        """Extract observation from timestep."""
+    def _get_obs_raw(self, timestep):
+        """Extract observation from timestep, keeping as JAX array on GPU."""
         obs = timestep.observation
         
-        # Handle different observation types
+        # Handle different observation types - stay on GPU
         if hasattr(obs, 'grid'):
-            # Symbolic observation
-            obs_array = np.array(obs.grid)
+            return jnp.asarray(obs.grid)
         elif hasattr(obs, 'image'):
-            obs_array = np.array(obs.image)
-        elif isinstance(obs, (np.ndarray, jnp.ndarray)):
-            obs_array = np.array(obs)
+            return jnp.asarray(obs.image)
+        elif isinstance(obs, jnp.ndarray):
+            return obs
+        elif isinstance(obs, np.ndarray):
+            return jnp.asarray(obs)
         elif hasattr(obs, '__array__'):
-            obs_array = np.array(obs)
+            return jnp.asarray(obs)
         else:
-            # Try to convert observation to array
-            obs_array = np.array(obs.grid if hasattr(obs, 'grid') else obs)
-        
-        return obs_array.astype(np.float32)
+            return jnp.asarray(obs.grid if hasattr(obs, 'grid') else obs)
 
-    def _process_obs(self, obs_array):
-        """Process observation: normalize and optionally embed."""
-        # Normalize
-        if obs_array.max() > 1.0:
-            obs_array = obs_array / 255.0 if obs_array.max() > 1.0 else obs_array
-        
-        if self._use_embedding:
-            flat = obs_array.flatten()
-            embedding = np.dot(flat, self._projection)
-            return embedding
-        else:
-            return obs_array
+    def _to_numpy_result(self, timestep, reward, is_first, is_last, is_terminal):
+        """Single batched transfer from GPU to CPU at the end of step."""
+        obs_jax = self._get_obs_raw(timestep)
+        processed = self._process_obs_jit(obs_jax)
+        obs_np = np.asarray(processed)
+        key = 'embedding' if self._use_embedding else 'image'
+        return {
+            key: obs_np,
+            'reward': np.float32(reward),
+            'is_first': is_first,
+            'is_last': is_last,
+            'is_terminal': is_terminal,
+        }
 
     @property
     def obs_space(self):
@@ -220,24 +246,19 @@ class NavixWrapper(embodied.Env):
             self._state = self._timestep
             self._done = False
             self._episode_step_count = 0
-            
-            obs_array = self._get_obs(self._timestep)
-            obs_processed = self._process_obs(obs_array)
-            result = {'embedding': obs_processed} if self._use_embedding else {'image': obs_processed}
-            result.update(reward=np.float32(0.0), is_first=True, is_last=False, is_terminal=False)
-            return result
+            return self._to_numpy_result(self._timestep, 0.0, True, False, False)
         
         # Get action
         act = action['action']
         if isinstance(act, np.ndarray):
             act = int(act.item() if act.ndim == 0 else act[0])
         
-        # Step environment using jitted step function
+        # Step environment using jitted step function (stays on GPU)
         self._timestep = self._step_fn(self._state, jnp.array(act))
         self._state = self._timestep
         self._episode_step_count += 1
         
-        # Get reward and done
+        # Get reward scalar (single transfer)
         reward = float(self._timestep.reward) if hasattr(self._timestep, 'reward') else 0.0
         
         # Check if done
@@ -254,17 +275,9 @@ class NavixWrapper(embodied.Env):
             done = True
         
         self._done = done
-        
-        obs_array = self._get_obs(self._timestep)
-        obs_processed = self._process_obs(obs_array)
-        result = {'embedding': obs_processed} if self._use_embedding else {'image': obs_processed}
-        result.update(
-            reward=np.float32(float(reward)),
-            is_first=False,
-            is_last=self._done,
-            is_terminal=self._done,
+        return self._to_numpy_result(
+            self._timestep, reward, False, self._done, self._done
         )
-        return result
 
     def close(self):
         pass
@@ -410,6 +423,8 @@ def load_config(args):
     tag = args.tag + str(args.seed)
     
     # Build overrides from args
+    # Default to 4 envs for JAX-based environments (not 64 from defaults)
+    num_envs = int(args.envs) if getattr(args, 'envs', None) is not None else 4
     run_overrides = {
         'logdir': f'{args.logdir}/navix_{tag}',
         'seed': args.seed,
@@ -421,13 +436,13 @@ def load_config(args):
             'save_every': 10000,
             'report_every': 50000,
             'train_ratio': 64.0,
+            'envs': num_envs,
+            'debug': False,  # Disable debug mode for performance
         },
         'replay': {
             'size': int(args.replay_capacity),
         },
     }
-    if getattr(args, 'envs', None) is not None:
-        run_overrides['run']['envs'] = int(args.envs)
     if getattr(args, 'eval_envs', None) is not None:
         run_overrides['run']['eval_envs'] = int(args.eval_envs)
     config = config.update(run_overrides)
@@ -447,11 +462,17 @@ def train_single(make_env, config, args):
     print('Logdir:', logdir)
 
     num_envs = config.run.envs
-    print(f'Creating {num_envs} parallel environments.')
+    use_parallel = num_envs > 1
+    print(f'Creating {num_envs} environments (parallel={use_parallel}).')
     env_fns = [lambda i=i: wrap_env(make_env(config.seed + i)) for i in range(num_envs)]
-    driver = embodied.Driver(env_fns, parallel=False)
+    driver = embodied.Driver(env_fns, parallel=use_parallel)
 
-    agent = make_agent(config, driver.envs[0])
+    if use_parallel:
+        tmp_env = wrap_env(make_env(config.seed))
+        agent = make_agent(config, tmp_env)
+        tmp_env.close()
+    else:
+        agent = make_agent(config, driver.envs[0])
     replay = make_replay(config, logdir / 'replay', args)
 
     step = elements.Counter()
@@ -646,7 +667,8 @@ def cl_train_loop(make_envs, config, args):
                         online.update(task_id=task_id, step=int(total_step.value), score=float(score), length=int(length))
                     logger.write()
 
-            driver = embodied.Driver(env_fns, parallel=False)
+            use_parallel = num_envs > 1
+            driver = embodied.Driver(env_fns, parallel=use_parallel)
             driver.on_step(lambda tran, _: total_step.increment())
             driver.on_step(lambda tran, _: step.increment())
             driver.on_step(replay.add)

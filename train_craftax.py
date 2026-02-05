@@ -45,7 +45,11 @@ except ImportError:
 
 # ============== Craftax Environment Wrapper ==============
 class CraftaxWrapper(embodied.Env):
-    """Wrapper to convert Craftax JAX environments to embodied interface."""
+    """Wrapper to convert Craftax JAX environments to embodied interface.
+    
+    Optimized to minimize GPU<->CPU transfers by keeping data on GPU as long
+    as possible and using JIT-compiled processing functions.
+    """
 
     def __init__(self, env_name='CraftaxSymbolic-v1', embedding_dim=256, use_embedding=True, seed=42):
         self._env_name = env_name
@@ -55,8 +59,12 @@ class CraftaxWrapper(embodied.Env):
         self._done = True
         
         # Use a base key and step counter for deterministic key generation
+        # Pre-generate a batch of keys to avoid per-step host-to-device transfers
         self._base_key = jax.random.PRNGKey(seed)
         self._step_count = 0
+        self._key_batch_size = 1024
+        self._key_cache = jax.random.split(self._base_key, self._key_batch_size)
+        self._key_idx = 0
         
         # Create the appropriate Craftax environment
         if 'Classic' in env_name:
@@ -73,23 +81,17 @@ class CraftaxWrapper(embodied.Env):
         # Get environment parameters
         self._env_params = self._env.default_params
         
-        # JIT compile the key generation function to avoid host-to-device transfers
-        @jax.jit
-        def make_key(base_key, step):
-            return jax.random.fold_in(base_key, step)
-        self._make_key = make_key
-        
         # Initialize state for space inference - use jit compiled reset
         self._reset_fn = jax.jit(self._env.reset)
         self._step_fn = jax.jit(self._env.step)
         
         # Get initial observation to determine shape
-        init_key = self._make_key(self._base_key, 0)
+        init_key = self._key_cache[0]
+        self._key_idx = 1
         obs, self._state = self._reset_fn(init_key, self._env_params)
-        self._step_count = 1
         self._obs = obs
         
-        # Determine observation shape from the observation
+        # Determine observation shape from the observation (one-time cost)
         if hasattr(obs, 'shape'):
             self._obs_shape = tuple(int(x) for x in obs.shape)
         elif isinstance(obs, dict):
@@ -100,16 +102,29 @@ class CraftaxWrapper(embodied.Env):
             else:
                 self._obs_shape = tuple(int(x) for x in jax.tree_util.tree_leaves(obs)[0].shape)
         else:
-            # Fallback for other observation types
             obs_array = np.asarray(obs)
             self._obs_shape = obs_array.shape
         
-        # Setup embedding projection if needed
+        # Setup embedding projection on GPU and JIT the processing function
         if use_embedding:
             np.random.seed(42)
             flat_dim = int(np.prod(self._obs_shape))
-            self._projection = np.random.randn(flat_dim, embedding_dim).astype(np.float32)
-            self._projection /= np.sqrt(flat_dim)
+            projection_np = np.random.randn(flat_dim, embedding_dim).astype(np.float32)
+            projection_np /= np.sqrt(flat_dim)
+            # Keep projection matrix on GPU
+            self._projection = jax.device_put(jnp.array(projection_np))
+            
+            # JIT compile the full obs->embedding pipeline on GPU
+            @jax.jit
+            def process_obs_jit(obs):
+                obs_flat = obs.reshape(-1).astype(jnp.float32)
+                return jnp.dot(obs_flat, self._projection)
+            self._process_obs_jit = process_obs_jit
+        else:
+            @jax.jit
+            def process_obs_jit(obs):
+                return obs.astype(jnp.float32)
+            self._process_obs_jit = process_obs_jit
         
         # Number of actions
         self._num_actions = int(self._env.action_space(self._env_params).n)
@@ -137,71 +152,72 @@ class CraftaxWrapper(embodied.Env):
         }
 
     def _get_rng_key(self):
-        """Get next random key using JIT-compiled fold_in to avoid device transfers."""
-        step_on_device = jax.device_put(self._step_count)
-        key = self._make_key(self._base_key, step_on_device)
-        self._step_count += 1
+        """Get next random key from pre-generated cache (no device transfer per step)."""
+        if self._key_idx >= self._key_batch_size:
+            # Regenerate key batch on GPU (amortized cost)
+            self._step_count += self._key_batch_size
+            self._key_cache = jax.random.split(
+                jax.random.fold_in(self._base_key, self._step_count),
+                self._key_batch_size
+            )
+            self._key_idx = 0
+        key = self._key_cache[self._key_idx]
+        self._key_idx += 1
         return key
 
-    def _process_obs(self, obs):
-        """Process observation: convert to numpy and optionally embed."""
-        # Handle different observation types
+    def _extract_obs(self, obs):
+        """Extract raw observation array, staying on GPU."""
         if hasattr(obs, 'shape'):
-            obs_array = np.asarray(obs)
+            return obs
         elif isinstance(obs, dict):
             if 'obs' in obs:
-                obs_array = np.asarray(obs['obs'])
+                return obs['obs']
             elif 'pixels' in obs:
-                obs_array = np.asarray(obs['pixels'])
+                return obs['pixels']
             else:
-                obs_array = np.asarray(jax.tree_util.tree_leaves(obs)[0])
-        else:
-            obs_array = np.asarray(obs)
-        
-        # Normalize to [0, 1] if needed
-        if obs_array.dtype == np.uint8:
-            obs_array = obs_array.astype(np.float32) / 255.0
-        else:
-            obs_array = obs_array.astype(np.float32)
-        
-        if self._use_embedding:
-            flat = obs_array.flatten()
-            embedding = np.dot(flat, self._projection)
-            return embedding
-        else:
-            return obs_array
+                return jax.tree_util.tree_leaves(obs)[0]
+        return obs
+
+    def _to_numpy_result(self, obs_jax, reward, is_first, is_last, is_terminal):
+        """Single batched transfer from GPU to CPU at the end of step."""
+        # Process obs on GPU first
+        processed = self._process_obs_jit(self._extract_obs(obs_jax))
+        # Single device_get for the processed obs only
+        obs_np = np.asarray(processed)
+        key = 'embedding' if self._use_embedding else 'image'
+        return {
+            key: obs_np,
+            'reward': np.float32(reward),
+            'is_first': is_first,
+            'is_last': is_last,
+            'is_terminal': is_terminal,
+        }
 
     def step(self, action):
         if action['reset'] or self._done:
             reset_key = self._get_rng_key()
             self._obs, self._state = self._reset_fn(reset_key, self._env_params)
             self._done = False
-            obs_processed = self._process_obs(self._obs)
-            result = {'embedding': obs_processed} if self._use_embedding else {'image': obs_processed}
-            result.update(reward=np.float32(0.0), is_first=True, is_last=False, is_terminal=False)
-            return result
+            return self._to_numpy_result(self._obs, 0.0, True, False, False)
         
-        # Get action
+        # Get action - avoid Python int() conversion, keep as jax-compatible
         act = action['action']
         if isinstance(act, np.ndarray):
             act = int(act.item() if act.ndim == 0 else act[0])
         
-        # Step environment using jitted step function
+        # Step environment using jitted step function (stays on GPU)
         step_key = self._get_rng_key()
         self._obs, self._state, reward, done, info = self._step_fn(
             step_key, self._state, act, self._env_params
         )
         
+        # Only transfer done flag to CPU (single scalar)
         self._done = bool(done)
-        obs_processed = self._process_obs(self._obs)
-        result = {'embedding': obs_processed} if self._use_embedding else {'image': obs_processed}
-        result.update(
-            reward=np.float32(float(reward)),
-            is_first=False,
-            is_last=self._done,
-            is_terminal=self._done,
+        # Transfer reward scalar to CPU
+        reward_val = float(reward)
+        return self._to_numpy_result(
+            self._obs, reward_val, False, self._done, self._done
         )
-        return result
 
     def close(self):
         pass
@@ -347,6 +363,8 @@ def load_config(args):
     tag = args.tag + str(args.seed)
     
     # Build overrides from args
+    # Default to 4 envs for JAX-based environments (not 64 from defaults)
+    num_envs = int(args.envs) if getattr(args, 'envs', None) is not None else 4
     run_overrides = {
         'logdir': f'{args.logdir}/craftax_{tag}',
         'seed': args.seed,
@@ -358,13 +376,13 @@ def load_config(args):
             'save_every': 10000,
             'report_every': 50000,
             'train_ratio': 64.0,
+            'envs': num_envs,
+            'debug': False,  # Disable debug mode for performance
         },
         'replay': {
             'size': int(args.replay_capacity),
         },
     }
-    if getattr(args, 'envs', None) is not None:
-        run_overrides['run']['envs'] = int(args.envs)
     if getattr(args, 'eval_envs', None) is not None:
         run_overrides['run']['eval_envs'] = int(args.eval_envs)
     config = config.update(run_overrides)
@@ -384,11 +402,18 @@ def train_single(make_env, config, args):
     print('Logdir:', logdir)
 
     num_envs = config.run.envs
-    print(f'Creating {num_envs} parallel environments.')
+    use_parallel = num_envs > 1
+    print(f'Creating {num_envs} environments (parallel={use_parallel}).')
     env_fns = [lambda i=i: wrap_env(make_env(config.seed + i)) for i in range(num_envs)]
-    driver = embodied.Driver(env_fns, parallel=False)
+    driver = embodied.Driver(env_fns, parallel=use_parallel)
 
-    agent = make_agent(config, driver.envs[0])
+    if use_parallel:
+        # For parallel driver, create a temporary env to get spaces
+        tmp_env = wrap_env(make_env(config.seed))
+        agent = make_agent(config, tmp_env)
+        tmp_env.close()
+    else:
+        agent = make_agent(config, driver.envs[0])
     replay = make_replay(config, logdir / 'replay', args)
 
     step = elements.Counter()
@@ -583,7 +608,8 @@ def cl_train_loop(make_envs, config, args):
                         online.update(task_id=task_id, step=int(total_step.value), score=float(score), length=int(length))
                     logger.write()
 
-            driver = embodied.Driver(env_fns, parallel=False)
+            use_parallel = num_envs > 1
+            driver = embodied.Driver(env_fns, parallel=use_parallel)
             driver.on_step(lambda tran, _: total_step.increment())
             driver.on_step(lambda tran, _: step.increment())
             driver.on_step(replay.add)
