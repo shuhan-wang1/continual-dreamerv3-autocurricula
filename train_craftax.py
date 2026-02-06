@@ -356,6 +356,15 @@ def load_config(args):
     configs = yaml.YAML(typ='safe').load(configs_path.read_text())
     config = elements.Config(configs['defaults'])
     
+    # Apply size preset: default to size12m for Craftax (embedding-based)
+    # The default config is size200m (~200M params) which is way too large
+    # for simple embedding observations and will OOM on <=32GB GPUs.
+    size_preset = getattr(args, 'model_size', '12m')
+    size_key = f'size{size_preset}'
+    if size_key in configs:
+        config = config.update(configs[size_key])
+        print(f'Using model size preset: {size_key}')
+    
     # Apply size preset if specified
     if args.cl_small and 'small' in configs:
         config = config.update(configs['small'])
@@ -365,10 +374,12 @@ def load_config(args):
     # Build overrides from args
     # Default to 4 envs for JAX-based environments (not 64 from defaults)
     num_envs = int(args.envs) if getattr(args, 'envs', None) is not None else 4
+    batch_length = getattr(args, 'batch_length', 32)
     run_overrides = {
         'logdir': f'{args.logdir}/craftax_{tag}',
         'seed': args.seed,
         'batch_size': args.batch_size,
+        'batch_length': batch_length,
         'replay_context': 0,  # Disable replay context to avoid needing dyn/deter and dyn/stoch in replay
         'run': {
             'steps': int(args.steps),
@@ -378,6 +389,9 @@ def load_config(args):
             'train_ratio': 64.0,
             'envs': num_envs,
             'debug': False,  # Disable debug mode for performance
+        },
+        'jax': {
+            'prealloc': False,  # Allocate GPU memory on demand, not all at once
         },
         'replay': {
             'size': int(args.replay_capacity),
