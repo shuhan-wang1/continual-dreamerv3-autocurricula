@@ -118,11 +118,6 @@ class Agent(embodied.jax.Agent):
     scales.update({k: rec for k in dec_space})
     if self.p2e_enabled:
       scales['disag'] = 1.0
-      # PDF Section 5.1: "learn the world model by observation reconstruction
-      # only, rather than observation, reward, and discount reconstruction."
-      # Zero out reward and discount loss scales for task-agnostic features.
-      scales['rew'] = 0.0
-      scales['con'] = 0.0
     self.scales = scales
 
   @property
@@ -212,12 +207,17 @@ class Agent(embodied.jax.Agent):
     metrics.update(mets)
     dec_carry, dec_entries, recons = self.dec(
         dec_carry, repfeat, reset, training)
-    inp = sg(self.feat2tensor(repfeat), skip=self.config.reward_grad)
-    losses['rew'] = self.rew(inp, 2).loss(obs['reward'])
+    # PDF Appendix D.4: For P2E, learn world model by observation reconstruction only.
+    # Stop gradients from reward/continuation heads to keep RSSM task-agnostic.
+    # The heads still train to predict rewards, but don't shape the representation.
+    skip_reward_grad = self.config.reward_grad and not self.p2e_enabled
+    rew_inp = sg(self.feat2tensor(repfeat), skip=skip_reward_grad)
+    losses['rew'] = self.rew(rew_inp, 2).loss(obs['reward'])
     con = f32(~obs['is_terminal'])
     if self.config.contdisc:
       con *= 1 - 1 / self.config.horizon
-    losses['con'] = self.con(self.feat2tensor(repfeat), 2).loss(con)
+    con_inp = sg(self.feat2tensor(repfeat), skip=(not self.p2e_enabled))
+    losses['con'] = self.con(con_inp, 2).loss(con)
     for key, recon in recons.items():
       space, value = self.obs_space[key], obs[key]
       assert value.dtype == space.dtype, (key, space, value.dtype)

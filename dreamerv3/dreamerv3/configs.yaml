@@ -39,7 +39,7 @@ defaults:
   replay:
     size: 2e6  # PDF Section 5.1: 2M for Minigrid, 1M for Minihack
     online: True
-    fracs: {uniform: 1.0, priority: 0.0, recency: 0.0}
+    fracs: {uniform: 0.5, priority: 0.0, recency: 0.5}  # PDF Section 4.1: 50:50 sampling
     prio: {exponent: 0.8, maxfrac: 0.5, initial: inf, zero_on_sample: True}
     priosignal: model
     recexp: 1.0
