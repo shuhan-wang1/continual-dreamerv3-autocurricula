@@ -9,6 +9,11 @@ import shutil
 import sys
 from functools import partial as bind
 
+# CRITICAL: Must set BEFORE importing jax (or any lib that imports jax).
+# JAX reads this at import time and will pre-allocate 90% of GPU memory otherwise.
+os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.70'
+
 # Add dreamerv3 to path
 root = pathlib.Path(__file__).parent
 sys.path.insert(0, str(root / 'dreamerv3'))
@@ -20,6 +25,7 @@ import embodied
 import numpy as np
 import ruamel.yaml as yaml
 import wandb
+
 import jax
 import jax.numpy as jnp
 
