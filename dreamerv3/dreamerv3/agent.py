@@ -90,11 +90,12 @@ class Agent(embodied.jax.Agent):
       # Input dimension = full feat tensor (deter + stoch*classes)
       self._disag_inp_dim = rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes
       # Create ensemble of MLP heads that predict the target
+      # Use 'normal_logstd' for probabilistic prediction (outputs mean + logstd)
       disag_out_space = elements.Space(
           np.float32, (self._disag_target_dim,))
       for i in range(self._disag_models):
         head = embodied.jax.MLPHead(
-            disag_out_space, 'normal',
+            disag_out_space, 'normal_logstd',
             layers=3, units=config.value.units,
             act='silu', norm='rms', outscale=1.0,
             winit='trunc_normal_in',
