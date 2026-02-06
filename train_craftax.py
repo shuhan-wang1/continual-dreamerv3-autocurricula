@@ -350,20 +350,49 @@ def make_logger(config, step):
     return elements.Logger(step, outputs, multiplier=1)
 
 
+def _get_size_overrides(size_preset):
+    """Get model size overrides as properly nested dict.
+    
+    The size presets in configs.yaml use regex keys (e.g. '.*\\.rssm')
+    which only work with elements.Flags, not config.update().
+    We must manually expand them into the correct nested paths.
+    """
+    SIZES = {
+        '1m':   dict(rssm=dict(deter=512,   hidden=64,   classes=4),  depth=4,  units=64),
+        '12m':  dict(rssm=dict(deter=2048,  hidden=256,  classes=16), depth=16, units=256),
+        '25m':  dict(rssm=dict(deter=3072,  hidden=384,  classes=24), depth=24, units=384),
+        '50m':  dict(rssm=dict(deter=4096,  hidden=512,  classes=32), depth=32, units=512),
+        '100m': dict(rssm=dict(deter=6144,  hidden=768,  classes=48), depth=48, units=768),
+        '200m': dict(rssm=dict(deter=8192,  hidden=1024, classes=64), depth=64, units=1024),
+        '400m': dict(rssm=dict(deter=12288, hidden=1536, classes=96), depth=96, units=1536),
+    }
+    s = SIZES[size_preset]
+    rssm, depth, units = s['rssm'], s['depth'], s['units']
+    return {
+        'agent': {
+            'dyn': {'rssm': rssm},
+            'enc': {'simple': {'depth': depth, 'units': units}},
+            'dec': {'simple': {'depth': depth, 'units': units}},
+            'rewhead': {'units': units},
+            'conhead': {'units': units},
+            'policy': {'units': units},
+            'value': {'units': units},
+        },
+    }
+
+
 def load_config(args):
     """Load DreamerV3 config from YAML and merge with args."""
     configs_path = root / 'dreamerv3' / 'dreamerv3' / 'configs.yaml'
     configs = yaml.YAML(typ='safe').load(configs_path.read_text())
     config = elements.Config(configs['defaults'])
     
-    # Apply size preset: default to size12m for Craftax (embedding-based)
-    # The default config is size200m (~200M params) which is way too large
-    # for simple embedding observations and will OOM on <=32GB GPUs.
+    # Apply model size preset by manually overriding nested agent params.
+    # The default config is size200m (~200M params) which will OOM on <=32GB GPUs.
     size_preset = getattr(args, 'model_size', '12m')
-    size_key = f'size{size_preset}'
-    if size_key in configs:
-        config = config.update(configs[size_key])
-        print(f'Using model size preset: {size_key}')
+    size_overrides = _get_size_overrides(size_preset)
+    config = config.update(size_overrides)
+    print(f'Using model size preset: size{size_preset}')
     
     # Apply size preset if specified
     if args.cl_small and 'small' in configs:
