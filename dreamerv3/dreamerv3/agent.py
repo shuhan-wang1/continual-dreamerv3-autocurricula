@@ -81,7 +81,7 @@ class Agent(embodied.jax.Agent):
       self._expl_extr_scale = getattr(config, 'expl_extr_scale', 0.9)
       # Determine target dimension based on disag_target
       rssm_cfg = config.dyn.rssm
-      if self._disag_target == 'feat':
+      if self._disag_target == 'stoch':
         self._disag_target_dim = rssm_cfg.stoch * rssm_cfg.classes
       elif self._disag_target == 'deter':
         self._disag_target_dim = rssm_cfg.deter
