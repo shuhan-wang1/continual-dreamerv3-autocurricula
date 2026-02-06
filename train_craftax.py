@@ -34,7 +34,143 @@ jax.config.update("jax_transfer_guard", "allow")
 
 from dreamerv3.agent import Agent
 from input_args import parse_craftax_args
-from notebooks.metrics import OnlineMetrics, save_ref_metrics
+
+import json
+from collections import deque
+
+
+class CraftaxMetrics:
+    """Practical metrics tracker for Craftax training.
+
+    Tracks three core metrics over a sliding window:
+      1. Episode Return  – mean episode return (= total achievements unlocked).
+      2. Success Rate    – fraction of episodes with return > threshold.
+      3. Achievement Depth – max return seen (best achievement depth reached).
+
+    All metrics are tracked per-task and aggregated. Every episode-end writes
+    a JSONL record; a summary JSON is saved at the end of training.
+    """
+
+    def __init__(
+        self,
+        logdir: str,
+        num_tasks: int = 1,
+        window_size: int = 100,
+        success_threshold: float = 1.0,
+        jsonl_name: str = 'online_metrics.jsonl',
+        summary_name: str = 'metrics_summary.json',
+    ) -> None:
+        self.logdir = logdir
+        os.makedirs(logdir, exist_ok=True)
+        self.num_tasks = int(num_tasks)
+        self.window_size = int(window_size)
+        self.success_threshold = float(success_threshold)
+        self.jsonl_path = os.path.join(logdir, jsonl_name)
+        self.summary_path = os.path.join(logdir, summary_name)
+
+        # Per-task sliding windows
+        self._returns = {i: deque(maxlen=window_size) for i in range(num_tasks)}
+        self._lengths = {i: deque(maxlen=window_size) for i in range(num_tasks)}
+        # Lifetime accumulators
+        self._total_episodes = {i: 0 for i in range(num_tasks)}
+        self._total_successes = {i: 0 for i in range(num_tasks)}
+        self._max_return = {i: 0.0 for i in range(num_tasks)}
+        self._sum_return = {i: 0.0 for i in range(num_tasks)}
+
+    # ---- per-task windowed stats ----
+    def _windowed_mean_return(self, task_id: int) -> float:
+        buf = self._returns[task_id]
+        return float(np.mean(buf)) if buf else 0.0
+
+    def _windowed_success_rate(self, task_id: int) -> float:
+        buf = self._returns[task_id]
+        if not buf:
+            return 0.0
+        return float(np.mean([1.0 if r >= self.success_threshold else 0.0 for r in buf]))
+
+    # ---- aggregated stats ----
+    def mean_return(self) -> float:
+        """Mean of per-task windowed mean returns (only tasks with data)."""
+        vals = [self._windowed_mean_return(i)
+                for i in range(self.num_tasks) if self._returns[i]]
+        return float(np.mean(vals)) if vals else 0.0
+
+    def mean_success_rate(self) -> float:
+        vals = [self._windowed_success_rate(i)
+                for i in range(self.num_tasks) if self._returns[i]]
+        return float(np.mean(vals)) if vals else 0.0
+
+    def max_achievement_depth(self) -> float:
+        """Best single-episode return across all tasks (= deepest achievement)."""
+        return float(max(self._max_return.values()))
+
+    def per_task_mean_return(self):
+        return [self._windowed_mean_return(i) for i in range(self.num_tasks)]
+
+    def per_task_success_rate(self):
+        return [self._windowed_success_rate(i) for i in range(self.num_tasks)]
+
+    def per_task_max_return(self):
+        return [float(self._max_return[i]) for i in range(self.num_tasks)]
+
+    def per_task_episodes(self):
+        return [self._total_episodes[i] for i in range(self.num_tasks)]
+
+    # ---- update & IO ----
+    def update(self, task_id: int, step: int, score: float,
+               length: int = 0) -> dict:
+        task_id = int(task_id)
+        score = float(score)
+        self._returns[task_id].append(score)
+        self._lengths[task_id].append(int(length))
+        self._total_episodes[task_id] += 1
+        if score >= self.success_threshold:
+            self._total_successes[task_id] += 1
+        if score > self._max_return[task_id]:
+            self._max_return[task_id] = score
+        self._sum_return[task_id] += score
+
+        record = {
+            'step': int(step),
+            'task': task_id,
+            'score': score,
+            'length': int(length),
+            # Windowed per-task
+            'return_mean': self._windowed_mean_return(task_id),
+            'success_rate': self._windowed_success_rate(task_id),
+            'achievement_depth': float(self._max_return[task_id]),
+            # Aggregated across tasks
+            'agg_return_mean': self.mean_return(),
+            'agg_success_rate': self.mean_success_rate(),
+            'agg_achievement_depth': self.max_achievement_depth(),
+            # Per-task snapshots
+            'per_task_return_mean': self.per_task_mean_return(),
+            'per_task_success_rate': self.per_task_success_rate(),
+            'per_task_max_return': self.per_task_max_return(),
+        }
+        with open(self.jsonl_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(record, ensure_ascii=False) + '\n')
+        return record
+
+    def save_summary(self) -> None:
+        payload = {
+            'mean_return': self.mean_return(),
+            'success_rate': self.mean_success_rate(),
+            'max_achievement_depth': self.max_achievement_depth(),
+            'per_task_return_mean': self.per_task_mean_return(),
+            'per_task_success_rate': self.per_task_success_rate(),
+            'per_task_max_return': self.per_task_max_return(),
+            'per_task_episodes': self.per_task_episodes(),
+            'per_task_lifetime_mean': [
+                float(self._sum_return[i] / max(1, self._total_episodes[i]))
+                for i in range(self.num_tasks)
+            ],
+            'num_tasks': self.num_tasks,
+            'window_size': self.window_size,
+            'success_threshold': self.success_threshold,
+        }
+        with open(self.summary_path, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
 
 # Import Craftax
 try:
@@ -229,6 +365,271 @@ class CraftaxWrapper(embodied.Env):
         pass
 
 
+class VectorCraftaxEnv:
+    """Vectorized Craftax environment using jax.vmap.
+
+    Runs N environments in a single process with one CUDA context,
+    eliminating the multi-process overhead of the parallel Driver.
+    All env step/reset logic stays on GPU; only one batched transfer per step.
+    """
+
+    def __init__(self, env_name='CraftaxSymbolic-v1', num_envs=16,
+                 embedding_dim=256, use_embedding=True, seed=42):
+        self._env_name = env_name
+        self._num_envs = num_envs
+        self._embedding_dim = embedding_dim
+        self._use_embedding = use_embedding
+
+        # Create one Craftax env to get params / spaces
+        if 'Classic' in env_name:
+            if 'Symbolic' in env_name:
+                self._env = CraftaxClassicSymbolicEnv()
+            else:
+                self._env = CraftaxClassicPixelsEnv()
+        else:
+            if 'Symbolic' in env_name:
+                self._env = CraftaxSymbolicEnv()
+            else:
+                self._env = CraftaxPixelsEnv()
+
+        self._env_params = self._env.default_params
+        self._num_actions = int(self._env.action_space(self._env_params).n)
+
+        # Vectorised reset / step via vmap (single JIT, single CUDA context)
+        self._v_reset = jax.jit(jax.vmap(self._env.reset, in_axes=(0, None)))
+        self._v_step = jax.jit(jax.vmap(self._env.step, in_axes=(0, 0, 0, None)))
+
+        # Initial reset to get obs shape
+        keys = jax.random.split(jax.random.PRNGKey(seed), num_envs)
+        obs_batch, self._states = self._v_reset(keys, self._env_params)
+
+        sample = jax.tree_util.tree_leaves(obs_batch)[0]
+        self._obs_shape = tuple(int(x) for x in sample.shape[1:])  # drop batch dim
+
+        # Projection for embedding (on GPU)
+        if use_embedding:
+            np.random.seed(42)
+            flat_dim = int(np.prod(self._obs_shape))
+            proj = np.random.randn(flat_dim, embedding_dim).astype(np.float32)
+            proj /= np.sqrt(flat_dim)
+            self._projection = jax.device_put(jnp.array(proj))
+
+            @jax.jit
+            def process_obs(obs):
+                # obs: (N, *obs_shape)
+                flat = obs.reshape(obs.shape[0], -1).astype(jnp.float32)
+                return jnp.dot(flat, self._projection)
+            self._process_obs = process_obs
+        else:
+            @jax.jit
+            def process_obs(obs):
+                return obs.astype(jnp.float32)
+            self._process_obs = process_obs
+
+        # JIT the full step logic (reset + step + process) to avoid per-step syncs
+        # We'll use a wrapper that handles auto-reset inside JAX.
+        @jax.jit
+        def _batched_step(states, actions, dones, rng_keys, env_params, projection):
+            """Step all envs; auto-reset any that are done."""
+            # First handle resets for envs that are done
+            new_obs_reset, new_states_reset = self._env.reset(rng_keys[0], env_params)
+            # Then step all envs
+            obs_step, new_states_step, rewards, new_dones, infos = self._env.step(
+                rng_keys[0], states, actions, env_params)
+            return obs_step, new_states_step, rewards, new_dones
+        # ^ The above approach doesn't vectorize well; we'll use a simpler design.
+
+        # RNG key management
+        self._base_key = jax.random.PRNGKey(seed)
+        self._step_count = 0
+        self._dones = jnp.ones(num_envs, dtype=jnp.bool_)  # all need reset initially
+
+        # Do the initial reset properly
+        self._obs_jax = self._extract_obs_batch(obs_batch)
+        self._dones = jnp.zeros(num_envs, dtype=jnp.bool_)
+
+    def _extract_obs_batch(self, obs):
+        """Extract raw observation array from vmapped output."""
+        if hasattr(obs, 'shape'):
+            return obs
+        elif isinstance(obs, dict):
+            for k in ('obs', 'pixels'):
+                if k in obs:
+                    return obs[k]
+            return jax.tree_util.tree_leaves(obs)[0]
+        return obs
+
+    def _get_keys(self, n):
+        """Get n random keys (amortised)."""
+        self._step_count += 1
+        return jax.random.split(
+            jax.random.fold_in(self._base_key, self._step_count), n)
+
+    @property
+    def obs_space(self):
+        spaces = {}
+        if self._use_embedding:
+            spaces['embedding'] = elements.Space(
+                np.float32, (self._embedding_dim,), -np.inf, np.inf)
+        else:
+            spaces['image'] = elements.Space(
+                np.float32, self._obs_shape, 0.0, 1.0)
+        spaces.update({
+            'reward': elements.Space(np.float32),
+            'is_first': elements.Space(bool),
+            'is_last': elements.Space(bool),
+            'is_terminal': elements.Space(bool),
+        })
+        return spaces
+
+    @property
+    def act_space(self):
+        return {
+            'action': elements.Space(np.int32, (), 0, self._num_actions),
+            'reset': elements.Space(bool),
+        }
+
+    def step(self, actions_batch):
+        """Step all N envs at once.
+
+        Args:
+            actions_batch: dict with 'action' (N,) int, 'reset' (N,) bool.
+        Returns:
+            dict with batched obs, reward, flags  –  all numpy (N, ...).
+        """
+        reset_mask = actions_batch['reset'] | np.asarray(self._dones)
+        acts = jnp.asarray(actions_batch['action'], dtype=jnp.int32)
+
+        keys = self._get_keys(self._num_envs)
+
+        # Auto-reset envs that are done  (all on GPU, vmapped)
+        if np.any(reset_mask):
+            reset_idx = np.where(reset_mask)[0]
+            reset_keys = keys[reset_idx]
+            # vmap over only the envs that need reset
+            r_obs, r_states = jax.vmap(
+                self._env.reset, in_axes=(0, None))(reset_keys, self._env_params)
+            # Scatter back into full state tree
+            r_obs_raw = self._extract_obs_batch(r_obs)
+            self._obs_jax = self._obs_jax.at[reset_idx].set(r_obs_raw)
+            self._states = jax.tree_util.tree_map(
+                lambda full, part: full.at[reset_idx].set(part),
+                self._states, r_states)
+
+        # Step all envs  (on GPU, single vmap call)
+        step_keys = self._get_keys(self._num_envs)
+        obs_new, new_states, rewards, dones, _info = self._v_step(
+            step_keys, self._states, acts, self._env_params)
+        obs_raw = self._extract_obs_batch(obs_new)
+
+        # For reset envs, the observation is from the reset, reward=0
+        reset_jnp = jnp.asarray(reset_mask)
+        # Where reset happened, keep the already-written reset obs
+        obs_final = jnp.where(
+            reset_jnp[:, None] if obs_raw.ndim == 2 else reset_jnp.reshape(-1, *([1]*(obs_raw.ndim-1))),
+            self._obs_jax, obs_raw)
+        rewards_final = jnp.where(reset_jnp, 0.0, rewards)
+        dones_final = jnp.where(reset_jnp, False, dones)
+
+        # For non-reset envs, update states
+        self._states = jax.tree_util.tree_map(
+            lambda ns, old: jnp.where(
+                reset_jnp.reshape(-1, *([1]*(ns.ndim-1))), old, ns),
+            new_states, self._states)
+        self._obs_jax = jnp.where(
+            reset_jnp[:, None] if obs_raw.ndim == 2 else reset_jnp.reshape(-1, *([1]*(obs_raw.ndim-1))),
+            self._obs_jax, obs_raw)
+
+        self._dones = dones_final
+
+        # Process observations (embedding projection) — all on GPU, one call
+        processed = self._process_obs(self._obs_jax)
+
+        # === Single batched GPU→CPU transfer ===
+        result_jax = (processed, rewards_final, dones_final)
+        processed_np, rewards_np, dones_np = jax.device_get(result_jax)
+
+        is_first = np.asarray(reset_mask, dtype=bool)
+        is_last = np.asarray(dones_np, dtype=bool)
+
+        key = 'embedding' if self._use_embedding else 'image'
+        return {
+            key: np.asarray(processed_np, dtype=np.float32),
+            'reward': np.asarray(rewards_np, dtype=np.float32),
+            'is_first': is_first,
+            'is_last': is_last,
+            'is_terminal': is_last.copy(),
+        }
+
+    def close(self):
+        pass
+
+
+class VectorDriver:
+    """Lightweight driver for VectorCraftaxEnv.
+
+    Replaces embodied.Driver for vectorised JAX envs:
+    - single process, single CUDA context
+    - one vmap call per step for all envs
+    - batched GPU→CPU transfer
+    """
+
+    def __init__(self, vec_env):
+        self.vec_env = vec_env
+        self.length = vec_env._num_envs
+        self.act_space = vec_env.act_space
+        self.obs_space = vec_env.obs_space
+        self.callbacks = []
+        self.carry = None
+        self.acts = None
+        self.reset()
+
+    def reset(self, init_policy=None):
+        self.acts = {
+            k: np.zeros((self.length,) + v.shape, v.dtype)
+            for k, v in self.act_space.items()}
+        self.acts['reset'] = np.ones(self.length, bool)
+        self.carry = init_policy(self.length) if init_policy else None
+
+    def close(self):
+        self.vec_env.close()
+
+    def on_step(self, callback):
+        self.callbacks.append(callback)
+
+    def __call__(self, policy, steps=0, episodes=0):
+        step, episode = 0, 0
+        while step < steps or episode < episodes:
+            step, episode = self._step(policy, step, episode)
+
+    def _step(self, policy, step, episode):
+        # Step all envs at once (single GPU call)
+        obs = self.vec_env.step(self.acts)
+        obs_no_log = {k: v for k, v in obs.items() if not k.startswith('log/')}
+
+        self.carry, acts, outs = policy(self.carry, obs_no_log)
+        if obs['is_last'].any():
+            mask = ~obs['is_last']
+            acts = {k: self._mask(v, mask) for k, v in acts.items()}
+        self.acts = {**acts, 'reset': obs['is_last'].copy()}
+
+        # Run callbacks per env
+        trans = {**obs, **acts, **outs}
+        for i in range(self.length):
+            trn = {k: v[i] for k, v in trans.items()}
+            for fn in self.callbacks:
+                fn(trn, i)
+
+        step += len(obs['is_first'])
+        episode += int(obs['is_last'].sum())
+        return step, episode
+
+    def _mask(self, value, mask):
+        while mask.ndim < value.ndim:
+            mask = mask[..., None]
+        return value * mask.astype(value.dtype)
+
+
 # ============== Helper functions ==============
 def wrap_env(craftax_env):
     """Wrap a Craftax environment for DreamerV3."""
@@ -241,11 +642,21 @@ def wrap_env(craftax_env):
     return env
 
 
-def make_agent(config, env):
+def make_agent(config, env, args=None):
     """Create a DreamerV3 agent."""
     notlog = lambda k: not k.startswith('log/')
     obs_space = {k: v for k, v in env.obs_space.items() if notlog(k)}
     act_space = {k: v for k, v in env.act_space.items() if k != 'reset'}
+    # Build P2E config from args
+    p2e_config = {}
+    if args is not None:
+        p2e_config = {
+            'plan2explore': getattr(args, 'plan2explore', False),
+            'disag_models': getattr(args, 'disag_models', 10),
+            'disag_target': getattr(args, 'disag_target', 'stoch'),
+            'expl_intr_scale': getattr(args, 'expl_intr_scale', 1.0),
+            'expl_extr_scale': getattr(args, 'expl_extr_scale', 0.0),
+        }
     agent_config = elements.Config(
         **config.agent,
         logdir=config.logdir,
@@ -257,6 +668,7 @@ def make_agent(config, env):
         report_length=config.report_length,
         replica=config.replica,
         replicas=config.replicas,
+        **p2e_config,
     )
     return Agent(obs_space, act_space, agent_config)
 
@@ -268,24 +680,28 @@ def make_selector(args, capacity, seed=0):
     - Uniform sampling (default)
     - Reservoir sampling (random eviction) - use with eviction='reservoir' in make_replay
     - Recency-biased sampling
-    - 50:50 sampling (half random, half recent) - Continual-Dreamer strategy
+    - 50:50 sampling (half uniform, half triangular-recency) - Continual-Dreamer strategy
     - Mixture of multiple strategies
     """
     from embodied.core import selectors
 
     # Check if using 50:50 sampling (Continual-Dreamer strategy)
-    # This is the recommended setup for continual learning with 8+ tasks
+    # This is the recommended setup for continual learning with 8+ tasks.
+    # The "recent" half uses a triangular (linearly decaying) distribution
+    # over the most recent `window_size` items, matching the paper exactly.
     recent_frac = getattr(args, 'recent_frac', 0.0)
     if recent_frac > 0:
-        # Mixture of uniform (random from buffer) and recent (recent experience)
         window_size = getattr(args, 'recent_window', 1000)
+        # Triangular distribution: most recent items get highest probability,
+        # linearly decaying to near-zero for the oldest item in the window.
+        uprobs = np.linspace(1.0, 0.0, window_size, endpoint=False)
         selector_dict = {
             'uniform': selectors.Uniform(seed=seed),
-            'recent': selectors.Recent(window_size=window_size, seed=seed + 1),
+            'recency': selectors.Recency(uprobs, seed=seed + 1),
         }
         fractions = {
             'uniform': 1.0 - recent_frac,
-            'recent': recent_frac,
+            'recency': recent_frac,
         }
         return selectors.Mixture(selector_dict, fractions, seed=seed + 2)
 
@@ -438,11 +854,12 @@ def load_config(args):
     return config, tag
 
 
-def train_single(make_env, config, args):
+def train_single(make_env, config, args, env_name=None):
     """Train DreamerV3 on a single environment.
 
     Args:
         make_env: Callable(seed: int) -> embodied.Env that creates one env instance.
+        env_name: If provided, use VectorCraftaxEnv for GPU-vectorised envs.
     """
     np.random.seed(config.seed)
     logdir = elements.Path(config.logdir)
@@ -451,32 +868,44 @@ def train_single(make_env, config, args):
     print('Logdir:', logdir)
 
     num_envs = config.run.envs
-    use_parallel = num_envs > 1
-    print(f'Creating {num_envs} environments (parallel={use_parallel}).')
-    env_fns = [lambda i=i: wrap_env(make_env(config.seed + i)) for i in range(num_envs)]
-    driver = embodied.Driver(env_fns, parallel=use_parallel)
+    use_embedding = getattr(args, 'input_type', 'embedding') == 'embedding'
+    embedding_dim = getattr(args, 'embedding_dim', 256)
 
-    if use_parallel:
-        # For parallel driver, create a temporary env to get spaces
+    if env_name is not None and CRAFTAX_AVAILABLE:
+        # === Vectorised path: single process, single CUDA context ===
+        print(f'Creating {num_envs} vectorised Craftax envs (env={env_name}).')
+        vec_env = VectorCraftaxEnv(
+            env_name=env_name, num_envs=num_envs,
+            embedding_dim=embedding_dim, use_embedding=use_embedding,
+            seed=config.seed)
+        driver = VectorDriver(vec_env)
+        # Use a lightweight single env for agent space inference
         tmp_env = wrap_env(make_env(config.seed))
-        agent = make_agent(config, tmp_env)
+        agent = make_agent(config, tmp_env, args)
         tmp_env.close()
     else:
-        agent = make_agent(config, driver.envs[0])
+        # === Legacy multiprocessing path ===
+        use_parallel = num_envs > 1
+        print(f'Creating {num_envs} environments (parallel={use_parallel}).')
+        env_fns = [lambda i=i: wrap_env(make_env(config.seed + i)) for i in range(num_envs)]
+        driver = embodied.Driver(env_fns, parallel=use_parallel)
+        if use_parallel:
+            tmp_env = wrap_env(make_env(config.seed))
+            agent = make_agent(config, tmp_env, args)
+            tmp_env.close()
+        else:
+            agent = make_agent(config, driver.envs[0], args)
     replay = make_replay(config, logdir / 'replay', args)
 
     step = elements.Counter()
     logger = make_logger(config, step)
     online = None
     if getattr(args, 'online_metrics', True):
-        steps_per_task = int(config.run.steps)
-        online = OnlineMetrics(
+        online = CraftaxMetrics(
             logdir=str(logdir),
             num_tasks=1,
-            steps_per_task=steps_per_task,
-            ref_metrics_path=getattr(args, 'ref_metrics_path', None),
-            ref_metrics_dir=getattr(args, 'ref_metrics_dir', None),
-            ref_metrics_root=getattr(args, 'logdir', None),
+            window_size=100,
+            success_threshold=1.0,
         )
 
     batch_size = config.batch_size
@@ -539,9 +968,14 @@ def train_single(make_env, config, args):
     policy = lambda carry, obs: agent.policy(carry, obs, mode='train')
     driver.reset(agent.init_policy)
 
+    # Use larger collect steps to reduce collect<->train switching overhead.
+    # With N vectorised envs each _step produces N transitions, so
+    # collect_steps ~= num_envs * K gives K actual _step calls per collect.
+    collect_steps = max(num_envs * 4, 64)
+
     total_steps = int(config.run.steps)
     while step < total_steps:
-        driver(policy, steps=10)
+        driver(policy, steps=collect_steps)
         if len(replay) >= batch_size * batch_length:
             for _ in range(should_train(step)):
                 batch = next(stream_train)
@@ -553,20 +987,17 @@ def train_single(make_env, config, args):
 
     cp.save()
     if online is not None:
-        online.mark_task_end(0)
         online.save_summary()
-        ref_path = os.path.join(str(logdir), 'ref_metrics.json')
-        ref_auc = {'0': online.auc_norm_list()[0]}
-        save_ref_metrics(ref_path, ref_auc, steps_per_task)
     driver.close()
     logger.close()
 
 
-def cl_train_loop(make_envs, config, args):
+def cl_train_loop(make_envs, config, args, env_names=None):
     """Continual learning training loop for DreamerV3.
 
     Args:
         make_envs: List of Callable(seed: int) -> embodied.Env, one per task.
+        env_names: Optional list of Craftax env name strings for vectorised path.
     """
     np.random.seed(config.seed)
 
@@ -582,21 +1013,18 @@ def cl_train_loop(make_envs, config, args):
     num_envs = config.run.envs
     env0 = wrap_env(make_envs[0](config.seed))
 
-    agent = make_agent(config, env0)
+    agent = make_agent(config, env0, args)
     replay = make_replay(config, logdir / 'replay', args)
 
     total_step = elements.Counter()
     logger = make_logger(config, total_step)
     online = None
     if getattr(args, 'online_metrics', True):
-        steps_per_task = unbalanced_steps if unbalanced_steps is not None else int(args.steps)
-        online = OnlineMetrics(
+        online = CraftaxMetrics(
             logdir=str(logdir),
             num_tasks=len(make_envs),
-            steps_per_task=steps_per_task,
-            ref_metrics_path=getattr(args, 'ref_metrics_path', None),
-            ref_metrics_dir=getattr(args, 'ref_metrics_dir', None),
-            ref_metrics_root=getattr(args, 'logdir', None),
+            window_size=100,
+            success_threshold=1.0,
         )
 
     batch_size = config.batch_size
@@ -634,12 +1062,16 @@ def cl_train_loop(make_envs, config, args):
             strict=(mode == 'train'), contiguous=True)
         return stream
 
+    use_embedding = getattr(args, 'input_type', 'embedding') == 'embedding'
+    embedding_dim = getattr(args, 'embedding_dim', 256)
+    use_vectorised = env_names is not None and CRAFTAX_AVAILABLE
+    collect_steps = max(num_envs * 4, 64)
+
     while rep < args.num_task_repeats:
         while task_id < num_tasks:
             print(f"\n=== Task {task_id + 1}/{num_tasks}, Rep {rep + 1}/{args.num_task_repeats} ===\n")
 
             make_task_env = make_envs[task_id]
-            env_fns = [lambda i=i, fn=make_task_env: wrap_env(fn(config.seed + i)) for i in range(num_envs)]
             step = elements.Counter()
             episodes = collections.defaultdict(elements.Agg)
 
@@ -657,8 +1089,19 @@ def cl_train_loop(make_envs, config, args):
                         online.update(task_id=task_id, step=int(total_step.value), score=float(score), length=int(length))
                     logger.write()
 
-            use_parallel = num_envs > 1
-            driver = embodied.Driver(env_fns, parallel=use_parallel)
+            if use_vectorised:
+                task_env_name = env_names[task_id]
+                print(f'Creating {num_envs} vectorised Craftax envs (env={task_env_name}).')
+                vec_env = VectorCraftaxEnv(
+                    env_name=task_env_name, num_envs=num_envs,
+                    embedding_dim=embedding_dim, use_embedding=use_embedding,
+                    seed=config.seed)
+                driver = VectorDriver(vec_env)
+            else:
+                env_fns = [lambda i=i, fn=make_task_env: wrap_env(fn(config.seed + i)) for i in range(num_envs)]
+                use_parallel = num_envs > 1
+                driver = embodied.Driver(env_fns, parallel=use_parallel)
+
             driver.on_step(lambda tran, _: total_step.increment())
             driver.on_step(lambda tran, _: step.increment())
             driver.on_step(replay.add)
@@ -691,7 +1134,7 @@ def cl_train_loop(make_envs, config, args):
             print(f'Training for {steps_limit} steps on task {task_id}')
 
             while step < steps_limit:
-                driver(policy, steps=10)
+                driver(policy, steps=collect_steps)
                 if len(replay) >= batch_size * batch_length:
                     for _ in range(should_train(total_step)):
                         batch = next(stream_train)
@@ -702,8 +1145,6 @@ def cl_train_loop(make_envs, config, args):
                     cp.save()
 
             driver.close()
-            if online is not None:
-                online.mark_task_end(task_id)
             task_id += 1
 
         task_id = 0
@@ -779,8 +1220,10 @@ def run_craftax(args):
         )
 
         make_env_fns = []
+        cl_env_names = []
         for i in range(args.num_tasks):
             name = env_names[i % len(env_names)]
+            cl_env_names.append(name)
             make_env_fns.append(lambda seed, name=name: make_craftax(
                 name,
                 embedding_dim=args.embedding_dim,
@@ -789,7 +1232,7 @@ def run_craftax(args):
             ))
             print(f"Task {i}: env {name}, use_embedding: {use_embedding}")
 
-        cl_train_loop(make_env_fns, config, args)
+        cl_train_loop(make_env_fns, config, args, env_names=cl_env_names)
     else:
         env_name = all_envs[args.env % len(all_envs)]
 
@@ -811,7 +1254,7 @@ def run_craftax(args):
             seed=seed,
         )
 
-        train_single(make_env, config, args)
+        train_single(make_env, config, args, env_name=env_name)
 
     if args.del_exp_replay:
         shutil.rmtree(os.path.join(config.logdir, 'replay'), ignore_errors=True)

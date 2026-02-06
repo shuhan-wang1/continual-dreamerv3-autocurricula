@@ -219,12 +219,14 @@ def parse_craftax_args(args=None):
                         help='Window size for recent experience sampling.')
 
     # Exploration
-    parser.add_argument('--plan2explore', default=False, action='store_true',
-                        help='Enable plan2explore exploration strategy.')
+    parser.add_argument('--plan2explore', default=True, action='store_true',
+                        help='Enable plan2explore exploration strategy (default: enabled).')
+    parser.add_argument('--no_plan2explore', dest='plan2explore', action='store_false',
+                        help='Disable plan2explore exploration strategy.')
     parser.add_argument('--disag_models', type=int, default=10,
                         help='Number of ensemble models for Plan2Explore.')
-    parser.add_argument('--disag_target', type=str, default='stoch', choices=['stoch', 'deter', 'feat'],
-                        help='Target for ensemble disagreement prediction.')
+    parser.add_argument('--disag_target', type=str, default='feat', choices=['stoch', 'deter', 'feat'],
+                        help='Target for ensemble disagreement prediction (feat = deter + stoch).')
     parser.add_argument('--expl_intr_scale', type=float, default=1.0,
                         help="scale of the intrinsic reward.")
     parser.add_argument('--expl_extr_scale', type=float, default=0.0,

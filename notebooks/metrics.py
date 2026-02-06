@@ -350,16 +350,30 @@ class OnlineMetrics:
         return out
 
     def average_performance(self) -> float:
-        vals = self.latest_list()
-        if not vals:
+        """AP = (1/T) * sum of p_tau(t) for all tasks seen so far.
+
+        Only includes tasks that have received at least one score update.
+        Tasks not yet encountered are excluded from the average (not treated as 0).
+        """
+        seen = [float(v) for v in self.latest.values() if v is not None]
+        if not seen:
             return 0.0
-        return float(np.mean(vals))
+        return float(np.mean(seen))
 
     def average_forgetting(self) -> float:
+        """F = (1/K) * sum_{tau with end_score} (end_score_tau - latest_tau).
+
+        Only includes tasks whose training phase has ended (mark_task_end called).
+        Tasks still in training or not yet seen are excluded — no forgetting can
+        have occurred for them yet.
+        """
         diffs = []
         for i in range(self.num_tasks):
             end_val = self.end_scores.get(i, None)
-            end_val = 0.0 if end_val is None else float(_clip_perf(end_val))
+            if end_val is None:
+                # Task i hasn't finished its training phase yet — skip
+                continue
+            end_val = float(_clip_perf(end_val))
             cur_val = self.latest.get(i, None)
             cur_val = 0.0 if cur_val is None else float(_clip_perf(cur_val))
             diffs.append(end_val - cur_val)

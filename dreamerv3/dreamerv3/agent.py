@@ -71,8 +71,44 @@ class Agent(embodied.jax.Agent):
     self.valnorm = embodied.jax.Normalize(**config.valnorm, name='valnorm')
     self.advnorm = embodied.jax.Normalize(**config.advnorm, name='advnorm')
 
+    # Plan2Explore (P2E) ensemble for intrinsic exploration reward
+    self.p2e_enabled = getattr(config, 'plan2explore', False)
+    self.p2e_ensemble = []
+    if self.p2e_enabled:
+      self._disag_models = getattr(config, 'disag_models', 10)
+      self._disag_target = getattr(config, 'disag_target', 'stoch')
+      self._expl_intr_scale = getattr(config, 'expl_intr_scale', 1.0)
+      self._expl_extr_scale = getattr(config, 'expl_extr_scale', 0.0)
+      # Determine target dimension based on disag_target
+      rssm_cfg = config.dyn.rssm
+      if self._disag_target == 'stoch':
+        self._disag_target_dim = rssm_cfg.stoch * rssm_cfg.classes
+      elif self._disag_target == 'deter':
+        self._disag_target_dim = rssm_cfg.deter
+      else:  # 'feat' = deter + stoch*classes
+        self._disag_target_dim = rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes
+      # Input dimension = full feat tensor (deter + stoch*classes)
+      self._disag_inp_dim = rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes
+      # Create ensemble of MLP heads that predict the target
+      disag_out_space = elements.Space(
+          np.float32, (self._disag_target_dim,))
+      for i in range(self._disag_models):
+        head = embodied.jax.MLPHead(
+            disag_out_space, 'normal',
+            layers=3, units=config.value.units,
+            act='silu', norm='rms', outscale=1.0,
+            winit='trunc_normal_in',
+            name=f'disag_{i}')
+        self.p2e_ensemble.append(head)
+      print(f'Plan2Explore enabled: {self._disag_models} ensemble heads, '
+            f'target={self._disag_target}, '
+            f'intr_scale={self._expl_intr_scale}, '
+            f'extr_scale={self._expl_extr_scale}')
+
     self.modules = [
         self.dyn, self.enc, self.dec, self.rew, self.con, self.pol, self.val]
+    if self.p2e_enabled:
+      self.modules.extend(self.p2e_ensemble)
     self.opt = embodied.jax.Optimizer(
         self.modules, self._make_opt(**config.opt), summary_depth=1,
         name='opt')
@@ -80,6 +116,8 @@ class Agent(embodied.jax.Agent):
     scales = self.config.loss_scales.copy()
     rec = scales.pop('rec')
     scales.update({k: rec for k in dec_space})
+    if self.p2e_enabled:
+      scales['disag'] = 1.0
     self.scales = scales
 
   @property
@@ -185,6 +223,30 @@ class Agent(embodied.jax.Agent):
     shapes = {k: v.shape for k, v in losses.items()}
     assert all(x == (B, T) for x in shapes.values()), ((B, T), shapes)
 
+    # Plan2Explore: train ensemble on real features to predict next-step target
+    if self.p2e_enabled:
+      # Build ensemble training targets from real observed features
+      feat_tensor = sg(self.feat2tensor(repfeat))  # [B, T, D]
+      if self._disag_target == 'stoch':
+        disag_target = sg(repfeat['stoch'].reshape(
+            (*repfeat['stoch'].shape[:-2], -1)))  # [B, T, stoch*classes]
+      elif self._disag_target == 'deter':
+        disag_target = sg(nn.cast(repfeat['deter']))  # [B, T, deter]
+      else:  # 'feat'
+        disag_target = feat_tensor  # [B, T, deter + stoch*classes]
+      # Ensemble loss: each head predicts next-step target from current features
+      # Use t to predict t+1 target (shifted by 1 step)
+      disag_inp = feat_tensor[:, :-1]    # [B, T-1, D]
+      disag_tgt = disag_target[:, 1:]    # [B, T-1, target_dim]
+      disag_loss = jnp.zeros((B, T - 1))
+      for head in self.p2e_ensemble:
+        pred = head(disag_inp, 2)
+        disag_loss = disag_loss + (-pred.log_prob(disag_tgt))
+      disag_loss = disag_loss / self._disag_models
+      # Pad to [B, T] to match other losses (pad last timestep with zeros)
+      losses['disag'] = jnp.concatenate(
+          [disag_loss, jnp.zeros((B, 1))], axis=1)
+
     # Imagination
     K = min(self.config.imag_last or T, T)
     H = self.config.imag_length
@@ -200,9 +262,31 @@ class Agent(embodied.jax.Agent):
     assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgfeat))
     assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgact))
     inp = self.feat2tensor(imgfeat)
+
+    # Compute reward for imagination (with P2E intrinsic reward if enabled)
+    extr_rew = self.rew(inp, 2).pred()
+    if self.p2e_enabled:
+      # Compute ensemble disagreement on imagined features as intrinsic reward
+      # Each head predicts the target from imgfeat; disagreement = std across heads
+      preds = []
+      for head in self.p2e_ensemble:
+        pred = head(sg(inp), 2).mode()  # [B*K, H+1, target_dim]
+        preds.append(pred)
+      preds = jnp.stack(preds, axis=0)  # [num_models, B*K, H+1, target_dim]
+      # Intrinsic reward = mean variance across ensemble (epistemic uncertainty)
+      intr_rew = preds.var(axis=0).mean(axis=-1)  # [B*K, H+1]
+      # Combine: r_total = α_i * r_intr + α_e * r_extr
+      combined_rew = (self._expl_intr_scale * intr_rew +
+                      self._expl_extr_scale * extr_rew)
+      metrics['p2e/intr_rew'] = intr_rew.mean()
+      metrics['p2e/extr_rew'] = extr_rew.mean()
+      metrics['p2e/combined_rew'] = combined_rew.mean()
+    else:
+      combined_rew = extr_rew
+
     los, imgloss_out, mets = imag_loss(
         imgact,
-        self.rew(inp, 2).pred(),
+        combined_rew,
         self.con(inp, 2).prob(1),
         self.pol(inp, 2),
         self.val(inp, 2),
