@@ -247,7 +247,8 @@ class Agent(embodied.jax.Agent):
       disag_loss = jnp.zeros((B, T - 1))
       for head in self.p2e_ensemble:
         pred = head(disag_inp, 2)
-        disag_loss = disag_loss + (-pred.log_prob(disag_tgt))
+        # Use .loss() instead of .log_prob() - returns negative log prob
+        disag_loss = disag_loss + pred.loss(disag_tgt)
       disag_loss = disag_loss / self._disag_models
       # Pad to [B, T] to match other losses (pad last timestep with zeros)
       losses['disag'] = jnp.concatenate(
@@ -276,7 +277,7 @@ class Agent(embodied.jax.Agent):
       # Each head predicts the target from imgfeat; disagreement = std across heads
       preds = []
       for head in self.p2e_ensemble:
-        pred = head(sg(inp), 2).mode()  # [B*K, H+1, target_dim]
+        pred = head(sg(inp), 2).pred()  # [B*K, H+1, target_dim]
         preds.append(pred)
       preds = jnp.stack(preds, axis=0)  # [num_models, B*K, H+1, target_dim]
       # Intrinsic reward = mean variance across ensemble (epistemic uncertainty)
