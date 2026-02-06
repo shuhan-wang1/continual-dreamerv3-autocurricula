@@ -192,12 +192,6 @@ def parse_craftax_args(args=None):
                         help="sequence length for training batches (default 32, reduce to save VRAM)")
     parser.add_argument('--model_size', type=str, default='12m',
                         choices=['1m', '12m', '25m', '50m', '100m', '200m', '400m'],
-                        help="Model size preset (default 12m for NAVIX). "
-                             "12m~2GB, 25m~4GB, 50m~8GB, 100m~16GB, 200m~32GB+")
-    parser.add_argument('--batch_length', type=int, default=32,
-                        help="sequence length for training batches (default 32, reduce to save VRAM)")
-    parser.add_argument('--model_size', type=str, default='12m',
-                        choices=['1m', '12m', '25m', '50m', '100m', '200m', '400m'],
                         help="Model size preset (default 12m for Craftax). "
                              "12m~2GB, 25m~4GB, 50m~8GB, 100m~16GB, 200m~32GB+")
     parser.add_argument('--envs', type=int, default=None,
