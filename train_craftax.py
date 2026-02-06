@@ -653,9 +653,9 @@ def make_agent(config, env, args=None):
         p2e_config = {
             'plan2explore': getattr(args, 'plan2explore', False),
             'disag_models': getattr(args, 'disag_models', 10),
-            'disag_target': getattr(args, 'disag_target', 'stoch'),
-            'expl_intr_scale': getattr(args, 'expl_intr_scale', 1.0),
-            'expl_extr_scale': getattr(args, 'expl_extr_scale', 0.0),
+            'disag_target': getattr(args, 'disag_target', 'feat'),
+            'expl_intr_scale': getattr(args, 'expl_intr_scale', 0.9),
+            'expl_extr_scale': getattr(args, 'expl_extr_scale', 0.9),
         }
     agent_config = elements.Config(
         **config.agent,

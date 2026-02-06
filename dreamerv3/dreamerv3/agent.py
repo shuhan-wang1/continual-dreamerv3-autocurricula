@@ -76,12 +76,12 @@ class Agent(embodied.jax.Agent):
     self.p2e_ensemble = []
     if self.p2e_enabled:
       self._disag_models = getattr(config, 'disag_models', 10)
-      self._disag_target = getattr(config, 'disag_target', 'stoch')
-      self._expl_intr_scale = getattr(config, 'expl_intr_scale', 1.0)
-      self._expl_extr_scale = getattr(config, 'expl_extr_scale', 0.0)
+      self._disag_target = getattr(config, 'disag_target', 'feat')
+      self._expl_intr_scale = getattr(config, 'expl_intr_scale', 0.9)
+      self._expl_extr_scale = getattr(config, 'expl_extr_scale', 0.9)
       # Determine target dimension based on disag_target
       rssm_cfg = config.dyn.rssm
-      if self._disag_target == 'stoch':
+      if self._disag_target == 'feat':
         self._disag_target_dim = rssm_cfg.stoch * rssm_cfg.classes
       elif self._disag_target == 'deter':
         self._disag_target_dim = rssm_cfg.deter
@@ -118,6 +118,11 @@ class Agent(embodied.jax.Agent):
     scales.update({k: rec for k in dec_space})
     if self.p2e_enabled:
       scales['disag'] = 1.0
+      # PDF Section 5.1: "learn the world model by observation reconstruction
+      # only, rather than observation, reward, and discount reconstruction."
+      # Zero out reward and discount loss scales for task-agnostic features.
+      scales['rew'] = 0.0
+      scales['con'] = 0.0
     self.scales = scales
 
   @property
