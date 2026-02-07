@@ -255,6 +255,299 @@ def save_ref_metrics(path: str, ref_auc: Dict[str, float], steps_per_task: Union
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
+# ============== Craftax Achievement Definitions ==============
+# Craftax has 22 achievements organized in tiers (depths)
+# These are the canonical achievement names from Craftax
+CRAFTAX_ACHIEVEMENTS = [
+    # Tier 0 - Basic
+    'collect_wood',
+    'place_table',
+    'eat_cow',
+    'collect_sapling',
+    'collect_drink',
+    'make_wood_pickaxe',
+    'make_wood_sword',
+    # Tier 1 - Stone
+    'place_stone',
+    'collect_stone',
+    'place_furnace',
+    'collect_coal',
+    'collect_iron',
+    'make_stone_pickaxe',
+    'make_stone_sword',
+    # Tier 2 - Iron
+    'make_iron_pickaxe',
+    'make_iron_sword',
+    'collect_diamond',
+    # Tier 3 - Diamond
+    'make_diamond_pickaxe',
+    'make_diamond_sword',
+    # Tier 4 - Combat
+    'defeat_zombie',
+    'defeat_skeleton',
+    'wake_up_boss',
+]
+
+# Achievement tiers for depth calculation
+ACHIEVEMENT_TIERS = {
+    'collect_wood': 0, 'place_table': 0, 'eat_cow': 0, 'collect_sapling': 0,
+    'collect_drink': 0, 'make_wood_pickaxe': 0, 'make_wood_sword': 0,
+    'place_stone': 1, 'collect_stone': 1, 'place_furnace': 1, 'collect_coal': 1,
+    'collect_iron': 1, 'make_stone_pickaxe': 1, 'make_stone_sword': 1,
+    'make_iron_pickaxe': 2, 'make_iron_sword': 2, 'collect_diamond': 2,
+    'make_diamond_pickaxe': 3, 'make_diamond_sword': 3,
+    'defeat_zombie': 4, 'defeat_skeleton': 4, 'wake_up_boss': 4,
+}
+
+NUM_CRAFTAX_ACHIEVEMENTS = len(CRAFTAX_ACHIEVEMENTS)
+NUM_ACHIEVEMENT_TIERS = 5  # Tiers 0-4
+
+
+def compute_achievement_depth(achievements: Dict[str, bool]) -> int:
+    """Compute the maximum achievement tier reached.
+
+    Args:
+        achievements: Dict mapping achievement name to whether it was achieved.
+
+    Returns:
+        Maximum tier reached (0-4), or -1 if no achievements.
+    """
+    max_tier = -1
+    for name, achieved in achievements.items():
+        if achieved and name in ACHIEVEMENT_TIERS:
+            max_tier = max(max_tier, ACHIEVEMENT_TIERS[name])
+    return max_tier
+
+
+def compute_score_distribution(depths: List[int], num_tiers: int = NUM_ACHIEVEMENT_TIERS) -> List[float]:
+    """Compute fraction of episodes at each achievement depth tier.
+
+    Args:
+        depths: List of achievement depths for episodes.
+        num_tiers: Number of tiers to compute distribution over.
+
+    Returns:
+        List of fractions for each tier (including -1 for no achievements).
+    """
+    if not depths:
+        return [0.0] * (num_tiers + 1)  # +1 for tier -1 (no achievements)
+
+    counts = [0] * (num_tiers + 1)
+    for d in depths:
+        idx = d + 1  # Shift so -1 maps to index 0
+        if 0 <= idx < len(counts):
+            counts[idx] += 1
+
+    total = len(depths)
+    return [c / total for c in counts]
+
+
+def compute_per_achievement_forgetting(
+    peak_rates: Dict[str, float],
+    current_rates: Dict[str, float],
+) -> Dict[str, float]:
+    """Compute forgetting for each achievement.
+
+    F_a = max_{t'<t} p_a(t') - p_a(t) for each achievement a.
+
+    Args:
+        peak_rates: Dict of peak success rates for each achievement.
+        current_rates: Dict of current success rates for each achievement.
+
+    Returns:
+        Dict of forgetting values for each achievement.
+    """
+    forgetting = {}
+    for name in peak_rates:
+        peak = peak_rates.get(name, 0.0)
+        current = current_rates.get(name, 0.0)
+        forgetting[name] = max(0.0, peak - current)
+    return forgetting
+
+
+def compute_aggregate_forgetting(per_achievement_forgetting: Dict[str, float]) -> float:
+    """Compute mean forgetting across all achievements.
+
+    Args:
+        per_achievement_forgetting: Dict of forgetting values per achievement.
+
+    Returns:
+        Mean forgetting across all achievements.
+    """
+    if not per_achievement_forgetting:
+        return 0.0
+    return float(np.mean(list(per_achievement_forgetting.values())))
+
+
+def compute_frontier_rate(
+    recent_depths: List[int],
+    personal_best_depth: int,
+) -> float:
+    """Compute fraction of recent episodes reaching a new personal-best depth.
+
+    Args:
+        recent_depths: List of achievement depths for recent episodes.
+        personal_best_depth: Current personal best depth.
+
+    Returns:
+        Fraction of episodes that reached or exceeded personal best.
+    """
+    if not recent_depths or personal_best_depth < 0:
+        return 0.0
+    frontier_count = sum(1 for d in recent_depths if d >= personal_best_depth)
+    return frontier_count / len(recent_depths)
+
+
+# ============== Replay Buffer Diagnostics ==============
+
+def compute_buffer_depth_distribution(
+    episode_depths: List[int],
+    num_tiers: int = NUM_ACHIEVEMENT_TIERS,
+) -> List[float]:
+    """Compute the distribution of episodes by achievement depth in replay buffer.
+
+    Args:
+        episode_depths: List of achievement depths for episodes in buffer.
+        num_tiers: Number of achievement tiers.
+
+    Returns:
+        List of fractions for each tier (including tier -1 for no achievements).
+    """
+    return compute_score_distribution(episode_depths, num_tiers)
+
+
+def compute_buffer_mean_age(
+    episode_timestamps: List[int],
+    current_step: int,
+) -> float:
+    """Compute mean age of episodes in replay buffer.
+
+    Args:
+        episode_timestamps: List of step numbers when episodes were added.
+        current_step: Current training step.
+
+    Returns:
+        Mean age in steps.
+    """
+    if not episode_timestamps:
+        return 0.0
+    ages = [current_step - ts for ts in episode_timestamps]
+    return float(np.mean(ages))
+
+
+def compute_buffer_td_error_stats(
+    td_errors: List[float],
+) -> Dict[str, float]:
+    """Compute statistics on TD-errors in replay buffer.
+
+    Args:
+        td_errors: List of TD-error values.
+
+    Returns:
+        Dict with mean, max, std of TD-errors.
+    """
+    if not td_errors:
+        return {'mean': 0.0, 'max': 0.0, 'std': 0.0}
+    arr = np.array(td_errors)
+    return {
+        'mean': float(np.mean(arr)),
+        'max': float(np.max(arr)),
+        'std': float(np.std(arr)),
+    }
+
+
+# ============== Exploration Diagnostics ==============
+
+def compute_dream_accuracy(
+    imagined_values: List[float],
+    actual_values: List[float],
+) -> float:
+    """Compute accuracy of imagination rollouts vs actual rollouts.
+
+    Measures how well the world model predicts actual returns.
+
+    Args:
+        imagined_values: List of predicted values from imagination.
+        actual_values: List of actual values observed.
+
+    Returns:
+        Correlation coefficient between imagined and actual values.
+    """
+    if not imagined_values or not actual_values:
+        return 0.0
+    if len(imagined_values) != len(actual_values):
+        min_len = min(len(imagined_values), len(actual_values))
+        imagined_values = imagined_values[:min_len]
+        actual_values = actual_values[:min_len]
+
+    imag = np.array(imagined_values)
+    actual = np.array(actual_values)
+
+    # Compute correlation
+    if np.std(imag) < 1e-8 or np.std(actual) < 1e-8:
+        return 0.0
+    corr = np.corrcoef(imag, actual)[0, 1]
+    return float(corr) if not np.isnan(corr) else 0.0
+
+
+def compute_intrinsic_extrinsic_ratio(
+    intrinsic_rewards: List[float],
+    extrinsic_rewards: List[float],
+) -> float:
+    """Compute ratio of intrinsic to extrinsic rewards over time.
+
+    Args:
+        intrinsic_rewards: List of intrinsic reward values.
+        extrinsic_rewards: List of extrinsic reward values.
+
+    Returns:
+        Mean ratio of intrinsic/extrinsic rewards.
+    """
+    if not intrinsic_rewards or not extrinsic_rewards:
+        return 0.0
+
+    ratios = []
+    for intr, extr in zip(intrinsic_rewards, extrinsic_rewards):
+        if abs(extr) > 1e-8:
+            ratios.append(intr / extr)
+        else:
+            ratios.append(0.0)
+
+    return float(np.mean(ratios)) if ratios else 0.0
+
+
+# ============== Training Metrics Extraction ==============
+
+def extract_training_metrics(mets: Dict) -> Dict[str, float]:
+    """Extract relevant training metrics from agent.train() output.
+
+    Args:
+        mets: Metrics dict from agent.train().
+
+    Returns:
+        Dict with standardized metric names.
+    """
+    return {
+        'loss/obs': float(mets.get('loss/embedding', mets.get('loss/image', 0.0))),
+        'loss/rew': float(mets.get('loss/rew', 0.0)),
+        'loss/con': float(mets.get('loss/con', 0.0)),
+        'loss/dyn': float(mets.get('loss/dyn', 0.0)),
+        'loss/rep': float(mets.get('loss/rep', 0.0)),
+        'loss/policy': float(mets.get('loss/policy', 0.0)),
+        'loss/value': float(mets.get('loss/value', 0.0)),
+        'loss/disag': float(mets.get('loss/disag', 0.0)),
+        'td_error/mean': float(mets.get('adv', 0.0)),
+        'td_error/max': float(mets.get('adv_mag', 0.0)),
+        'p2e/intr_rew': float(mets.get('p2e/intr_rew', 0.0)),
+        'p2e/extr_rew': float(mets.get('p2e/extr_rew', 0.0)),
+        'p2e/combined_rew': float(mets.get('p2e/combined_rew', 0.0)),
+        'val': float(mets.get('val', 0.0)),
+        'ret': float(mets.get('ret', 0.0)),
+        'adv': float(mets.get('adv', 0.0)),
+        'adv_std': float(mets.get('adv_std', 0.0)),
+    }
+
+
 class OnlineMetrics:
     """Online metrics calculator aligned with Section 5.2.
 

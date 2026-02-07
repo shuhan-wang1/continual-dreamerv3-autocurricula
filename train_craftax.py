@@ -40,12 +40,14 @@ from collections import deque
 
 
 class CraftaxMetrics:
-    """Practical metrics tracker for Craftax training.
+    """Comprehensive metrics tracker for Craftax training.
 
-    Tracks three core metrics over a sliding window:
-      1. Episode Return  – mean episode return (= total achievements unlocked).
-      2. Success Rate    – fraction of episodes with return > threshold.
-      3. Achievement Depth – max return seen (best achievement depth reached).
+    Tracks all metrics from the specification:
+    1. Core training metrics (logged every N steps)
+    2. Per-episode online metrics
+    3. Replay buffer diagnostics
+    4. Continual learning metrics
+    5. Exploration diagnostics
 
     All metrics are tracked per-task and aggregated. Every episode-end writes
     a JSONL record; a summary JSON is saved at the end of training.
@@ -59,6 +61,8 @@ class CraftaxMetrics:
         success_threshold: float = 1.0,
         jsonl_name: str = 'online_metrics.jsonl',
         summary_name: str = 'metrics_summary.json',
+        num_achievements: int = NUM_CRAFTAX_ACHIEVEMENTS,
+        num_tiers: int = NUM_ACHIEVEMENT_TIERS,
     ) -> None:
         self.logdir = logdir
         os.makedirs(logdir, exist_ok=True)
@@ -67,15 +71,90 @@ class CraftaxMetrics:
         self.success_threshold = float(success_threshold)
         self.jsonl_path = os.path.join(logdir, jsonl_name)
         self.summary_path = os.path.join(logdir, summary_name)
+        self.num_achievements = num_achievements
+        self.num_tiers = num_tiers
 
-        # Per-task sliding windows
+        # Per-task sliding windows for episode metrics
         self._returns = {i: deque(maxlen=window_size) for i in range(num_tasks)}
         self._lengths = {i: deque(maxlen=window_size) for i in range(num_tasks)}
+        self._depths = {i: deque(maxlen=window_size) for i in range(num_tasks)}
+
+        # Per-achievement tracking (sliding window per task)
+        # Each entry is a binary vector of achievements for that episode
+        self._achievement_history = {i: deque(maxlen=window_size) for i in range(num_tasks)}
+
+        # Peak achievement rates for forgetting calculation
+        self._peak_achievement_rates = {i: np.zeros(num_achievements) for i in range(num_tasks)}
+
         # Lifetime accumulators
         self._total_episodes = {i: 0 for i in range(num_tasks)}
         self._total_successes = {i: 0 for i in range(num_tasks)}
         self._max_return = {i: 0.0 for i in range(num_tasks)}
+        self._max_depth = {i: -1 for i in range(num_tasks)}
         self._sum_return = {i: 0.0 for i in range(num_tasks)}
+        self._personal_best_depth = -1  # Global personal best
+
+        # Training metrics (updated via log_training_metrics)
+        self._latest_training_metrics = {}
+
+        # Replay buffer diagnostics (updated via log_replay_diagnostics)
+        self._latest_replay_diagnostics = {}
+
+        # Exploration diagnostics (updated via log_exploration_diagnostics)
+        self._latest_exploration_diagnostics = {}
+
+        # TD-error tracking per episode
+        self._episode_td_errors = {i: deque(maxlen=window_size) for i in range(num_tasks)}
+
+    # ---- Per-achievement metrics ----
+    def _get_per_achievement_rates(self, task_id: int) -> np.ndarray:
+        """Get rolling success rate for each achievement."""
+        history = self._achievement_history[task_id]
+        if not history:
+            return np.zeros(self.num_achievements)
+        # Stack all achievement vectors and compute mean
+        arr = np.array(list(history), dtype=np.float32)
+        return arr.mean(axis=0)
+
+    def _update_peak_rates(self, task_id: int):
+        """Update peak achievement rates for forgetting calculation."""
+        current_rates = self._get_per_achievement_rates(task_id)
+        self._peak_achievement_rates[task_id] = np.maximum(
+            self._peak_achievement_rates[task_id], current_rates)
+
+    def get_per_achievement_forgetting(self, task_id: int) -> np.ndarray:
+        """Compute F_a = max_{t'<t} p_a(t') - p_a(t) for each achievement."""
+        current_rates = self._get_per_achievement_rates(task_id)
+        peak_rates = self._peak_achievement_rates[task_id]
+        return np.maximum(0.0, peak_rates - current_rates)
+
+    def get_aggregate_forgetting(self, task_id: int) -> float:
+        """Mean forgetting across all achievements."""
+        forgetting = self.get_per_achievement_forgetting(task_id)
+        return float(forgetting.mean())
+
+    def get_frontier_rate(self, task_id: int) -> float:
+        """Fraction of recent episodes reaching personal-best depth."""
+        depths = list(self._depths[task_id])
+        if not depths or self._personal_best_depth < 0:
+            return 0.0
+        frontier_count = sum(1 for d in depths if d >= self._personal_best_depth)
+        return frontier_count / len(depths)
+
+    def _get_score_distribution(self, task_id: int) -> list:
+        """Get fraction of episodes at each achievement tier."""
+        depths = list(self._depths[task_id])
+        if not depths:
+            return [0.0] * (self.num_tiers + 1)  # +1 for tier -1
+
+        counts = [0] * (self.num_tiers + 1)
+        for d in depths:
+            idx = d + 1  # Shift so -1 maps to index 0
+            if 0 <= idx < len(counts):
+                counts[idx] += 1
+
+        total = len(depths)
+        return [c / total for c in counts]
 
     # ---- per-task windowed stats ----
     def _windowed_mean_return(self, task_id: int) -> float:
@@ -87,6 +166,18 @@ class CraftaxMetrics:
         if not buf:
             return 0.0
         return float(np.mean([1.0 if r >= self.success_threshold else 0.0 for r in buf]))
+
+    def _windowed_mean_depth(self, task_id: int) -> float:
+        buf = self._depths[task_id]
+        return float(np.mean(buf)) if buf else -1.0
+
+    def _windowed_mean_td_error(self, task_id: int) -> float:
+        buf = self._episode_td_errors[task_id]
+        return float(np.mean(buf)) if buf else 0.0
+
+    def _windowed_max_td_error(self, task_id: int) -> float:
+        buf = self._episode_td_errors[task_id]
+        return float(np.max(buf)) if buf else 0.0
 
     # ---- aggregated stats ----
     def mean_return(self) -> float:
@@ -101,8 +192,8 @@ class CraftaxMetrics:
         return float(np.mean(vals)) if vals else 0.0
 
     def max_achievement_depth(self) -> float:
-        """Best single-episode return across all tasks (= deepest achievement)."""
-        return float(max(self._max_return.values()))
+        """Best single-episode depth across all tasks."""
+        return float(max(self._max_depth.values()))
 
     def per_task_mean_return(self):
         return [self._windowed_mean_return(i) for i in range(self.num_tasks)]
@@ -113,61 +204,234 @@ class CraftaxMetrics:
     def per_task_max_return(self):
         return [float(self._max_return[i]) for i in range(self.num_tasks)]
 
+    def per_task_max_depth(self):
+        return [int(self._max_depth[i]) for i in range(self.num_tasks)]
+
     def per_task_episodes(self):
         return [self._total_episodes[i] for i in range(self.num_tasks)]
 
+    def per_task_achievement_rates(self):
+        """Get per-achievement success rates for all tasks."""
+        return [self._get_per_achievement_rates(i).tolist() for i in range(self.num_tasks)]
+
+    # ---- Training metrics logging ----
+    def log_training_metrics(
+        self,
+        step: int,
+        loss_obs: float = 0.0,
+        loss_rew: float = 0.0,
+        loss_con: float = 0.0,
+        loss_dyn: float = 0.0,
+        loss_rep: float = 0.0,
+        loss_policy: float = 0.0,
+        loss_value: float = 0.0,
+        td_error_mean: float = 0.0,
+        td_error_max: float = 0.0,
+        ensemble_disagreement: float = 0.0,
+        intrinsic_reward: float = 0.0,
+        extrinsic_reward: float = 0.0,
+        **extra_metrics
+    ):
+        """Log core training metrics."""
+        self._latest_training_metrics = {
+            'step': int(step),
+            'loss/obs': float(loss_obs),
+            'loss/rew': float(loss_rew),
+            'loss/con': float(loss_con),
+            'loss/dyn': float(loss_dyn),
+            'loss/rep': float(loss_rep),
+            'loss/policy': float(loss_policy),
+            'loss/value': float(loss_value),
+            'td_error/mean': float(td_error_mean),
+            'td_error/max': float(td_error_max),
+            'p2e/ensemble_disagreement': float(ensemble_disagreement),
+            'p2e/intrinsic_reward': float(intrinsic_reward),
+            'p2e/extrinsic_reward': float(extrinsic_reward),
+            **{k: float(v) for k, v in extra_metrics.items()},
+        }
+
+    # ---- Replay buffer diagnostics ----
+    def log_replay_diagnostics(
+        self,
+        step: int,
+        buffer_size: int = 0,
+        depth_distribution: list = None,
+        mean_td_error: float = 0.0,
+        mean_episode_age: float = 0.0,
+        **extra
+    ):
+        """Log replay buffer diagnostic metrics."""
+        self._latest_replay_diagnostics = {
+            'step': int(step),
+            'replay/buffer_size': int(buffer_size),
+            'replay/depth_distribution': depth_distribution or [],
+            'replay/mean_td_error': float(mean_td_error),
+            'replay/mean_episode_age': float(mean_episode_age),
+            **{f'replay/{k}': v for k, v in extra.items()},
+        }
+
+    # ---- Exploration diagnostics ----
+    def log_exploration_diagnostics(
+        self,
+        step: int,
+        imagined_value: float = 0.0,
+        actual_value: float = 0.0,
+        dream_accuracy: float = 0.0,
+        intrinsic_extrinsic_ratio: float = 0.0,
+        **extra
+    ):
+        """Log exploration diagnostic metrics."""
+        self._latest_exploration_diagnostics = {
+            'step': int(step),
+            'explore/imagined_value': float(imagined_value),
+            'explore/actual_value': float(actual_value),
+            'explore/dream_accuracy': float(dream_accuracy),
+            'explore/intr_extr_ratio': float(intrinsic_extrinsic_ratio),
+            **{f'explore/{k}': v for k, v in extra.items()},
+        }
+
     # ---- update & IO ----
-    def update(self, task_id: int, step: int, score: float,
-               length: int = 0) -> dict:
+    def update(
+        self,
+        task_id: int,
+        step: int,
+        score: float,
+        length: int = 0,
+        achievements: np.ndarray = None,
+        achievement_depth: int = -1,
+        td_error_mean: float = 0.0,
+    ) -> dict:
+        """Update metrics with episode results.
+
+        Args:
+            task_id: Current task ID.
+            step: Global training step.
+            score: Episode return/score.
+            length: Episode length.
+            achievements: Binary vector of achievements (NUM_CRAFTAX_ACHIEVEMENTS,).
+            achievement_depth: Max achievement tier reached (-1 to 4).
+            td_error_mean: Mean TD-error for this episode.
+        """
         task_id = int(task_id)
         score = float(score)
         self._returns[task_id].append(score)
         self._lengths[task_id].append(int(length))
+        self._depths[task_id].append(int(achievement_depth))
+        self._episode_td_errors[task_id].append(float(td_error_mean))
         self._total_episodes[task_id] += 1
+
         if score >= self.success_threshold:
             self._total_successes[task_id] += 1
         if score > self._max_return[task_id]:
             self._max_return[task_id] = score
+        if achievement_depth > self._max_depth[task_id]:
+            self._max_depth[task_id] = achievement_depth
+        if achievement_depth > self._personal_best_depth:
+            self._personal_best_depth = achievement_depth
         self._sum_return[task_id] += score
+
+        # Track per-achievement metrics
+        if achievements is not None:
+            ach_vec = np.asarray(achievements, dtype=np.bool_)
+            if len(ach_vec) < self.num_achievements:
+                padded = np.zeros(self.num_achievements, dtype=np.bool_)
+                padded[:len(ach_vec)] = ach_vec
+                ach_vec = padded
+            self._achievement_history[task_id].append(ach_vec[:self.num_achievements])
+            self._update_peak_rates(task_id)
+
+        # Build comprehensive record
+        per_ach_rates = self._get_per_achievement_rates(task_id).tolist()
+        per_ach_forgetting = self.get_per_achievement_forgetting(task_id).tolist()
 
         record = {
             'step': int(step),
             'task': task_id,
             'score': score,
             'length': int(length),
-            # Windowed per-task
+
+            # Per-episode achievement info
+            'achievements': achievements.tolist() if achievements is not None else [],
+            'achievement_depth': int(achievement_depth),
+
+            # Windowed per-task metrics
             'return_mean': self._windowed_mean_return(task_id),
             'success_rate': self._windowed_success_rate(task_id),
-            'achievement_depth': float(self._max_return[task_id]),
+            'depth_mean': self._windowed_mean_depth(task_id),
+            'td_error_mean': self._windowed_mean_td_error(task_id),
+            'td_error_max': self._windowed_max_td_error(task_id),
+
+            # Per-achievement rolling success rates
+            'per_achievement_rates': per_ach_rates,
+
+            # Score distribution histogram
+            'score_distribution': self._get_score_distribution(task_id),
+
+            # Continual learning metrics
+            'per_achievement_forgetting': per_ach_forgetting,
+            'aggregate_forgetting': self.get_aggregate_forgetting(task_id),
+            'frontier_rate': self.get_frontier_rate(task_id),
+            'personal_best_depth': self._personal_best_depth,
+
             # Aggregated across tasks
             'agg_return_mean': self.mean_return(),
             'agg_success_rate': self.mean_success_rate(),
-            'agg_achievement_depth': self.max_achievement_depth(),
+            'agg_max_depth': self.max_achievement_depth(),
+
             # Per-task snapshots
             'per_task_return_mean': self.per_task_mean_return(),
             'per_task_success_rate': self.per_task_success_rate(),
             'per_task_max_return': self.per_task_max_return(),
+            'per_task_max_depth': self.per_task_max_depth(),
+
+            # Include latest training metrics if available
+            **self._latest_training_metrics,
+
+            # Include latest replay diagnostics if available
+            **self._latest_replay_diagnostics,
+
+            # Include latest exploration diagnostics if available
+            **self._latest_exploration_diagnostics,
         }
+
         with open(self.jsonl_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(record, ensure_ascii=False) + '\n')
         return record
 
     def save_summary(self) -> None:
+        """Save final summary metrics."""
         payload = {
             'mean_return': self.mean_return(),
             'success_rate': self.mean_success_rate(),
             'max_achievement_depth': self.max_achievement_depth(),
+            'personal_best_depth': self._personal_best_depth,
+
+            # Per-task metrics
             'per_task_return_mean': self.per_task_mean_return(),
             'per_task_success_rate': self.per_task_success_rate(),
             'per_task_max_return': self.per_task_max_return(),
+            'per_task_max_depth': self.per_task_max_depth(),
             'per_task_episodes': self.per_task_episodes(),
+            'per_task_achievement_rates': self.per_task_achievement_rates(),
             'per_task_lifetime_mean': [
                 float(self._sum_return[i] / max(1, self._total_episodes[i]))
                 for i in range(self.num_tasks)
             ],
+
+            # Continual learning summary
+            'per_task_aggregate_forgetting': [
+                self.get_aggregate_forgetting(i) for i in range(self.num_tasks)
+            ],
+            'per_task_frontier_rate': [
+                self.get_frontier_rate(i) for i in range(self.num_tasks)
+            ],
+
+            # Config
             'num_tasks': self.num_tasks,
             'window_size': self.window_size,
             'success_threshold': self.success_threshold,
+            'num_achievements': self.num_achievements,
+            'achievement_names': CRAFTAX_ACHIEVEMENT_NAMES,
         }
         with open(self.summary_path, 'w', encoding='utf-8') as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -179,27 +443,65 @@ try:
     from craftax.craftax.envs.craftax_pixels_env import CraftaxPixelsEnv
     from craftax.craftax_classic.envs.craftax_symbolic_env import CraftaxClassicSymbolicEnv
     from craftax.craftax_classic.envs.craftax_pixels_env import CraftaxClassicPixelsEnv
+    # Try to import achievement constants
+    try:
+        from craftax.craftax.constants import Achievement as CraftaxAchievement
+        CRAFTAX_ACHIEVEMENTS_AVAILABLE = True
+    except ImportError:
+        CRAFTAX_ACHIEVEMENTS_AVAILABLE = False
     CRAFTAX_AVAILABLE = True
 except ImportError:
     CRAFTAX_AVAILABLE = False
+    CRAFTAX_ACHIEVEMENTS_AVAILABLE = False
     print("Warning: Craftax not installed. Install with: pip install craftax")
+
+# Craftax achievement names (22 achievements across 5 tiers)
+# These match the Craftax Achievement enum
+CRAFTAX_ACHIEVEMENT_NAMES = [
+    'collect_wood', 'place_table', 'eat_cow', 'collect_sapling',
+    'collect_drink', 'make_wood_pickaxe', 'make_wood_sword',
+    'place_stone', 'collect_stone', 'place_furnace', 'collect_coal',
+    'collect_iron', 'make_stone_pickaxe', 'make_stone_sword',
+    'make_iron_pickaxe', 'make_iron_sword', 'collect_diamond',
+    'make_diamond_pickaxe', 'make_diamond_sword',
+    'defeat_zombie', 'defeat_skeleton', 'wake_up_boss',
+]
+
+# Achievement tiers for depth calculation
+ACHIEVEMENT_TIERS = {
+    'collect_wood': 0, 'place_table': 0, 'eat_cow': 0, 'collect_sapling': 0,
+    'collect_drink': 0, 'make_wood_pickaxe': 0, 'make_wood_sword': 0,
+    'place_stone': 1, 'collect_stone': 1, 'place_furnace': 1, 'collect_coal': 1,
+    'collect_iron': 1, 'make_stone_pickaxe': 1, 'make_stone_sword': 1,
+    'make_iron_pickaxe': 2, 'make_iron_sword': 2, 'collect_diamond': 2,
+    'make_diamond_pickaxe': 3, 'make_diamond_sword': 3,
+    'defeat_zombie': 4, 'defeat_skeleton': 4, 'wake_up_boss': 4,
+}
+
+NUM_CRAFTAX_ACHIEVEMENTS = len(CRAFTAX_ACHIEVEMENT_NAMES)
+NUM_ACHIEVEMENT_TIERS = 5
 
 
 # ============== Craftax Environment Wrapper ==============
 class CraftaxWrapper(embodied.Env):
     """Wrapper to convert Craftax JAX environments to embodied interface.
-    
+
     Optimized to minimize GPU<->CPU transfers by keeping data on GPU as long
     as possible and using JIT-compiled processing functions.
     """
 
-    def __init__(self, env_name='CraftaxSymbolic-v1', embedding_dim=256, use_embedding=True, seed=42):
+    def __init__(self, env_name='CraftaxSymbolic-v1', embedding_dim=256, use_embedding=True, seed=42, track_achievements=True):
         self._env_name = env_name
         self._embedding_dim = embedding_dim
         self._use_embedding = use_embedding
         self._seed = seed
         self._done = True
-        
+        self._track_achievements = track_achievements
+
+        # Achievement tracking for current episode
+        self._episode_achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
+        self._cumulative_reward = 0.0
+
         # Use a base key and step counter for deterministic key generation
         # Pre-generate a batch of keys to avoid per-step host-to-device transfers
         self._base_key = jax.random.PRNGKey(seed)
@@ -207,9 +509,10 @@ class CraftaxWrapper(embodied.Env):
         self._key_batch_size = 1024
         self._key_cache = jax.random.split(self._base_key, self._key_batch_size)
         self._key_idx = 0
-        
+
         # Create the appropriate Craftax environment
-        if 'Classic' in env_name:
+        self._is_classic = 'Classic' in env_name
+        if self._is_classic:
             if 'Symbolic' in env_name:
                 self._env = CraftaxClassicSymbolicEnv()
             else:
@@ -219,7 +522,7 @@ class CraftaxWrapper(embodied.Env):
                 self._env = CraftaxSymbolicEnv()
             else:
                 self._env = CraftaxPixelsEnv()
-        
+
         # Get environment parameters
         self._env_params = self._env.default_params
         
@@ -284,6 +587,10 @@ class CraftaxWrapper(embodied.Env):
             'is_last': elements.Space(bool),
             'is_terminal': elements.Space(bool),
         })
+        # Achievement tracking spaces
+        if self._track_achievements:
+            spaces['achievements'] = elements.Space(np.bool_, (NUM_CRAFTAX_ACHIEVEMENTS,))
+            spaces['achievement_depth'] = elements.Space(np.int32)
         return spaces
 
     @property
@@ -320,45 +627,93 @@ class CraftaxWrapper(embodied.Env):
                 return jax.tree_util.tree_leaves(obs)[0]
         return obs
 
-    def _to_numpy_result(self, obs_jax, reward, is_first, is_last, is_terminal):
+    def _extract_achievements_from_state(self, state):
+        """Extract achievement vector from Craftax state.
+
+        The state contains achievements as a boolean array.
+        """
+        try:
+            # Craftax stores achievements in state.achievements as a JAX array
+            if hasattr(state, 'achievements'):
+                achievements = np.asarray(state.achievements, dtype=np.bool_)
+                # Pad or truncate to expected size
+                if len(achievements) < NUM_CRAFTAX_ACHIEVEMENTS:
+                    padded = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
+                    padded[:len(achievements)] = achievements
+                    return padded
+                return achievements[:NUM_CRAFTAX_ACHIEVEMENTS]
+        except Exception:
+            pass
+        return np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
+
+    def _compute_achievement_depth(self, achievements):
+        """Compute max achievement tier from achievement vector."""
+        max_tier = -1
+        for i, achieved in enumerate(achievements):
+            if achieved and i < len(CRAFTAX_ACHIEVEMENT_NAMES):
+                name = CRAFTAX_ACHIEVEMENT_NAMES[i]
+                if name in ACHIEVEMENT_TIERS:
+                    max_tier = max(max_tier, ACHIEVEMENT_TIERS[name])
+        return max_tier
+
+    def _to_numpy_result(self, obs_jax, reward, is_first, is_last, is_terminal, achievements=None):
         """Single batched transfer from GPU to CPU at the end of step."""
         # Process obs on GPU first
         processed = self._process_obs_jit(self._extract_obs(obs_jax))
         # Single device_get for the processed obs only
         obs_np = np.asarray(processed)
         key = 'embedding' if self._use_embedding else 'image'
-        return {
+        result = {
             key: obs_np,
             'reward': np.float32(reward),
             'is_first': is_first,
             'is_last': is_last,
             'is_terminal': is_terminal,
         }
+        if self._track_achievements:
+            if achievements is None:
+                achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
+            result['achievements'] = achievements
+            result['achievement_depth'] = np.int32(self._compute_achievement_depth(achievements))
+        return result
 
     def step(self, action):
         if action['reset'] or self._done:
             reset_key = self._get_rng_key()
             self._obs, self._state = self._reset_fn(reset_key, self._env_params)
             self._done = False
-            return self._to_numpy_result(self._obs, 0.0, True, False, False)
-        
+            # Reset episode achievement tracking
+            self._episode_achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
+            self._cumulative_reward = 0.0
+            achievements = self._extract_achievements_from_state(self._state) if self._track_achievements else None
+            return self._to_numpy_result(self._obs, 0.0, True, False, False, achievements)
+
         # Get action - avoid Python int() conversion, keep as jax-compatible
         act = action['action']
         if isinstance(act, np.ndarray):
             act = int(act.item() if act.ndim == 0 else act[0])
-        
+
         # Step environment using jitted step function (stays on GPU)
         step_key = self._get_rng_key()
         self._obs, self._state, reward, done, info = self._step_fn(
             step_key, self._state, act, self._env_params
         )
-        
+
         # Only transfer done flag to CPU (single scalar)
         self._done = bool(done)
         # Transfer reward scalar to CPU
         reward_val = float(reward)
+        self._cumulative_reward += reward_val
+
+        # Extract achievements from state
+        achievements = None
+        if self._track_achievements:
+            achievements = self._extract_achievements_from_state(self._state)
+            # Update episode achievements (OR with current)
+            self._episode_achievements = np.logical_or(self._episode_achievements, achievements)
+
         return self._to_numpy_result(
-            self._obs, reward_val, False, self._done, self._done
+            self._obs, reward_val, False, self._done, self._done, achievements
         )
 
     def close(self):
@@ -374,11 +729,12 @@ class VectorCraftaxEnv:
     """
 
     def __init__(self, env_name='CraftaxSymbolic-v1', num_envs=16,
-                 embedding_dim=256, use_embedding=True, seed=42):
+                 embedding_dim=256, use_embedding=True, seed=42, track_achievements=True):
         self._env_name = env_name
         self._num_envs = num_envs
         self._embedding_dim = embedding_dim
         self._use_embedding = use_embedding
+        self._track_achievements = track_achievements
 
         # Create one Craftax env to get params / spaces
         if 'Classic' in env_name:
@@ -465,6 +821,52 @@ class VectorCraftaxEnv:
         return jax.random.split(
             jax.random.fold_in(self._base_key, self._step_count), n)
 
+    def _extract_achievements_batch(self, states):
+        """Extract achievement vectors from vectorized states.
+
+        Args:
+            states: Vectorized Craftax states.
+
+        Returns:
+            numpy array of shape (num_envs, NUM_CRAFTAX_ACHIEVEMENTS).
+        """
+        try:
+            if hasattr(states, 'achievements'):
+                # states.achievements should be (num_envs, num_achievements)
+                achievements = np.asarray(states.achievements, dtype=np.bool_)
+                if achievements.ndim == 1:
+                    # Single env case - expand
+                    achievements = achievements[np.newaxis, :]
+                # Ensure correct shape
+                if achievements.shape[1] < NUM_CRAFTAX_ACHIEVEMENTS:
+                    padded = np.zeros((achievements.shape[0], NUM_CRAFTAX_ACHIEVEMENTS), dtype=np.bool_)
+                    padded[:, :achievements.shape[1]] = achievements
+                    return padded
+                return achievements[:, :NUM_CRAFTAX_ACHIEVEMENTS]
+        except Exception:
+            pass
+        return np.zeros((self._num_envs, NUM_CRAFTAX_ACHIEVEMENTS), dtype=np.bool_)
+
+    def _compute_achievement_depths_batch(self, achievements):
+        """Compute achievement depths for a batch of achievement vectors.
+
+        Args:
+            achievements: numpy array of shape (num_envs, NUM_CRAFTAX_ACHIEVEMENTS).
+
+        Returns:
+            numpy array of shape (num_envs,) with achievement depths.
+        """
+        depths = np.full(achievements.shape[0], -1, dtype=np.int32)
+        for i, ach in enumerate(achievements):
+            max_tier = -1
+            for j, achieved in enumerate(ach):
+                if achieved and j < len(CRAFTAX_ACHIEVEMENT_NAMES):
+                    name = CRAFTAX_ACHIEVEMENT_NAMES[j]
+                    if name in ACHIEVEMENT_TIERS:
+                        max_tier = max(max_tier, ACHIEVEMENT_TIERS[name])
+            depths[i] = max_tier
+        return depths
+
     @property
     def obs_space(self):
         spaces = {}
@@ -480,6 +882,9 @@ class VectorCraftaxEnv:
             'is_last': elements.Space(bool),
             'is_terminal': elements.Space(bool),
         })
+        if self._track_achievements:
+            spaces['achievements'] = elements.Space(np.bool_, (NUM_CRAFTAX_ACHIEVEMENTS,))
+            spaces['achievement_depth'] = elements.Space(np.int32)
         return spaces
 
     @property
@@ -553,13 +958,22 @@ class VectorCraftaxEnv:
         is_last = np.asarray(dones_np, dtype=bool)
 
         key = 'embedding' if self._use_embedding else 'image'
-        return {
+        result = {
             key: np.asarray(processed_np, dtype=np.float32),
             'reward': np.asarray(rewards_np, dtype=np.float32),
             'is_first': is_first,
             'is_last': is_last,
             'is_terminal': is_last.copy(),
         }
+
+        # Add achievement tracking
+        if self._track_achievements:
+            achievements = self._extract_achievements_batch(self._states)
+            depths = self._compute_achievement_depths_batch(achievements)
+            result['achievements'] = achievements
+            result['achievement_depth'] = depths
+
+        return result
 
     def close(self):
         pass
@@ -915,20 +1329,131 @@ def train_single(make_env, config, args, env_name=None):
     should_train = elements.when.Ratio(train_ratio / batch_steps)
 
     episodes = collections.defaultdict(elements.Agg)
+    episode_achievements = {}  # Track achievements per worker
+
+    # Shared state for training metrics
+    training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0}
 
     def logfn(tran, worker):
         episode = episodes[worker]
-        tran['is_first'] and episode.reset()
+
+        # On episode start, reset achievement tracking
+        if tran['is_first']:
+            episode.reset()
+            episode_achievements[worker] = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
+
         episode.add('score', tran['reward'], agg='sum')
         episode.add('length', 1, agg='sum')
+
+        # Accumulate achievements throughout episode
+        if 'achievements' in tran and worker in episode_achievements:
+            ach = np.asarray(tran['achievements'], dtype=np.bool_)
+            if len(ach) == NUM_CRAFTAX_ACHIEVEMENTS:
+                episode_achievements[worker] = np.logical_or(
+                    episode_achievements[worker], ach)
+
         if tran['is_last']:
             result = episode.result()
             score = result.pop('score')
             length = result.pop('length')
             logger.add({'score': score, 'length': length}, prefix='episode')
+
             if online is not None:
-                online.update(task_id=0, step=int(step.value), score=float(score), length=int(length))
+                # Get final achievements for this episode
+                achievements = episode_achievements.get(worker, np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_))
+                achievement_depth = tran.get('achievement_depth', -1)
+                if isinstance(achievement_depth, np.ndarray):
+                    achievement_depth = int(achievement_depth.item())
+
+                online.update(
+                    task_id=0,
+                    step=int(step.value),
+                    score=float(score),
+                    length=int(length),
+                    achievements=achievements,
+                    achievement_depth=int(achievement_depth),
+                )
             logger.write()
+
+    def log_training_metrics_fn(mets, step_val):
+        """Log training metrics periodically."""
+        if online is None:
+            return
+        current_step = int(step_val)
+        if current_step - training_metrics_state['last_log_step'] >= training_metrics_state['log_every']:
+            training_metrics_state['last_log_step'] = current_step
+
+            # Extract relevant metrics from training output
+            loss_obs = float(mets.get('loss/embedding', mets.get('loss/image', 0.0)))
+            loss_rew = float(mets.get('loss/rew', 0.0))
+            loss_con = float(mets.get('loss/con', 0.0))
+            loss_dyn = float(mets.get('loss/dyn', 0.0))
+            loss_rep = float(mets.get('loss/rep', 0.0))
+            loss_policy = float(mets.get('loss/policy', 0.0))
+            loss_value = float(mets.get('loss/value', 0.0))
+
+            # P2E metrics
+            ensemble_disagreement = float(mets.get('loss/disag', 0.0))
+            intrinsic_reward = float(mets.get('p2e/intr_rew', 0.0))
+            extrinsic_reward = float(mets.get('p2e/extr_rew', 0.0))
+
+            # TD-error approximation from advantage stats
+            td_error_mean = float(mets.get('adv', 0.0))
+            td_error_max = float(mets.get('adv_mag', 0.0))
+
+            online.log_training_metrics(
+                step=current_step,
+                loss_obs=loss_obs,
+                loss_rew=loss_rew,
+                loss_con=loss_con,
+                loss_dyn=loss_dyn,
+                loss_rep=loss_rep,
+                loss_policy=loss_policy,
+                loss_value=loss_value,
+                td_error_mean=td_error_mean,
+                td_error_max=td_error_max,
+                ensemble_disagreement=ensemble_disagreement,
+                intrinsic_reward=intrinsic_reward,
+                extrinsic_reward=extrinsic_reward,
+            )
+
+            # Log exploration diagnostics (dream accuracy)
+            imagined_value = float(mets.get('val', 0.0))
+            actual_value = float(mets.get('ret', 0.0))
+            dream_accuracy = 1.0 - abs(imagined_value - actual_value) / max(abs(actual_value), 1e-8) if actual_value != 0 else 0.0
+
+            intr_extr_ratio = 0.0
+            if extrinsic_reward > 0:
+                intr_extr_ratio = intrinsic_reward / extrinsic_reward
+
+            online.log_exploration_diagnostics(
+                step=current_step,
+                imagined_value=imagined_value,
+                actual_value=actual_value,
+                dream_accuracy=dream_accuracy,
+                intrinsic_extrinsic_ratio=intr_extr_ratio,
+            )
+
+    def log_replay_diagnostics_fn(replay_buffer, step_val):
+        """Log replay buffer diagnostics periodically."""
+        if online is None:
+            return
+        current_step = int(step_val)
+        if current_step - training_metrics_state['last_log_step'] >= training_metrics_state['log_every']:
+            stats = replay_buffer.stats()
+            buffer_size = stats.get('total_steps', len(replay_buffer))
+
+            # Compute depth distribution from recent samples if possible
+            # This is an approximation - actual implementation depends on buffer structure
+            depth_distribution = [0.0] * (NUM_ACHIEVEMENT_TIERS + 1)
+
+            online.log_replay_diagnostics(
+                step=current_step,
+                buffer_size=buffer_size,
+                depth_distribution=depth_distribution,
+                mean_td_error=0.0,  # Would need to track priorities
+                mean_episode_age=0.0,  # Would need timestamp tracking
+            )
 
     driver.on_step(lambda tran, _: step.increment())
     driver.on_step(replay.add)
@@ -982,6 +1507,9 @@ def train_single(make_env, config, args, env_name=None):
                 carry_train[0], outs, mets = agent.train(carry_train[0], batch)
                 if 'replay' in outs:
                     replay.update(outs['replay'])
+                # Log training and exploration metrics
+                log_training_metrics_fn(mets, step.value)
+                log_replay_diagnostics_fn(replay, step.value)
         if step.value % 10000 < 10:
             cp.save()
 
@@ -1067,6 +1595,80 @@ def cl_train_loop(make_envs, config, args, env_names=None):
     use_vectorised = env_names is not None and CRAFTAX_AVAILABLE
     collect_steps = max(num_envs * 4, 64)
 
+    # Shared state for training metrics logging
+    training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0}
+
+    def log_training_metrics_fn(mets, step_val, current_task_id):
+        """Log training metrics periodically."""
+        if online is None:
+            return
+        current_step = int(step_val)
+        if current_step - training_metrics_state['last_log_step'] >= training_metrics_state['log_every']:
+            training_metrics_state['last_log_step'] = current_step
+
+            loss_obs = float(mets.get('loss/embedding', mets.get('loss/image', 0.0)))
+            loss_rew = float(mets.get('loss/rew', 0.0))
+            loss_con = float(mets.get('loss/con', 0.0))
+            loss_dyn = float(mets.get('loss/dyn', 0.0))
+            loss_rep = float(mets.get('loss/rep', 0.0))
+            loss_policy = float(mets.get('loss/policy', 0.0))
+            loss_value = float(mets.get('loss/value', 0.0))
+
+            ensemble_disagreement = float(mets.get('loss/disag', 0.0))
+            intrinsic_reward = float(mets.get('p2e/intr_rew', 0.0))
+            extrinsic_reward = float(mets.get('p2e/extr_rew', 0.0))
+
+            td_error_mean = float(mets.get('adv', 0.0))
+            td_error_max = float(mets.get('adv_mag', 0.0))
+
+            online.log_training_metrics(
+                step=current_step,
+                loss_obs=loss_obs,
+                loss_rew=loss_rew,
+                loss_con=loss_con,
+                loss_dyn=loss_dyn,
+                loss_rep=loss_rep,
+                loss_policy=loss_policy,
+                loss_value=loss_value,
+                td_error_mean=td_error_mean,
+                td_error_max=td_error_max,
+                ensemble_disagreement=ensemble_disagreement,
+                intrinsic_reward=intrinsic_reward,
+                extrinsic_reward=extrinsic_reward,
+                task_id=current_task_id,
+            )
+
+            imagined_value = float(mets.get('val', 0.0))
+            actual_value = float(mets.get('ret', 0.0))
+            dream_accuracy = 1.0 - abs(imagined_value - actual_value) / max(abs(actual_value), 1e-8) if actual_value != 0 else 0.0
+            intr_extr_ratio = intrinsic_reward / extrinsic_reward if extrinsic_reward > 0 else 0.0
+
+            online.log_exploration_diagnostics(
+                step=current_step,
+                imagined_value=imagined_value,
+                actual_value=actual_value,
+                dream_accuracy=dream_accuracy,
+                intrinsic_extrinsic_ratio=intr_extr_ratio,
+            )
+
+    def log_replay_diagnostics_fn(replay_buffer, step_val):
+        """Log replay buffer diagnostics periodically."""
+        if online is None:
+            return
+        current_step = int(step_val)
+        if current_step - training_metrics_state['last_log_step'] >= training_metrics_state['log_every']:
+            stats = replay_buffer.stats()
+            buffer_size = stats.get('total_steps', len(replay_buffer))
+            depth_distribution = [0.0] * (NUM_ACHIEVEMENT_TIERS + 1)
+
+            online.log_replay_diagnostics(
+                step=current_step,
+                buffer_size=buffer_size,
+                depth_distribution=depth_distribution,
+                mean_td_error=0.0,
+                mean_episode_age=0.0,
+            )
+
     while rep < args.num_task_repeats:
         while task_id < num_tasks:
             print(f"\n=== Task {task_id + 1}/{num_tasks}, Rep {rep + 1}/{args.num_task_repeats} ===\n")
@@ -1074,19 +1676,46 @@ def cl_train_loop(make_envs, config, args, env_names=None):
             make_task_env = make_envs[task_id]
             step = elements.Counter()
             episodes = collections.defaultdict(elements.Agg)
+            episode_achievements = {}  # Track achievements per worker
+            current_task = task_id  # Capture for closure
 
             def logfn(tran, worker):
                 episode = episodes[worker]
-                tran['is_first'] and episode.reset()
+
+                if tran['is_first']:
+                    episode.reset()
+                    episode_achievements[worker] = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
+
                 episode.add('score', tran['reward'], agg='sum')
                 episode.add('length', 1, agg='sum')
+
+                # Accumulate achievements
+                if 'achievements' in tran and worker in episode_achievements:
+                    ach = np.asarray(tran['achievements'], dtype=np.bool_)
+                    if len(ach) == NUM_CRAFTAX_ACHIEVEMENTS:
+                        episode_achievements[worker] = np.logical_or(
+                            episode_achievements[worker], ach)
+
                 if tran['is_last']:
                     result = episode.result()
                     score = result.pop('score')
                     length = result.pop('length')
-                    logger.add({'score': score, 'length': length, 'task': task_id}, prefix='episode')
+                    logger.add({'score': score, 'length': length, 'task': current_task}, prefix='episode')
+
                     if online is not None:
-                        online.update(task_id=task_id, step=int(total_step.value), score=float(score), length=int(length))
+                        achievements = episode_achievements.get(worker, np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_))
+                        achievement_depth = tran.get('achievement_depth', -1)
+                        if isinstance(achievement_depth, np.ndarray):
+                            achievement_depth = int(achievement_depth.item())
+
+                        online.update(
+                            task_id=current_task,
+                            step=int(total_step.value),
+                            score=float(score),
+                            length=int(length),
+                            achievements=achievements,
+                            achievement_depth=int(achievement_depth),
+                        )
                     logger.write()
 
             if use_vectorised:
@@ -1141,6 +1770,9 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                         carry_train[0], outs, mets = agent.train(carry_train[0], batch)
                         if 'replay' in outs:
                             replay.update(outs['replay'])
+                        # Log training and exploration metrics
+                        log_training_metrics_fn(mets, total_step.value, current_task)
+                        log_replay_diagnostics_fn(replay, total_step.value)
                 if step.value % 10000 < 10:
                     cp.save()
 
