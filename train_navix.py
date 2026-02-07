@@ -592,9 +592,10 @@ def train_single(make_env, config, args):
     cp.step = step
     cp.agent = agent
     cp.replay = replay
-    cp.load_or_save()
+    # Never load checkpoint - always start fresh
+    cp.save()
 
-    print('Start training loop')
+    print('Start training loop (fresh start, no checkpoint loaded)')
     policy = lambda carry, obs: agent.policy(carry, obs, mode='train')
     driver.reset(agent.init_policy)
 
@@ -668,7 +669,8 @@ def cl_train_loop(make_envs, config, args):
     cp.step = total_step
     cp.agent = agent
     cp.replay = replay
-    cp.load_or_save()
+    # Never load checkpoint - always start fresh
+    cp.save()
 
     stats = replay.stats()
     total_steps_done = stats.get('total_steps', 0)

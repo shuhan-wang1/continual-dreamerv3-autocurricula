@@ -84,12 +84,13 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   cp.step = step
   cp.agent = agent
   cp.replay = replay
-  if args.from_checkpoint:
-    elements.checkpoint.load(args.from_checkpoint, dict(
-        agent=bind(agent.load, regex=args.from_checkpoint_regex)))
-  cp.load_or_save()
+  # Never load checkpoint - always start fresh
+  # if args.from_checkpoint:
+  #   elements.checkpoint.load(args.from_checkpoint, dict(
+  #       agent=bind(agent.load, regex=args.from_checkpoint_regex)))
+  cp.save()
 
-  print('Start training loop')
+  print('Start training loop (fresh start, no checkpoint loaded)')
   policy = lambda *args: agent.policy(*args, mode='train')
   driver.reset(agent.init_policy)
   while step < args.steps:

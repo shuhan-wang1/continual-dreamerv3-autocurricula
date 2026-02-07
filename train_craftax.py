@@ -12,7 +12,21 @@ from functools import partial as bind
 # CRITICAL: Must set BEFORE importing jax (or any lib that imports jax).
 # JAX reads this at import time and will pre-allocate 90% of GPU memory otherwise.
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.70'
+os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.85'
+
+# Fix CUDA kernel launch failure (loop_dynamic_update_slice_fusion)
+# Disable problematic XLA fusions that cause CUDA_ERROR_LAUNCH_FAILED
+os.environ['XLA_FLAGS'] = (
+    '--xla_gpu_enable_triton_softmax_fusion=false '
+    '--xla_gpu_enable_custom_fusions=false '
+    '--xla_gpu_enable_address_computation_fusion=false '
+    '--xla_gpu_all_reduce_combine_threshold_bytes=134217728 '
+    '--xla_gpu_enable_async_all_reduce=true '
+)
+
+# Maximize GPU/CPU utilization
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Reduce TF logging noise
+os.environ['XLA_PYTHON_CLIENT_ALLOCATOR'] = 'platform'  # Use CUDA's native allocator for less fragmentation
 
 # Add dreamerv3 to path
 root = pathlib.Path(__file__).parent
@@ -31,6 +45,15 @@ import jax.numpy as jnp
 
 # Allow implicit host-to-device transfers (needed for passing Python scalars to JIT functions)
 jax.config.update("jax_transfer_guard", "allow")
+
+# Performance: enable persistent compilation cache to avoid re-compiling JIT on restart
+jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
+jax.config.update("jax_persistent_cache_min_entry_size_bytes", 0)
+jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+
+# Disable debug checks for speed
+jax.config.update("jax_debug_nans", False)
+jax.config.update("jax_disable_jit", False)
 
 from dreamerv3.agent import Agent
 from input_args import parse_craftax_args
@@ -1251,6 +1274,18 @@ def load_config(args):
     # Default to 4 envs for JAX-based environments (not 64 from defaults)
     num_envs = int(args.envs) if getattr(args, 'envs', None) is not None else 4
     batch_length = getattr(args, 'batch_length', 32)
+    # Scale train_ratio with envs * batch_length to keep GPU saturated.
+    # With 128 envs and batch_length 256, we need high train_ratio
+    # to generate enough gradient steps per env step.
+    user_train_ratio = getattr(args, 'train_ratio', None)
+    if user_train_ratio is not None:
+        effective_train_ratio = user_train_ratio
+    elif num_envs >= 64 and batch_length >= 128:
+        effective_train_ratio = 128.0
+    elif num_envs >= 32:
+        effective_train_ratio = 96.0
+    else:
+        effective_train_ratio = 64.0
     run_overrides = {
         'logdir': f'{args.logdir}/craftax_{tag}',
         'seed': args.seed,
@@ -1259,10 +1294,10 @@ def load_config(args):
         'replay_context': 0,  # Disable replay context to avoid needing dyn/deter and dyn/stoch in replay
         'run': {
             'steps': int(args.steps),
-            'log_every': 1000,
-            'save_every': 10000,
-            'report_every': 50000,
-            'train_ratio': 64.0,
+            'log_every': 5000,      # Less frequent logging to reduce CPU overhead
+            'save_every': 50000,    # Less frequent saving to reduce I/O
+            'report_every': 100000, # Less frequent reporting
+            'train_ratio': effective_train_ratio,
             'envs': num_envs,
             'debug': False,  # Disable debug mode for performance
         },
@@ -1288,6 +1323,17 @@ def train_single(make_env, config, args, env_name=None):
     """
     np.random.seed(config.seed)
     logdir = elements.Path(config.logdir)
+
+    # Always start fresh: remove old logdir contents (replay, checkpoints)
+    import shutil as _shutil_clean
+    logdir_str = str(logdir)
+    if os.path.exists(logdir_str):
+        for sub in ('replay', 'ckpt'):
+            sub_path = os.path.join(logdir_str, sub)
+            if os.path.exists(sub_path):
+                _shutil_clean.rmtree(sub_path, ignore_errors=True)
+        print(f'Cleaned old replay/ckpt from {logdir_str} for fresh start.')
+
     logdir.mkdir()
     config.save(logdir / 'config.yaml')
     print('Logdir:', logdir)
@@ -1494,20 +1540,32 @@ def train_single(make_env, config, args, env_name=None):
     stream_train = iter(agent.stream(make_stream(replay, 'train')))
     carry_train = [agent.init_train(batch_size)]
 
+    # Always start fresh: remove old checkpoint directory if it exists
+    ckpt_dir = logdir / 'ckpt'
+    if ckpt_dir.exists():
+        import shutil as _shutil
+        _shutil.rmtree(str(ckpt_dir), ignore_errors=True)
+        print('Removed old checkpoint directory for fresh start.')
+
     cp = elements.Checkpoint(logdir / 'ckpt')
     cp.step = step
     cp.agent = agent
     cp.replay = replay
-    cp.load_or_save()
+    # Never load checkpoint - always start fresh
+    cp.save()
 
-    print('Start training loop')
+    print('Start training loop (fresh start, no checkpoint loaded)')
     policy = lambda carry, obs: agent.policy(carry, obs, mode='train')
     driver.reset(agent.init_policy)
 
     # Use larger collect steps to reduce collect<->train switching overhead.
     # With N vectorised envs each _step produces N transitions, so
     # collect_steps ~= num_envs * K gives K actual _step calls per collect.
-    collect_steps = max(num_envs * 4, 64)
+    # For large num_envs (>=64), use bigger K to keep GPU saturated during collection.
+    if num_envs >= 64:
+        collect_steps = num_envs * 8  # 8 steps per env per collect phase
+    else:
+        collect_steps = max(num_envs * 4, 64)
 
     total_steps = int(config.run.steps)
     while step < total_steps:
@@ -1545,6 +1603,17 @@ def cl_train_loop(make_envs, config, args, env_names=None):
         unbalanced_steps = ast.literal_eval(str(args.unbalanced_steps))
 
     logdir = elements.Path(config.logdir)
+
+    # Always start fresh: remove old logdir contents (replay, checkpoints)
+    import shutil as _shutil_clean
+    logdir_str = str(logdir)
+    if os.path.exists(logdir_str):
+        for sub in ('replay', 'ckpt'):
+            sub_path = os.path.join(logdir_str, sub)
+            if os.path.exists(sub_path):
+                _shutil_clean.rmtree(sub_path, ignore_errors=True)
+        print(f'Cleaned old replay/ckpt from {logdir_str} for fresh start.')
+
     logdir.mkdir()
     config.save(logdir / 'config.yaml')
     print('Logdir:', logdir)
@@ -1572,11 +1641,19 @@ def cl_train_loop(make_envs, config, args, env_names=None):
     train_ratio = config.run.train_ratio
     should_train = elements.when.Ratio(train_ratio / batch_steps)
 
+    # Always start fresh: remove old checkpoint directory if it exists
+    ckpt_dir = logdir / 'ckpt'
+    if ckpt_dir.exists():
+        import shutil as _shutil
+        _shutil.rmtree(str(ckpt_dir), ignore_errors=True)
+        print('Removed old checkpoint directory for fresh start.')
+
     cp = elements.Checkpoint(logdir / 'ckpt')
     cp.step = total_step
     cp.agent = agent
     cp.replay = replay
-    cp.load_or_save()
+    # Never load checkpoint - always start fresh
+    cp.save()
 
     stats = replay.stats()
     total_steps_done = stats.get('total_steps', 0)
@@ -1604,7 +1681,10 @@ def cl_train_loop(make_envs, config, args, env_names=None):
     use_embedding = getattr(args, 'input_type', 'embedding') == 'embedding'
     embedding_dim = getattr(args, 'embedding_dim', 256)
     use_vectorised = env_names is not None and CRAFTAX_AVAILABLE
-    collect_steps = max(num_envs * 4, 64)
+    if num_envs >= 64:
+        collect_steps = num_envs * 8
+    else:
+        collect_steps = max(num_envs * 4, 64)
 
     # Shared state for training metrics logging
     training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0}
