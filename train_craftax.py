@@ -17,11 +17,8 @@ os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.85'
 # Fix CUDA kernel launch failure (loop_dynamic_update_slice_fusion)
 # Disable problematic XLA fusions that cause CUDA_ERROR_LAUNCH_FAILED
 os.environ['XLA_FLAGS'] = (
-    '--xla_gpu_enable_triton_softmax_fusion=false '
     '--xla_gpu_enable_custom_fusions=false '
-    '--xla_gpu_enable_address_computation_fusion=false '
     '--xla_gpu_all_reduce_combine_threshold_bytes=134217728 '
-    '--xla_gpu_enable_async_all_reduce=true '
 )
 
 # Maximize GPU/CPU utilization
