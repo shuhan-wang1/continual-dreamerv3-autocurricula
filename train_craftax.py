@@ -591,10 +591,10 @@ class CraftaxWrapper(embodied.Env):
             'is_last': elements.Space(bool),
             'is_terminal': elements.Space(bool),
         })
-        # Achievement tracking spaces
+        # Achievement tracking spaces (prefixed with log/ to exclude from agent training)
         if self._track_achievements:
-            spaces['achievements'] = elements.Space(np.bool_, (NUM_CRAFTAX_ACHIEVEMENTS,))
-            spaces['achievement_depth'] = elements.Space(np.int32)
+            spaces['log/achievements'] = elements.Space(np.bool_, (NUM_CRAFTAX_ACHIEVEMENTS,))
+            spaces['log/achievement_depth'] = elements.Space(np.int32)
         return spaces
 
     @property
@@ -677,8 +677,8 @@ class CraftaxWrapper(embodied.Env):
         if self._track_achievements:
             if achievements is None:
                 achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
-            result['achievements'] = achievements
-            result['achievement_depth'] = np.int32(self._compute_achievement_depth(achievements))
+            result['log/achievements'] = achievements
+            result['log/achievement_depth'] = np.int32(self._compute_achievement_depth(achievements))
         return result
 
     def step(self, action):
@@ -887,8 +887,8 @@ class VectorCraftaxEnv:
             'is_terminal': elements.Space(bool),
         })
         if self._track_achievements:
-            spaces['achievements'] = elements.Space(np.bool_, (NUM_CRAFTAX_ACHIEVEMENTS,))
-            spaces['achievement_depth'] = elements.Space(np.int32)
+            spaces['log/achievements'] = elements.Space(np.bool_, (NUM_CRAFTAX_ACHIEVEMENTS,))
+            spaces['log/achievement_depth'] = elements.Space(np.int32)
         return spaces
 
     @property
@@ -970,12 +970,12 @@ class VectorCraftaxEnv:
             'is_terminal': is_last.copy(),
         }
 
-        # Add achievement tracking
+        # Add achievement tracking (prefixed with log/ to exclude from agent training)
         if self._track_achievements:
             achievements = self._extract_achievements_batch(self._states)
             depths = self._compute_achievement_depths_batch(achievements)
-            result['achievements'] = achievements
-            result['achievement_depth'] = depths
+            result['log/achievements'] = achievements
+            result['log/achievement_depth'] = depths
 
         return result
 
@@ -1350,8 +1350,8 @@ def train_single(make_env, config, args, env_name=None):
         episode.add('length', 1, agg='sum')
 
         # Accumulate achievements throughout episode
-        if 'achievements' in tran and worker in episode_achievements:
-            ach = np.asarray(tran['achievements'], dtype=np.bool_)
+        if 'log/achievements' in tran and worker in episode_achievements:
+            ach = np.asarray(tran['log/achievements'], dtype=np.bool_)
             if len(ach) == NUM_CRAFTAX_ACHIEVEMENTS:
                 episode_achievements[worker] = np.logical_or(
                     episode_achievements[worker], ach)
@@ -1365,7 +1365,7 @@ def train_single(make_env, config, args, env_name=None):
             if online is not None:
                 # Get final achievements for this episode
                 achievements = episode_achievements.get(worker, np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_))
-                achievement_depth = tran.get('achievement_depth', -1)
+                achievement_depth = tran.get('log/achievement_depth', -1)
                 if isinstance(achievement_depth, np.ndarray):
                     achievement_depth = int(achievement_depth.item())
 
@@ -1694,8 +1694,8 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                 episode.add('length', 1, agg='sum')
 
                 # Accumulate achievements
-                if 'achievements' in tran and worker in episode_achievements:
-                    ach = np.asarray(tran['achievements'], dtype=np.bool_)
+                if 'log/achievements' in tran and worker in episode_achievements:
+                    ach = np.asarray(tran['log/achievements'], dtype=np.bool_)
                     if len(ach) == NUM_CRAFTAX_ACHIEVEMENTS:
                         episode_achievements[worker] = np.logical_or(
                             episode_achievements[worker], ach)
@@ -1708,7 +1708,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
 
                     if online is not None:
                         achievements = episode_achievements.get(worker, np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_))
-                        achievement_depth = tran.get('achievement_depth', -1)
+                        achievement_depth = tran.get('log/achievement_depth', -1)
                         if isinstance(achievement_depth, np.ndarray):
                             achievement_depth = int(achievement_depth.item())
 
