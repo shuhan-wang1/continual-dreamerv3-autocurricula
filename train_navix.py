@@ -467,8 +467,8 @@ def load_config(args):
     tag = args.tag + str(args.seed)
     
     # Build overrides from args
-    # Default to 4 envs for JAX-based environments (not 64 from defaults)
-    num_envs = int(args.envs) if getattr(args, 'envs', None) is not None else 4
+    # Default to 64 envs for JAX-based environments
+    num_envs = int(args.envs) if getattr(args, 'envs', None) is not None else 64
     batch_length = getattr(args, 'batch_length', 32)
     run_overrides = {
         'logdir': f'{args.logdir}/navix_{tag}',
