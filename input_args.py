@@ -188,11 +188,11 @@ def parse_craftax_args(args=None):
     parser.add_argument('--replay_capacity', type=int, default=2e6)
     parser.add_argument('--batch_size', type=int, default=16,
                         help="mini-batch size (default 16, increase for better GPU utilization)")
-    parser.add_argument('--batch_length', type=int, default=32,
-                        help="sequence length for training batches (default 32, reduce to save VRAM)")
+    parser.add_argument('--batch_length', type=int, default=64,
+                        help="sequence length for training batches (default 64, reduce to save VRAM)")
     parser.add_argument('--train_ratio', type=float, default=None,
                         help="Training steps per env step (default: auto-scaled based on envs/batch_length)")
-    parser.add_argument('--model_size', type=str, default='12m',
+    parser.add_argument('--model_size', type=str, default='25m',
                         choices=['1m', '12m', '25m', '50m', '100m', '200m', '400m'],
                         help="Model size preset (default 12m for Craftax). "
                              "12m~2GB, 25m~4GB, 50m~8GB, 100m~16GB, 200m~32GB+")
@@ -302,7 +302,7 @@ def parse_navix_args(args=None):
 
     # Training
     parser.add_argument('--replay_capacity', type=int, default=2e6)
-    parser.add_argument('--batch_size', type=int, default=8,
+    parser.add_argument('--batch_size', type=int, default=16,
                         help="mini-batch size")
     parser.add_argument('--unbalanced_steps', type=list, default=None,
                         help="number of steps per each task")
