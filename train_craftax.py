@@ -592,8 +592,9 @@ class CraftaxWrapper(embodied.Env):
             'is_terminal': elements.Space(bool),
         })
         # Achievement tracking spaces (prefixed with log/ to exclude from agent training)
+        # Use int32 instead of bool to avoid JAX iota dtype issues in replay buffer
         if self._track_achievements:
-            spaces['log/achievements'] = elements.Space(np.bool_, (NUM_CRAFTAX_ACHIEVEMENTS,))
+            spaces['log/achievements'] = elements.Space(np.int32, (NUM_CRAFTAX_ACHIEVEMENTS,), 0, 2)
             spaces['log/achievement_depth'] = elements.Space(np.int32)
         return spaces
 
@@ -635,20 +636,22 @@ class CraftaxWrapper(embodied.Env):
         """Extract achievement vector from Craftax state.
 
         The state contains achievements as a boolean array.
+        Returns int32 to avoid JAX iota dtype issues with bool.
         """
         try:
             # Craftax stores achievements in state.achievements as a JAX array
             if hasattr(state, 'achievements'):
-                achievements = np.asarray(state.achievements, dtype=np.bool_)
+                # Convert to int32 to avoid JAX iota dtype issues
+                achievements = np.asarray(state.achievements, dtype=np.int32)
                 # Pad or truncate to expected size
                 if len(achievements) < NUM_CRAFTAX_ACHIEVEMENTS:
-                    padded = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
+                    padded = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.int32)
                     padded[:len(achievements)] = achievements
                     return padded
                 return achievements[:NUM_CRAFTAX_ACHIEVEMENTS]
         except Exception:
             pass
-        return np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
+        return np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.int32)
 
     def _compute_achievement_depth(self, achievements):
         """Compute max achievement tier from achievement vector."""
@@ -676,8 +679,9 @@ class CraftaxWrapper(embodied.Env):
         }
         if self._track_achievements:
             if achievements is None:
-                achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
-            result['log/achievements'] = achievements
+                achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.int32)
+            # Ensure achievements are int32 to avoid JAX iota dtype issues
+            result['log/achievements'] = np.asarray(achievements, dtype=np.int32)
             result['log/achievement_depth'] = np.int32(self._compute_achievement_depth(achievements))
         return result
 
@@ -832,24 +836,25 @@ class VectorCraftaxEnv:
             states: Vectorized Craftax states.
 
         Returns:
-            numpy array of shape (num_envs, NUM_CRAFTAX_ACHIEVEMENTS).
+            numpy array of shape (num_envs, NUM_CRAFTAX_ACHIEVEMENTS) as int32.
         """
         try:
             if hasattr(states, 'achievements'):
                 # states.achievements should be (num_envs, num_achievements)
-                achievements = np.asarray(states.achievements, dtype=np.bool_)
+                # Use int32 to avoid JAX iota dtype issues with bool
+                achievements = np.asarray(states.achievements, dtype=np.int32)
                 if achievements.ndim == 1:
                     # Single env case - expand
                     achievements = achievements[np.newaxis, :]
                 # Ensure correct shape
                 if achievements.shape[1] < NUM_CRAFTAX_ACHIEVEMENTS:
-                    padded = np.zeros((achievements.shape[0], NUM_CRAFTAX_ACHIEVEMENTS), dtype=np.bool_)
+                    padded = np.zeros((achievements.shape[0], NUM_CRAFTAX_ACHIEVEMENTS), dtype=np.int32)
                     padded[:, :achievements.shape[1]] = achievements
                     return padded
                 return achievements[:, :NUM_CRAFTAX_ACHIEVEMENTS]
         except Exception:
             pass
-        return np.zeros((self._num_envs, NUM_CRAFTAX_ACHIEVEMENTS), dtype=np.bool_)
+        return np.zeros((self._num_envs, NUM_CRAFTAX_ACHIEVEMENTS), dtype=np.int32)
 
     def _compute_achievement_depths_batch(self, achievements):
         """Compute achievement depths for a batch of achievement vectors.
@@ -886,8 +891,10 @@ class VectorCraftaxEnv:
             'is_last': elements.Space(bool),
             'is_terminal': elements.Space(bool),
         })
+        # Achievement tracking spaces (prefixed with log/ to exclude from agent training)
+        # Use int32 instead of bool to avoid JAX iota dtype issues in replay buffer
         if self._track_achievements:
-            spaces['log/achievements'] = elements.Space(np.bool_, (NUM_CRAFTAX_ACHIEVEMENTS,))
+            spaces['log/achievements'] = elements.Space(np.int32, (NUM_CRAFTAX_ACHIEVEMENTS,), 0, 2)
             spaces['log/achievement_depth'] = elements.Space(np.int32)
         return spaces
 
