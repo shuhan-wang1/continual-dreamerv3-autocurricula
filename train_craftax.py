@@ -39,6 +39,36 @@ import json
 from collections import deque
 
 
+# ============== Craftax Achievement Constants ==============
+# These must be defined before CraftaxMetrics class which uses them
+
+# Craftax achievement names (22 achievements across 5 tiers)
+# These match the Craftax Achievement enum
+CRAFTAX_ACHIEVEMENT_NAMES = [
+    'collect_wood', 'place_table', 'eat_cow', 'collect_sapling',
+    'collect_drink', 'make_wood_pickaxe', 'make_wood_sword',
+    'place_stone', 'collect_stone', 'place_furnace', 'collect_coal',
+    'collect_iron', 'make_stone_pickaxe', 'make_stone_sword',
+    'make_iron_pickaxe', 'make_iron_sword', 'collect_diamond',
+    'make_diamond_pickaxe', 'make_diamond_sword',
+    'defeat_zombie', 'defeat_skeleton', 'wake_up_boss',
+]
+
+# Achievement tiers for depth calculation
+ACHIEVEMENT_TIERS = {
+    'collect_wood': 0, 'place_table': 0, 'eat_cow': 0, 'collect_sapling': 0,
+    'collect_drink': 0, 'make_wood_pickaxe': 0, 'make_wood_sword': 0,
+    'place_stone': 1, 'collect_stone': 1, 'place_furnace': 1, 'collect_coal': 1,
+    'collect_iron': 1, 'make_stone_pickaxe': 1, 'make_stone_sword': 1,
+    'make_iron_pickaxe': 2, 'make_iron_sword': 2, 'collect_diamond': 2,
+    'make_diamond_pickaxe': 3, 'make_diamond_sword': 3,
+    'defeat_zombie': 4, 'defeat_skeleton': 4, 'wake_up_boss': 4,
+}
+
+NUM_CRAFTAX_ACHIEVEMENTS = len(CRAFTAX_ACHIEVEMENT_NAMES)
+NUM_ACHIEVEMENT_TIERS = 5  # Tiers 0-4
+
+
 class CraftaxMetrics:
     """Comprehensive metrics tracker for Craftax training.
 
@@ -454,32 +484,6 @@ except ImportError:
     CRAFTAX_AVAILABLE = False
     CRAFTAX_ACHIEVEMENTS_AVAILABLE = False
     print("Warning: Craftax not installed. Install with: pip install craftax")
-
-# Craftax achievement names (22 achievements across 5 tiers)
-# These match the Craftax Achievement enum
-CRAFTAX_ACHIEVEMENT_NAMES = [
-    'collect_wood', 'place_table', 'eat_cow', 'collect_sapling',
-    'collect_drink', 'make_wood_pickaxe', 'make_wood_sword',
-    'place_stone', 'collect_stone', 'place_furnace', 'collect_coal',
-    'collect_iron', 'make_stone_pickaxe', 'make_stone_sword',
-    'make_iron_pickaxe', 'make_iron_sword', 'collect_diamond',
-    'make_diamond_pickaxe', 'make_diamond_sword',
-    'defeat_zombie', 'defeat_skeleton', 'wake_up_boss',
-]
-
-# Achievement tiers for depth calculation
-ACHIEVEMENT_TIERS = {
-    'collect_wood': 0, 'place_table': 0, 'eat_cow': 0, 'collect_sapling': 0,
-    'collect_drink': 0, 'make_wood_pickaxe': 0, 'make_wood_sword': 0,
-    'place_stone': 1, 'collect_stone': 1, 'place_furnace': 1, 'collect_coal': 1,
-    'collect_iron': 1, 'make_stone_pickaxe': 1, 'make_stone_sword': 1,
-    'make_iron_pickaxe': 2, 'make_iron_sword': 2, 'collect_diamond': 2,
-    'make_diamond_pickaxe': 3, 'make_diamond_sword': 3,
-    'defeat_zombie': 4, 'defeat_skeleton': 4, 'wake_up_boss': 4,
-}
-
-NUM_CRAFTAX_ACHIEVEMENTS = len(CRAFTAX_ACHIEVEMENT_NAMES)
-NUM_ACHIEVEMENT_TIERS = 5
 
 
 # ============== Craftax Environment Wrapper ==============
