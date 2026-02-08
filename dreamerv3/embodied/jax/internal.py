@@ -19,8 +19,8 @@ def setup(
     jit=True,
     prealloc=False,
     mock_devices=0,
-    transfer_guard=False,
-    deterministic=False,
+    transfer_guard=True,
+    deterministic=True,
     autotune=1,
     gpuflags=True,
     tpuflags=False,
@@ -52,21 +52,45 @@ def setup(
     xlaflags.append(f'--xla_dump_to={xladump}')
     xlaflags.append('--xla_dump_hlo_as_long_text')
   if gpuflags and platform in ('gpu', 'cuda'):
-    # NOTE: Many flags below are multi-GPU / distributed optimizations.
-    # On single-GPU they provide no benefit and some (pipelined collectives,
-    # while_loop_double_buffering, latency_hiding_scheduler) are known to
-    # cause CUDA_ERROR_ILLEGAL_ADDRESS on certain JAX/CUDA versions.
-    # Only safe, single-GPU-compatible flags are enabled here.
-    xlaflags += [
-        '--xla_gpu_enable_triton_gemm=false',
-        '--xla_gpu_enable_triton_softmax_fusion=false',
-        '--xla_gpu_graph_level=0',
-        '--xla_gpu_enable_custom_fusions=false',
-        '--xla_gpu_enable_dynamic_slice_fusion=false',
-        '--xla_gpu_enable_while_loop_double_buffering=false',
-        '--xla_gpu_enable_xla_runtime_executable=false',
-        '--xla_gpu_enable_command_buffer=',
-    ]
+    # Detect single vs multi-GPU setup
+    # Multi-GPU optimizations (pipelining, latency hiding) cause
+    # CUDA_ERROR_ILLEGAL_ADDRESS on single-GPU setups.
+    try:
+      num_devices = len(jax.devices())
+    except:
+      num_devices = 1
+
+    if num_devices > 1:
+      # Multi-GPU: Use official distributed optimizations
+      xlaflags += [
+          '--xla_disable_hlo_passes=rematerialization',
+          '--xla_gpu_all_gather_combine_threshold_bytes=134217728',
+          '--xla_gpu_all_reduce_combine_threshold_bytes=134217728',
+          '--xla_gpu_enable_all_gather_combine_by_dim=false',
+          '--xla_gpu_enable_highest_priority_async_stream=true',
+          '--xla_gpu_enable_latency_hiding_scheduler=true',
+          '--xla_gpu_enable_pipelined_all_gather=true',
+          '--xla_gpu_enable_pipelined_all_reduce=true',
+          '--xla_gpu_enable_pipelined_reduce_scatter=true',
+          '--xla_gpu_enable_reduce_scatter_combine_by_dim=false',
+          '--xla_gpu_enable_triton_gemm=false',
+          '--xla_gpu_enable_triton_softmax_fusion=false',
+          '--xla_gpu_enable_while_loop_double_buffering=true',
+          '--xla_gpu_graph_level=0',
+          '--xla_gpu_reduce_scatter_combine_threshold_bytes=67108864',
+      ]
+    else:
+      # Single-GPU: Use conservative flags that avoid CUDA memory errors.
+      # The pipelining, async, and latency hiding optimizations are designed
+      # for multi-GPU communication and cause illegal memory access on single GPU.
+      xlaflags += [
+          '--xla_gpu_enable_triton_gemm=false',
+          '--xla_gpu_enable_triton_softmax_fusion=false',
+          '--xla_gpu_graph_level=0',
+          '--xla_gpu_enable_custom_fusions=false',
+          '--xla_gpu_enable_dynamic_slice_fusion=false',
+          '--xla_gpu_enable_while_loop_double_buffering=false',
+      ]
   if tpuflags and platform == 'tpu':
     xlaflags += [
         '--xla_disable_hlo_passes=rematerialization',
@@ -81,6 +105,7 @@ def setup(
         '--xla_enable_async_all_gather=true',
     ]
   if xlaflags:
+    # Append to existing XLA_FLAGS to preserve any flags set before setup()
     existing = os.environ.get('XLA_FLAGS', '')
     os.environ['XLA_FLAGS'] = (existing + ' ' + ' '.join(xlaflags)).strip()
 
@@ -275,21 +300,3 @@ def ckpt_fn(params, compile=True):
     gather_fn = gather_fn.compile()
     shard_fn = shard_fn.compile()
   return gather_fn, shard_fn
-
-
-# def node_mesh(mesh, mp_dims=('t',)):
-#   n_mp = math.prod(mesh.shape[d] for d in mp_dims)
-#   n_local = mesh.local_mesh.size
-#   n_mp_nodes = max(1, n_mp // n_local)
-#   total_nodes = mesh.size // n_local
-#   n_data_nodes = total_nodes // n_mp_nodes
-#   assert n_data_nodes * n_mp_nodes == total_nodes
-#   data_node_rank, model_node_rank = divmod(jax.process_index(), n_mp_nodes)
-#   data_node_size, model_node_size = n_data_nodes, n_mp_nodes
-#   return {
-#       'data_node_rank': data_node_rank,
-#       'data_node_size': data_node_size,
-#       'model_node_rank': model_node_rank,
-#       'model_node_size': model_node_size,
-#   }
-
