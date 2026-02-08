@@ -83,7 +83,7 @@ defaults:
     coordinator_address: ''
     gpuflags: True
     tpuflags: False
-    transfer_guard: True
+    transfer_guard: False
     deterministic: True
 
   agent:
