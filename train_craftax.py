@@ -11,19 +11,19 @@ from functools import partial as bind
 
 # CRITICAL: Must set BEFORE importing jax (or any lib that imports jax).
 # JAX reads this at import time and will pre-allocate 90% of GPU memory otherwise.
-os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.85'
+# Use JAX's default BFC allocator with preallocation to avoid memory fragmentation.
+# The 'platform' allocator causes CUDA_ERROR_ILLEGAL_ADDRESS after ~20k steps
+# due to severe fragmentation from repeated cudaMalloc/cudaFree calls.
+os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'true'
+os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.80'
 
-# Fix CUDA kernel launch failure (loop_dynamic_update_slice_fusion)
-# Disable problematic XLA fusions that cause CUDA_ERROR_LAUNCH_FAILED
-os.environ['XLA_FLAGS'] = (
-    '--xla_gpu_enable_custom_fusions=false '
-    '--xla_gpu_all_reduce_combine_threshold_bytes=134217728 '
-)
+# NOTE: Do NOT set XLA_FLAGS here — internal.setup() in DreamerV3 will
+# overwrite it completely.  Instead, we patch internal.setup() to preserve
+# our flags (see below).
 
 # Maximize GPU/CPU utilization
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Reduce TF logging noise
-os.environ['XLA_PYTHON_CLIENT_ALLOCATOR'] = 'platform'  # Use CUDA's native allocator for less fragmentation
+# Do NOT set XLA_PYTHON_CLIENT_ALLOCATOR='platform' — it causes memory fragmentation
 
 # Add dreamerv3 to path
 root = pathlib.Path(__file__).parent
@@ -42,6 +42,12 @@ import jax.numpy as jnp
 
 # Allow implicit host-to-device transfers (needed for passing Python scalars to JIT functions)
 jax.config.update("jax_transfer_guard", "allow")
+
+# Fix CUDA kernel launch failure: disable problematic XLA custom fusions.
+# Set via XLA_FLAGS env var BEFORE internal.setup() runs (which now appends).
+os.environ['XLA_FLAGS'] = os.environ.get('XLA_FLAGS', '') + (
+    ' --xla_gpu_enable_custom_fusions=false'
+)
 
 # Performance: enable persistent compilation cache to avoid re-compiling JIT on restart
 jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
