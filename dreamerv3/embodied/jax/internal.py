@@ -64,6 +64,8 @@ def setup(
         '--xla_gpu_enable_custom_fusions=false',
         '--xla_gpu_enable_dynamic_slice_fusion=false',
         '--xla_gpu_enable_while_loop_double_buffering=false',
+        '--xla_gpu_enable_xla_runtime_executable=false',
+        '--xla_gpu_enable_command_buffer=',
     ]
   if tpuflags and platform == 'tpu':
     xlaflags += [
