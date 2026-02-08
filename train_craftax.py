@@ -1201,21 +1201,14 @@ def make_replay(config, directory, args=None):
     - FIFO eviction (default)
     - Reservoir eviction (random eviction for continual learning)
 
-    Note: The 'eviction' parameter is only available in the continuous enhanced version.
+    Note: Custom selectors and 'eviction' parameter are only available in the continuous enhanced version.
+    The original DreamerV3 only supports default uniform sampling.
     """
     length = config.batch_length + config.replay_context
     capacity = int(config.replay.size)
 
-    # Create selector based on args
-    selector = None
-    eviction = 'fifo'
+    # Check which version we're using
     use_original = getattr(args, 'use_original_dreamer', False) if args is not None else False
-
-    if args is not None:
-        selector = make_selector(args, capacity, seed=config.seed)
-        # Use reservoir eviction if flag is set
-        if getattr(args, 'reservoir_sampling', False):
-            eviction = 'reservoir'
 
     # Build replay kwargs based on DreamerV3 version
     replay_kwargs = {
@@ -1224,12 +1217,28 @@ def make_replay(config, directory, args=None):
         'directory': directory,
         'online': config.replay.online,
         'chunksize': config.replay.chunksize,
-        'selector': selector,
     }
 
-    # Only add 'eviction' parameter for continuous enhanced version
+    # Only use custom selectors and eviction with continuous enhanced version
     if not use_original:
+        # Create selector based on args
+        selector = None
+        eviction = 'fifo'
+
+        if args is not None:
+            selector = make_selector(args, capacity, seed=config.seed)
+            # Use reservoir eviction if flag is set
+            if getattr(args, 'reservoir_sampling', False):
+                eviction = 'reservoir'
+
+        replay_kwargs['selector'] = selector
         replay_kwargs['eviction'] = eviction
+    else:
+        # Original DreamerV3: use default selector (uniform) and no eviction parameter
+        if args is not None and getattr(args, 'reservoir_sampling', False):
+            print("Warning: --reservoir_sampling is not supported with --use_original_dreamer")
+        if args is not None and getattr(args, 'recent_frac', 0.0) > 0:
+            print("Warning: --recent_frac sampling is not supported with --use_original_dreamer")
 
     return embodied.replay.Replay(**replay_kwargs)
 
