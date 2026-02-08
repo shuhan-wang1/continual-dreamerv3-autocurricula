@@ -52,30 +52,17 @@ def setup(
     xlaflags.append(f'--xla_dump_to={xladump}')
     xlaflags.append('--xla_dump_hlo_as_long_text')
   if gpuflags and platform in ('gpu', 'cuda'):
-    # xla_flags.append('--xla_gpu_enable_latency_hiding_scheduler=true')
-    # xla_flags.append('--xla_gpu_enable_async_all_gather=true')
-    # xla_flags.append('--xla_gpu_enable_async_reduce_scatter=true')
-    # xla_flags.append('--xla_gpu_enable_triton_gemm=false')
-    # os.environ['CUDA_DEVICE_MAX_CONNECTIONS'] = '1'
-    # os.environ['NCCL_IB_SL'] = '1'
-    # os.environ['NCCL_NVLS_ENABLE'] = '0'
-    # os.environ['CUDA_MODULE_LOADING'] = 'EAGER'
+    # NOTE: Many flags below are multi-GPU / distributed optimizations.
+    # On single-GPU they provide no benefit and some (pipelined collectives,
+    # while_loop_double_buffering, latency_hiding_scheduler) are known to
+    # cause CUDA_ERROR_ILLEGAL_ADDRESS on certain JAX/CUDA versions.
+    # Only safe, single-GPU-compatible flags are enabled here.
     xlaflags += [
-        '--xla_disable_hlo_passes=rematerialization',
-        '--xla_gpu_all_gather_combine_threshold_bytes=134217728',
-        '--xla_gpu_all_reduce_combine_threshold_bytes=134217728',
-        '--xla_gpu_enable_all_gather_combine_by_dim=false',
-        '--xla_gpu_enable_highest_priority_async_stream=true',
-        '--xla_gpu_enable_latency_hiding_scheduler=true',
-        '--xla_gpu_enable_pipelined_all_gather=true',
-        '--xla_gpu_enable_pipelined_all_reduce=true',
-        '--xla_gpu_enable_pipelined_reduce_scatter=true',
-        '--xla_gpu_enable_reduce_scatter_combine_by_dim=false',
         '--xla_gpu_enable_triton_gemm=false',
         '--xla_gpu_enable_triton_softmax_fusion=false',
-        '--xla_gpu_enable_while_loop_double_buffering=true',
         '--xla_gpu_graph_level=0',
-        '--xla_gpu_reduce_scatter_combine_threshold_bytes=67108864',
+        '--xla_gpu_enable_custom_fusions=false',
+        '--xla_gpu_enable_while_loop_double_buffering=false',
     ]
   if tpuflags and platform == 'tpu':
     xlaflags += [
