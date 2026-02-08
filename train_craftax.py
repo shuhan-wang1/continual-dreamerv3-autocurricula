@@ -1312,6 +1312,7 @@ def load_config(args):
         'jax': {
             'prealloc': True,   # Use BFC allocator with preallocation to prevent fragmentation
             'platform': 'gpu',  # Must be 'gpu' (not 'cuda') for internal.setup() GPU flags
+            'gpuflags': False,  # Disable all XLA GPU optimizations to prevent CUDA_ERROR_ILLEGAL_ADDRESS
         },
         'replay': {
             'size': int(args.replay_capacity),
@@ -1590,6 +1591,10 @@ def train_single(make_env, config, args, env_name=None):
                 log_replay_diagnostics_fn(replay, step.value)
         if step.value % 10000 < 10:
             cp.save()
+        # Periodically clear JAX caches to prevent memory accumulation
+        # that causes CUDA_ERROR_ILLEGAL_ADDRESS after ~15k steps
+        if step.value % 5000 == 0 and step.value > 0:
+            jax.clear_caches()
 
     cp.save()
     if online is not None:
@@ -1875,6 +1880,9 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                         log_replay_diagnostics_fn(replay, total_step.value)
                 if step.value % 10000 < 10:
                     cp.save()
+                # Periodically clear JAX caches to prevent memory accumulation
+                if total_step.value % 5000 == 0 and total_step.value > 0:
+                    jax.clear_caches()
 
             driver.close()
             task_id += 1
