@@ -246,6 +246,10 @@ def parse_craftax_args(args=None):
     parser.add_argument('--ref_metrics_dir', type=str, default=None,
                         help='Directory containing per-task ref_metrics JSON files.')
 
+    # DreamerV3 version selection
+    parser.add_argument('--use_original_dreamer', default=False, action='store_true',
+                        help='Use original DreamerV3 from dreamerv3-main folder instead of continuous enhanced version.')
+
     args = parser.parse_known_args(args=args)[0]
     return args
 

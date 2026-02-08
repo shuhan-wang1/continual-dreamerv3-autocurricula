@@ -25,10 +25,22 @@ os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.80'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Reduce TF logging noise
 # Do NOT set XLA_PYTHON_CLIENT_ALLOCATOR='platform' — it causes memory fragmentation
 
-# Add dreamerv3 to path
+# Parse arguments early to determine which DreamerV3 version to use
 root = pathlib.Path(__file__).parent
-sys.path.insert(0, str(root / 'dreamerv3'))
-sys.path.insert(0, str(root / 'dreamerv3' / 'dreamerv3'))
+# Import input_args before setting dreamerv3 path (it doesn't depend on dreamerv3)
+sys.path.insert(0, str(root))
+from input_args import parse_craftax_args
+_args = parse_craftax_args()
+
+# Add dreamerv3 to path based on --use_original_dreamer flag
+if _args.use_original_dreamer:
+    print("Using ORIGINAL DreamerV3 from dreamerv3-main/")
+    sys.path.insert(0, str(root / 'dreamerv3-main'))
+    sys.path.insert(0, str(root / 'dreamerv3-main' / 'dreamerv3'))
+else:
+    print("Using CONTINUOUS ENHANCED DreamerV3 from dreamerv3/")
+    sys.path.insert(0, str(root / 'dreamerv3'))
+    sys.path.insert(0, str(root / 'dreamerv3' / 'dreamerv3'))
 
 import ast
 import elements
@@ -59,7 +71,6 @@ jax.config.update("jax_debug_nans", False)
 jax.config.update("jax_disable_jit", False)
 
 from dreamerv3.agent import Agent
-from input_args import parse_craftax_args
 
 import json
 from collections import deque
