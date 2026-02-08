@@ -51,7 +51,7 @@ def setup(
     elements.Path(xladump).mkdir()
     xlaflags.append(f'--xla_dump_to={xladump}')
     xlaflags.append('--xla_dump_hlo_as_long_text')
-  if gpuflags and platform == 'gpu':
+  if gpuflags and platform in ('gpu', 'cuda'):
     # xla_flags.append('--xla_gpu_enable_latency_hiding_scheduler=true')
     # xla_flags.append('--xla_gpu_enable_async_all_gather=true')
     # xla_flags.append('--xla_gpu_enable_async_reduce_scatter=true')

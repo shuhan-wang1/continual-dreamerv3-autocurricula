@@ -241,6 +241,9 @@ class Agent(embodied.Agent):
     if self.jaxcfg.enable_policy:
       with self.policy_lock:
         if self.pending_sync:
+          # Wait for any in-flight computations using old params to finish
+          # before deleting them; otherwise we get CUDA_ERROR_ILLEGAL_ADDRESS.
+          jax.tree.map(lambda x: x.block_until_ready(), self.policy_params)
           old = self.policy_params
           self.policy_params = self.pending_sync
           jax.tree.map(lambda x: x.delete(), old)
@@ -281,6 +284,8 @@ class Agent(embodied.Agent):
             {k: allo[k] for k in self.policy_keys},
             self.policy_params_sharding)
       else:
+        # Ensure no in-flight computation references these before deletion
+        jax.tree.map(lambda x: x.block_until_ready(), allo)
         jax.tree.map(lambda x: x.delete(), allo)
 
     return_outs = {}

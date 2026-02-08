@@ -43,10 +43,13 @@ import jax.numpy as jnp
 # Allow implicit host-to-device transfers (needed for passing Python scalars to JIT functions)
 jax.config.update("jax_transfer_guard", "allow")
 
-# Fix CUDA kernel launch failure: disable problematic XLA custom fusions.
-# Set via XLA_FLAGS env var BEFORE internal.setup() runs (which now appends).
+# Fix CUDA kernel launch failure & CUDA_ERROR_ILLEGAL_ADDRESS:
+# - Disable custom fusions that generate bad kernels
+# - Disable while_loop_double_buffering (known to cause illegal memory access)
+# These are set BEFORE internal.setup() runs (which now appends to XLA_FLAGS).
 os.environ['XLA_FLAGS'] = os.environ.get('XLA_FLAGS', '') + (
     ' --xla_gpu_enable_custom_fusions=false'
+    ' --xla_gpu_enable_while_loop_double_buffering=false'
 )
 
 # Performance: enable persistent compilation cache to avoid re-compiling JIT on restart
@@ -1305,7 +1308,8 @@ def load_config(args):
             'debug': False,  # Disable debug mode for performance
         },
         'jax': {
-            'prealloc': False,  # Allocate GPU memory on demand, not all at once
+            'prealloc': True,   # Use BFC allocator with preallocation to prevent fragmentation
+            'platform': 'gpu',  # Must be 'gpu' (not 'cuda') for internal.setup() GPU flags
         },
         'replay': {
             'size': int(args.replay_capacity),
