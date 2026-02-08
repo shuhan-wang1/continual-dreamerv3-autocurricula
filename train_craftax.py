@@ -1200,6 +1200,8 @@ def make_replay(config, directory, args=None):
     Supports:
     - FIFO eviction (default)
     - Reservoir eviction (random eviction for continual learning)
+
+    Note: The 'eviction' parameter is only available in the continuous enhanced version.
     """
     length = config.batch_length + config.replay_context
     capacity = int(config.replay.size)
@@ -1207,21 +1209,29 @@ def make_replay(config, directory, args=None):
     # Create selector based on args
     selector = None
     eviction = 'fifo'
+    use_original = getattr(args, 'use_original_dreamer', False) if args is not None else False
+
     if args is not None:
         selector = make_selector(args, capacity, seed=config.seed)
         # Use reservoir eviction if flag is set
         if getattr(args, 'reservoir_sampling', False):
             eviction = 'reservoir'
 
-    return embodied.replay.Replay(
-        length=length,
-        capacity=capacity,
-        directory=directory,
-        online=config.replay.online,
-        chunksize=config.replay.chunksize,
-        selector=selector,
-        eviction=eviction,
-    )
+    # Build replay kwargs based on DreamerV3 version
+    replay_kwargs = {
+        'length': length,
+        'capacity': capacity,
+        'directory': directory,
+        'online': config.replay.online,
+        'chunksize': config.replay.chunksize,
+        'selector': selector,
+    }
+
+    # Only add 'eviction' parameter for continuous enhanced version
+    if not use_original:
+        replay_kwargs['eviction'] = eviction
+
+    return embodied.replay.Replay(**replay_kwargs)
 
 
 def make_logger(config, step):
