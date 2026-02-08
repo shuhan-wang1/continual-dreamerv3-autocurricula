@@ -62,6 +62,7 @@ def setup(
         '--xla_gpu_enable_triton_softmax_fusion=false',
         '--xla_gpu_graph_level=0',
         '--xla_gpu_enable_custom_fusions=false',
+        '--xla_gpu_enable_dynamic_slice_fusion=false',
         '--xla_gpu_enable_while_loop_double_buffering=false',
     ]
   if tpuflags and platform == 'tpu':
