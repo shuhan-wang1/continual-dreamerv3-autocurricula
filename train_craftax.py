@@ -15,7 +15,7 @@ from functools import partial as bind
 # The 'platform' allocator causes CUDA_ERROR_ILLEGAL_ADDRESS after ~20k steps
 # due to severe fragmentation from repeated cudaMalloc/cudaFree calls.
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'true'
-os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.90'
+os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.70'
 
 # NOTE: Do NOT set XLA_FLAGS here — internal.setup() in DreamerV3 will
 # overwrite it completely.  Instead, we patch internal.setup() to preserve
@@ -1350,19 +1350,19 @@ def load_config(args):
             'platform': 'gpu',  # Must be 'gpu' (not 'cuda') for internal.setup() GPU flags
         },
     }
-    run_overrides['replay'] = {'size': int(args.replay_capacity)}
+    # Build replay overrides: same size for both versions, but fix fracs for baseline.
+    # IMPORTANT: must be a single dict — elements.Config.update does shallow replace
+    # per top-level key, so a second update({'replay': ...}) would wipe replay.size etc.
+    replay_overrides = {'size': int(args.replay_capacity)}
+    if use_original:
+        # Original DreamerV3 baseline: pure uniform sampling (no 50:50 recency bias)
+        replay_overrides['fracs'] = {'uniform': 1.0, 'priority': 0.0, 'recency': 0.0}
+    run_overrides['replay'] = replay_overrides
     if getattr(args, 'eval_envs', None) is not None:
         run_overrides['run']['eval_envs'] = int(args.eval_envs)
     config = config.update(run_overrides)
 
-    # --- Architectural-only overrides for original DreamerV3 baseline ---
-    # Only change what the CL innovations introduce; keep everything else identical.
     if use_original:
-        config = config.update({
-            'replay': {
-                'fracs': {'uniform': 1.0, 'priority': 0.0, 'recency': 0.0},
-            },
-        })
         print('=== Original DreamerV3 Baseline Config Verification ===')
         print(f'  replay.fracs:    {dict(config.replay.fracs)}  (uniform only)')
         print(f'  replay.size:     {config.replay.size}')
