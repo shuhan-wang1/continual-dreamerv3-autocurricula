@@ -1,0 +1,84 @@
+{
+  "mean_return": 4.22999998934567,
+  "success_rate": 1.0,
+  "max_achievement_depth": -1.0,
+  "personal_best_depth": -1,
+  "per_task_return_mean": [
+    4.22999998934567
+  ],
+  "per_task_success_rate": [
+    1.0
+  ],
+  "per_task_max_return": [
+    8.100000008940697
+  ],
+  "per_task_max_depth": [
+    -1
+  ],
+  "per_task_episodes": [
+    1782
+  ],
+  "per_task_achievement_rates": [
+    [
+      0.8999999761581421,
+      0.6800000071525574,
+      0.10000000149011612,
+      1.0,
+      0.5,
+      0.0,
+      0.0,
+      0.9700000286102295,
+      0.009999999776482582,
+      0.0,
+      0.0,
+      0.009999999776482582,
+      0.0,
+      0.0,
+      0.0,
+      0.9399999976158142,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  ],
+  "per_task_lifetime_mean": [
+    3.192031413450519
+  ],
+  "per_task_aggregate_forgetting": [
+    0.03318182023411447
+  ],
+  "per_task_frontier_rate": [
+    0.0
+  ],
+  "num_tasks": 1,
+  "window_size": 100,
+  "success_threshold": 1.0,
+  "num_achievements": 22,
+  "achievement_names": [
+    "collect_wood",
+    "place_table",
+    "eat_cow",
+    "collect_sapling",
+    "collect_drink",
+    "make_wood_pickaxe",
+    "make_wood_sword",
+    "place_stone",
+    "collect_stone",
+    "place_furnace",
+    "collect_coal",
+    "collect_iron",
+    "make_stone_pickaxe",
+    "make_stone_sword",
+    "make_iron_pickaxe",
+    "make_iron_sword",
+    "collect_diamond",
+    "make_diamond_pickaxe",
+    "make_diamond_sword",
+    "defeat_zombie",
+    "defeat_skeleton",
+    "wake_up_boss"
+  ]
+}

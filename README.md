@@ -76,23 +76,16 @@ You can also use the environment-specific scripts directly:
 ## Craftax Training
 
 ```sh
-# Single environment training
-python train_craftax.py --env 0 --steps 500000 --seed 42 --tag craftax_single
-
-# Continual learning (multiple tasks)
-python train_craftax.py --cl --num_tasks 2 --num_task_repeats 3 --steps 250000 --tag craftax_cl
-
-# Small configuration for testing
-python train_craftax.py --cl --cl_small --num_tasks 2 --steps 100000 --tag craftax_small
 
 python train.py --env_type craftax \
-    --cl \
     --steps 500000 \
     --batch_length 64 \
     --batch_size 16 \
     --envs 16 \
     --model_size 25m \
-    --tag "4090_optimal"
+    --tag "4090_optimal"\
+    --seed 42\
+    --use_original_dreamer # use purely dreamerv3
 ```
 
 ## NAVIX Training (MiniGrid replacement)

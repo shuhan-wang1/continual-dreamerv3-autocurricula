@@ -15,7 +15,7 @@ from functools import partial as bind
 # The 'platform' allocator causes CUDA_ERROR_ILLEGAL_ADDRESS after ~20k steps
 # due to severe fragmentation from repeated cudaMalloc/cudaFree calls.
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'true'
-os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.80'
+os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.90'
 
 # NOTE: Do NOT set XLA_FLAGS here — internal.setup() in DreamerV3 will
 # overwrite it completely.  Instead, we patch internal.setup() to preserve
@@ -1109,9 +1109,10 @@ def make_agent(config, env, args=None):
     notlog = lambda k: not k.startswith('log/')
     obs_space = {k: v for k, v in env.obs_space.items() if notlog(k)}
     act_space = {k: v for k, v in env.act_space.items() if k != 'reset'}
-    # Build P2E config from args
+    # Build P2E config from args (only for enhanced version; original Agent has no P2E support)
     p2e_config = {}
-    if args is not None:
+    use_original = getattr(args, 'use_original_dreamer', False) if args is not None else False
+    if args is not None and not use_original:
         p2e_config = {
             'plan2explore': getattr(args, 'plan2explore', False),
             'disag_models': getattr(args, 'disag_models', 10),
@@ -1285,24 +1286,34 @@ def _get_size_overrides(size_preset):
 
 
 def load_config(args):
-    """Load DreamerV3 config from YAML and merge with args."""
+    """Load DreamerV3 config from YAML and merge with args.
+
+    All non-architectural hyperparameters (replay size, train_ratio, envs,
+    batch_size, etc.) are kept IDENTICAL between enhanced and original so
+    that the only differences are the CL innovations:
+      - Replay sampling strategy (50:50 vs uniform)
+      - Plan2Explore exploration (on vs off)
+      - Reservoir eviction (on vs off / FIFO)
+    """
+    use_original = getattr(args, 'use_original_dreamer', False)
+    # Always load enhanced config so infrastructure params are identical.
     configs_path = root / 'dreamerv3' / 'dreamerv3' / 'configs.yaml'
     configs = yaml.YAML(typ='safe').load(configs_path.read_text())
     config = elements.Config(configs['defaults'])
-    
+
     # Apply model size preset by manually overriding nested agent params.
     # The default config is size200m (~200M params) which will OOM on <=32GB GPUs.
     size_preset = getattr(args, 'model_size', '12m')
     size_overrides = _get_size_overrides(size_preset)
     config = config.update(size_overrides)
     print(f'Using model size preset: size{size_preset}')
-    
+
     # Apply size preset if specified
     if args.cl_small and 'small' in configs:
         config = config.update(configs['small'])
-    
+
     tag = args.tag + str(args.seed)
-    
+
     # Build overrides from args
     # Default to 64 envs for JAX-based environments
     num_envs = int(args.envs) if getattr(args, 'envs', None) is not None else 64
@@ -1338,13 +1349,30 @@ def load_config(args):
             'prealloc': True,   # Use BFC allocator with preallocation to prevent fragmentation
             'platform': 'gpu',  # Must be 'gpu' (not 'cuda') for internal.setup() GPU flags
         },
-        'replay': {
-            'size': int(args.replay_capacity),
-        },
     }
+    run_overrides['replay'] = {'size': int(args.replay_capacity)}
     if getattr(args, 'eval_envs', None) is not None:
         run_overrides['run']['eval_envs'] = int(args.eval_envs)
     config = config.update(run_overrides)
+
+    # --- Architectural-only overrides for original DreamerV3 baseline ---
+    # Only change what the CL innovations introduce; keep everything else identical.
+    if use_original:
+        config = config.update({
+            'replay': {
+                'fracs': {'uniform': 1.0, 'priority': 0.0, 'recency': 0.0},
+            },
+        })
+        print('=== Original DreamerV3 Baseline Config Verification ===')
+        print(f'  replay.fracs:    {dict(config.replay.fracs)}  (uniform only)')
+        print(f'  replay.size:     {config.replay.size}')
+        print(f'  replay_context:  {config.replay_context}')
+        print(f'  run.train_ratio: {config.run.train_ratio}')
+        print(f'  run.envs:        {config.run.envs}')
+        print(f'  P2E:             disabled (original Agent has no P2E)')
+        print(f'  Eviction:        FIFO (no reservoir sampling)')
+        print('=======================================================')
+
     return config, tag
 
 
