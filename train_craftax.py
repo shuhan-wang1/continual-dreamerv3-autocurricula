@@ -77,32 +77,11 @@ from collections import deque
 
 
 # ============== Craftax Achievement Constants ==============
-# These must be defined before CraftaxMetrics class which uses them
-
-# Craftax achievement names (22 achievements across 5 tiers)
-# These match the Craftax Achievement enum
-CRAFTAX_ACHIEVEMENT_NAMES = [
-    'collect_wood', 'place_table', 'eat_cow', 'collect_sapling',
-    'collect_drink', 'make_wood_pickaxe', 'make_wood_sword',
-    'place_stone', 'collect_stone', 'place_furnace', 'collect_coal',
-    'collect_iron', 'make_stone_pickaxe', 'make_stone_sword',
-    'make_iron_pickaxe', 'make_iron_sword', 'collect_diamond',
-    'make_diamond_pickaxe', 'make_diamond_sword',
-    'defeat_zombie', 'defeat_skeleton', 'wake_up_boss',
-]
-
-# Achievement tiers for depth calculation
-ACHIEVEMENT_TIERS = {
-    'collect_wood': 0, 'place_table': 0, 'eat_cow': 0, 'collect_sapling': 0,
-    'collect_drink': 0, 'make_wood_pickaxe': 0, 'make_wood_sword': 0,
-    'place_stone': 1, 'collect_stone': 1, 'place_furnace': 1, 'collect_coal': 1,
-    'collect_iron': 1, 'make_stone_pickaxe': 1, 'make_stone_sword': 1,
-    'make_iron_pickaxe': 2, 'make_iron_sword': 2, 'collect_diamond': 2,
-    'make_diamond_pickaxe': 3, 'make_diamond_sword': 3,
-    'defeat_zombie': 4, 'defeat_skeleton': 4, 'wake_up_boss': 4,
-}
-
-NUM_CRAFTAX_ACHIEVEMENTS = len(CRAFTAX_ACHIEVEMENT_NAMES)
+# Populated from craftax.craftax.constants.Achievement after import.
+# Placeholders here so CraftaxMetrics can be defined before the import.
+CRAFTAX_ACHIEVEMENT_NAMES = []
+ACHIEVEMENT_TIERS = {}
+NUM_CRAFTAX_ACHIEVEMENTS = 0
 NUM_ACHIEVEMENT_TIERS = 5  # Tiers 0-4
 
 
@@ -128,9 +107,14 @@ class CraftaxMetrics:
         success_threshold: float = 1.0,
         jsonl_name: str = 'online_metrics.jsonl',
         summary_name: str = 'metrics_summary.json',
-        num_achievements: int = NUM_CRAFTAX_ACHIEVEMENTS,
-        num_tiers: int = NUM_ACHIEVEMENT_TIERS,
+        num_achievements: int = None,
+        num_tiers: int = None,
     ) -> None:
+        # Resolve at call time so the globals set after Craftax import are used
+        if num_achievements is None:
+            num_achievements = NUM_CRAFTAX_ACHIEVEMENTS
+        if num_tiers is None:
+            num_tiers = NUM_ACHIEVEMENT_TIERS
         self.logdir = logdir
         os.makedirs(logdir, exist_ok=True)
         self.num_tasks = int(num_tasks)
@@ -522,6 +506,63 @@ except ImportError:
     CRAFTAX_ACHIEVEMENTS_AVAILABLE = False
     print("Warning: Craftax not installed. Install with: pip install craftax")
 
+# Build achievement constants from the actual Craftax enum (avoids index mismatch)
+if CRAFTAX_ACHIEVEMENTS_AVAILABLE:
+    _sorted_achievements = sorted(CraftaxAchievement, key=lambda a: a.value)
+    CRAFTAX_ACHIEVEMENT_NAMES = [a.name.lower() for a in _sorted_achievements]
+    NUM_CRAFTAX_ACHIEVEMENTS = len(CRAFTAX_ACHIEVEMENT_NAMES)
+
+    # Tier assignments for all 67 achievements
+    _TIER_0 = {  # Basic: surface gathering, wood tools, plants
+        'collect_wood', 'place_table', 'eat_cow', 'collect_sapling',
+        'collect_drink', 'make_wood_pickaxe', 'make_wood_sword',
+        'place_plant', 'eat_plant',
+    }
+    _TIER_1 = {  # Stone level: basic combat, stone tools, furnace
+        'defeat_zombie', 'collect_stone', 'place_stone',
+        'defeat_skeleton', 'make_stone_pickaxe', 'make_stone_sword',
+        'wake_up', 'place_furnace', 'collect_coal',
+        'eat_bat', 'eat_snail',
+    }
+    _TIER_2 = {  # Iron level: iron/diamond tools, arrows, torches, bow, armour
+        'collect_iron', 'make_iron_pickaxe', 'make_iron_sword',
+        'make_iron_armour', 'make_arrow', 'make_torch', 'place_torch',
+        'make_diamond_sword', 'make_diamond_armour',
+        'find_bow', 'fire_bow',
+    }
+    _TIER_3 = {  # Dungeon exploration, mid-tier enemies, magic, gems, diamond pickaxe
+        'collect_diamond', 'make_diamond_pickaxe',
+        'collect_sapphire', 'collect_ruby',
+        'enter_gnomish_mines', 'enter_dungeon', 'enter_sewers',
+        'enter_vault', 'enter_troll_mines',
+        'defeat_gnome_warrior', 'defeat_gnome_archer',
+        'defeat_orc_solider', 'defeat_orc_mage',
+        'defeat_lizard', 'defeat_kobold',
+        'learn_fireball', 'cast_fireball', 'learn_iceball', 'cast_iceball',
+        'open_chest', 'drink_potion', 'enchant_sword', 'enchant_armour',
+    }
+    _TIER_4 = {  # Endgame: deep floors, bosses, necromancer
+        'enter_fire_realm', 'enter_ice_realm', 'enter_graveyard',
+        'defeat_troll', 'defeat_deep_thing', 'defeat_pigman',
+        'defeat_fire_elemental', 'defeat_frost_troll', 'defeat_ice_elemental',
+        'defeat_knight', 'defeat_archer',
+        'damage_necromancer', 'defeat_necromancer',
+    }
+    ACHIEVEMENT_TIERS = {}
+    for name in CRAFTAX_ACHIEVEMENT_NAMES:
+        if name in _TIER_0:
+            ACHIEVEMENT_TIERS[name] = 0
+        elif name in _TIER_1:
+            ACHIEVEMENT_TIERS[name] = 1
+        elif name in _TIER_2:
+            ACHIEVEMENT_TIERS[name] = 2
+        elif name in _TIER_3:
+            ACHIEVEMENT_TIERS[name] = 3
+        elif name in _TIER_4:
+            ACHIEVEMENT_TIERS[name] = 4
+        else:
+            ACHIEVEMENT_TIERS[name] = 3  # default unknown to tier 3
+
 
 # ============== Craftax Environment Wrapper ==============
 class CraftaxWrapper(embodied.Env):
@@ -672,20 +713,18 @@ class CraftaxWrapper(embodied.Env):
     def _extract_achievements_from_state(self, state):
         """Extract achievement vector from Craftax state.
 
-        The state contains achievements as a boolean array.
-        Returns int32 to avoid JAX iota dtype issues with bool.
+        The state contains achievements as a boolean array indexed by
+        Achievement enum value. Returns int32 to avoid JAX iota dtype issues.
         """
         try:
-            # Craftax stores achievements in state.achievements as a JAX array
             if hasattr(state, 'achievements'):
-                # Convert to int32 to avoid JAX iota dtype issues
                 achievements = np.asarray(state.achievements, dtype=np.int32)
-                # Pad or truncate to expected size
+                # Safety: pad if env array is smaller than expected
                 if len(achievements) < NUM_CRAFTAX_ACHIEVEMENTS:
                     padded = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.int32)
                     padded[:len(achievements)] = achievements
                     return padded
-                return achievements[:NUM_CRAFTAX_ACHIEVEMENTS]
+                return achievements
         except Exception:
             pass
         return np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.int32)
@@ -883,12 +922,12 @@ class VectorCraftaxEnv:
                 if achievements.ndim == 1:
                     # Single env case - expand
                     achievements = achievements[np.newaxis, :]
-                # Ensure correct shape
+                # Safety: pad if env array is smaller than expected
                 if achievements.shape[1] < NUM_CRAFTAX_ACHIEVEMENTS:
                     padded = np.zeros((achievements.shape[0], NUM_CRAFTAX_ACHIEVEMENTS), dtype=np.int32)
                     padded[:, :achievements.shape[1]] = achievements
                     return padded
-                return achievements[:, :NUM_CRAFTAX_ACHIEVEMENTS]
+                return achievements
         except Exception:
             pass
         return np.zeros((self._num_envs, NUM_CRAFTAX_ACHIEVEMENTS), dtype=np.int32)
@@ -1451,7 +1490,7 @@ def train_single(make_env, config, args, env_name=None):
     episode_achievements = {}  # Track achievements per worker
 
     # Shared state for training metrics
-    training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0}
+    training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0, 'latest_td_error': 0.0}
 
     def logfn(tran, worker):
         episode = episodes[worker]
@@ -1491,6 +1530,7 @@ def train_single(make_env, config, args, env_name=None):
                     length=int(length),
                     achievements=achievements,
                     achievement_depth=int(achievement_depth),
+                    td_error_mean=training_metrics_state['latest_td_error'],
                 )
             logger.write()
 
@@ -1498,6 +1538,12 @@ def train_single(make_env, config, args, env_name=None):
         """Log training metrics periodically."""
         if online is None:
             return
+
+        # Always update latest TD-error so it's available for per-episode logging
+        adv_val = mets.get('adv', None)
+        if adv_val is not None:
+            training_metrics_state['latest_td_error'] = float(adv_val)
+
         current_step = int(step_val)
         if current_step - training_metrics_state['last_log_step'] >= training_metrics_state['log_every']:
             training_metrics_state['last_log_step'] = current_step
@@ -1753,12 +1799,18 @@ def cl_train_loop(make_envs, config, args, env_names=None):
         collect_steps = max(num_envs * 4, 64)
 
     # Shared state for training metrics logging
-    training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0}
+    training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0, 'latest_td_error': 0.0}
 
     def log_training_metrics_fn(mets, step_val, current_task_id):
         """Log training metrics periodically."""
         if online is None:
             return
+
+        # Always update latest TD-error so it's available for per-episode logging
+        adv_val = mets.get('adv', None)
+        if adv_val is not None:
+            training_metrics_state['latest_td_error'] = float(adv_val)
+
         current_step = int(step_val)
         if current_step - training_metrics_state['last_log_step'] >= training_metrics_state['log_every']:
             training_metrics_state['last_log_step'] = current_step
@@ -1872,6 +1924,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                             length=int(length),
                             achievements=achievements,
                             achievement_depth=int(achievement_depth),
+                            td_error_mean=training_metrics_state['latest_td_error'],
                         )
                     logger.write()
 
