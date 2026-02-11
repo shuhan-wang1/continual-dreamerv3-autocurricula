@@ -176,13 +176,15 @@ SIGNIFICANCE_LEVEL = 0.05
 OUTPUT_DIR = pathlib.Path("figures")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+# Correct ordering: matches Craftax Achievement enum values 0-21
 ACHIEVEMENT_NAMES = [
-    "collect_wood", "place_table", "eat_cow", "collect_sapling",
-    "collect_drink", "make_wood_pickaxe", "make_wood_sword", "place_stone",
-    "collect_stone", "place_furnace", "collect_coal", "collect_iron",
-    "make_stone_pickaxe", "make_stone_sword", "make_iron_pickaxe",
-    "make_iron_sword", "collect_diamond", "make_diamond_pickaxe",
-    "make_diamond_sword", "defeat_zombie", "defeat_skeleton", "wake_up_boss",
+    "collect_wood", "place_table", "eat_cow", "collect_sapling",       # 0-3
+    "collect_drink", "make_wood_pickaxe", "make_wood_sword",           # 4-6
+    "place_plant", "defeat_zombie", "collect_stone", "place_stone",    # 7-10
+    "eat_plant", "defeat_skeleton", "make_stone_pickaxe",              # 11-13
+    "make_stone_sword", "wake_up", "place_furnace", "collect_coal",    # 14-17
+    "collect_iron", "collect_diamond", "make_iron_pickaxe",            # 18-20
+    "make_iron_sword",                                                 # 21
 ]
 
 # ──────────────────────────────────────────────────────────────────────
