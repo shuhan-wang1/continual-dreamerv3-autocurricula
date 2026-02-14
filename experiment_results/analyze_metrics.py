@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """
-Comparative Analysis: Continual Learning vs Original DreamerV3 on Craftax
-=========================================================================
-Loads metrics from 6 experiment folders (2 methods × 3 seeds), computes
-mean ± std across seeds, and produces publication-quality figures with
-statistical annotations (paired t-tests / Welch's t at final evaluation).
+Comparative Analysis: Continual Learning Experiments on Craftax
+================================================================
+Auto-discovers experiment methods from the logs/ directory, loads metrics
+from all found runs (N methods x M seeds), computes mean +/- std across
+seeds, and produces publication-quality figures with statistical annotations
+(pairwise Welch's t-tests at final evaluation).
+
+Folder naming convention:
+    craftax_dreamerv3-<method_key>-<seed>
+    e.g.  craftax_dreamerv3-cl-1, craftax_dreamerv3-original-42,
+          craftax_dreamerv3-nlr_sampling-4
 """
 
 import json
 import os
 import pathlib
+import re
 import warnings
 from collections import defaultdict
 
@@ -40,7 +47,8 @@ class StatsReport:
         with open(path, "w") as f:
             f.write(sep + "\n")
             f.write("STATISTICAL ANALYSIS REPORT\n")
-            f.write("Craftax: DreamerV3-CL vs DreamerV3-Original\n")
+            methods_str = ", ".join(f"{k}={v}" for k, v in METHODS.items())
+            f.write(f"Methods: {methods_str}\n")
             f.write(f"Seeds: {SEEDS}  |  Significance level: {SIGNIFICANCE_LEVEL}\n")
             f.write(sep + "\n\n")
             for title, body in self.sections:
@@ -67,23 +75,23 @@ def welch_t(a, b):
 
 
 def fmt_dist(arr):
-    """Format an array as 'mean ± std [min, max]'."""
+    """Format an array as 'mean +/- std [min, max]'."""
     if len(arr) == 0:
         return "N/A"
-    return f"{arr.mean():.4f} ± {arr.std():.4f}  [min={arr.min():.4f}, max={arr.max():.4f}]"
+    return f"{arr.mean():.4f} +/- {arr.std():.4f}  [min={arr.min():.4f}, max={arr.max():.4f}]"
 
 
 def fmt_dist_short(arr):
-    """Format an array as 'mean ± std'."""
+    """Format an array as 'mean +/- std'."""
     if len(arr) == 0:
         return "N/A"
-    return f"{arr.mean():.4f} ± {arr.std():.4f}"
+    return f"{arr.mean():.4f} +/- {arr.std():.4f}"
 
 
 def curve_endpoint_stats(curves, metric_name):
     """
     Given curves dict from build_curves, compute stats at 25%, 50%, 75%, 100%
-    of training and a final-point Welch's t-test. Returns formatted string.
+    of training and pairwise Welch's t-tests. Returns formatted string.
     """
     lines = []
     mats = {}
@@ -101,25 +109,42 @@ def curve_endpoint_stats(curves, metric_name):
     n = ref_grid.shape[0]
 
     lines.append(f"  {metric_name}:")
-    header = f"    {'Checkpoint':<12} {'DreamerV3-CL':<28} {'DreamerV3-Original':<28} {'Welch t-test':<20}"
+    # Dynamic header based on discovered methods
+    method_headers = "  ".join(f"{METHODS[mk]:<28}" for mk in mats)
+    header = f"    {'Checkpoint':<12} {method_headers}"
     lines.append(header)
-    lines.append("    " + "-" * 88)
+    lines.append("    " + "-" * (12 + 30 * len(mats)))
 
     for label, frac in checkpoints.items():
         idx = min(int(frac * (n - 1)), n - 1)
-        cl_vals = mats["cl"][:, idx] if "cl" in mats else np.array([])
-        orig_vals = mats["original"][:, idx] if "original" in mats else np.array([])
-        _, p, sig = welch_t(cl_vals, orig_vals)
-        p_str = f"p={p:.4f} ({sig})" if not np.isnan(p) else "N/A"
-        lines.append(f"    {label:<12} {fmt_dist_short(cl_vals):<28} {fmt_dist_short(orig_vals):<28} {p_str:<20}")
+        parts = [f"{label:<12}"]
+        for mk in mats:
+            vals = mats[mk][:, idx]
+            parts.append(f"{fmt_dist_short(vals):<28}")
+        lines.append("    " + "  ".join(parts))
 
-    # Effect size (Cohen's d) at final point
-    if "cl" in mats and "original" in mats:
-        cl_f = mats["cl"][:, -1]
-        orig_f = mats["original"][:, -1]
-        pooled_std = np.sqrt((cl_f.std()**2 + orig_f.std()**2) / 2)
-        cohens_d = (cl_f.mean() - orig_f.mean()) / pooled_std if pooled_std > 1e-12 else 0.0
-        lines.append(f"    Cohen's d (final): {cohens_d:+.4f}  (+ favours CL, - favours Original)")
+    # Pairwise Welch's t-test at final point
+    method_keys = list(mats.keys())
+    if len(method_keys) >= 2:
+        lines.append("    Pairwise Welch t-tests at final point:")
+        for i in range(len(method_keys)):
+            for j in range(i + 1, len(method_keys)):
+                mk_a, mk_b = method_keys[i], method_keys[j]
+                a_f = mats[mk_a][:, -1]
+                b_f = mats[mk_b][:, -1]
+                _, p, sig = welch_t(a_f, b_f)
+                p_str = f"p={p:.4f} ({sig})" if not np.isnan(p) else "N/A"
+                lines.append(f"      {METHODS[mk_a]} vs {METHODS[mk_b]}: {p_str}")
+
+        # Cohen's d for all pairs
+        for i in range(len(method_keys)):
+            for j in range(i + 1, len(method_keys)):
+                mk_a, mk_b = method_keys[i], method_keys[j]
+                a_f = mats[mk_a][:, -1]
+                b_f = mats[mk_b][:, -1]
+                pooled_std = np.sqrt((a_f.std()**2 + b_f.std()**2) / 2)
+                cohens_d = (a_f.mean() - b_f.mean()) / pooled_std if pooled_std > 1e-12 else 0.0
+                lines.append(f"      Cohen's d ({METHODS[mk_a]} vs {METHODS[mk_b]}): {cohens_d:+.4f}")
 
     return "\n".join(lines) + "\n"
 
@@ -134,7 +159,7 @@ def compute_auc(grid, matrix):
 
 
 def auc_comparison(curves, metric_name):
-    """Compute and compare AUC between methods."""
+    """Compute and compare AUC between all methods (pairwise)."""
     lines = []
     mats, grids = {}, {}
     for mk in METHODS:
@@ -146,16 +171,20 @@ def auc_comparison(curves, metric_name):
     if len(mats) < 2:
         return f"  {metric_name} AUC: Insufficient data for comparison.\n"
 
-    lines.append(f"  {metric_name} — Area Under Curve (AUC):")
+    lines.append(f"  {metric_name} -- Area Under Curve (AUC):")
     aucs = {}
-    for mk in METHODS:
+    for mk in mats:
         auc_arr = compute_auc(grids[mk], mats[mk])
         aucs[mk] = auc_arr
         lines.append(f"    {METHODS[mk]}: {fmt_dist(auc_arr)}")
 
-    if "cl" in aucs and "original" in aucs:
-        _, p, sig = welch_t(aucs["cl"], aucs["original"])
-        lines.append(f"    AUC Welch t-test: p={p:.4f} ({sig})")
+    # Pairwise AUC comparisons
+    method_keys = list(aucs.keys())
+    for i in range(len(method_keys)):
+        for j in range(i + 1, len(method_keys)):
+            mk_a, mk_b = method_keys[i], method_keys[j]
+            _, p, sig = welch_t(aucs[mk_a], aucs[mk_b])
+            lines.append(f"    AUC Welch t-test ({METHODS[mk_a]} vs {METHODS[mk_b]}): p={p:.4f} ({sig})")
 
     return "\n".join(lines) + "\n"
 
@@ -164,9 +193,6 @@ def auc_comparison(curves, metric_name):
 # Configuration
 # ──────────────────────────────────────────────────────────────────────
 LOGS_DIR = pathlib.Path("logs")
-METHODS = {"cl": "DreamerV3-CL", "original": "DreamerV3-Original"}
-SEEDS = [1, 4, 42]
-COLORS = {"cl": "#1f77b4", "original": "#ff7f0e"}
 SMOOTH_WINDOW = 50  # rolling window for smoothing curves
 INTERP_STEPS = 1000  # number of interpolation points on x-axis
 FIGSIZE_WIDE = (14, 5)
@@ -186,6 +212,118 @@ ACHIEVEMENT_NAMES = [
     "collect_iron", "collect_diamond", "make_iron_pickaxe",            # 18-20
     "make_iron_sword",                                                 # 21
 ]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Auto-discovery of methods and seeds
+# ──────────────────────────────────────────────────────────────────────
+# These globals will be populated at startup by discover_methods()
+
+METHODS = {}   # method_key -> display_name, e.g. {"cl": "DreamerV3-CL", ...}
+SEEDS = []     # sorted list of discovered seeds
+COLORS = {}    # method_key -> hex color
+
+# A colour palette that is colour-blind-friendly and extends to many methods.
+# The first two entries match the original colours for cl and original.
+_BASE_PALETTE = [
+    "#1f77b4",  # blue
+    "#ff7f0e",  # orange
+    "#2ca02c",  # green
+    "#d62728",  # red
+    "#9467bd",  # purple
+    "#8c564b",  # brown
+    "#e377c2",  # pink
+    "#7f7f7f",  # grey
+    "#bcbd22",  # olive
+    "#17becf",  # cyan
+]
+
+
+def _method_display_name(key: str) -> str:
+    """Convert a method key to a human-readable display name.
+
+    Examples:
+        'cl'           -> 'DreamerV3-CL'
+        'original'     -> 'DreamerV3-Original'
+        'nlr_sampling' -> 'DreamerV3-NLR-Sampling'
+    """
+    # Keep legacy names for known methods
+    _known = {
+        "cl": "DreamerV3-CL",
+        "original": "DreamerV3-Original",
+    }
+    if key in _known:
+        return _known[key]
+    # General rule: title-case, replace underscores with hyphens
+    pretty = key.replace("_", "-").title()
+    return f"DreamerV3-{pretty}"
+
+
+def discover_methods(logs_dir: pathlib.Path):
+    """Scan *logs_dir* for folders matching ``craftax_dreamerv3-<method>-<seed>``
+    and populate the global METHODS, SEEDS, COLORS dicts.
+
+    Also handles the pattern ``craftax_<method>-<seed>`` as a fallback.
+    """
+    global METHODS, SEEDS, COLORS
+
+    if not logs_dir.exists():
+        print(f"  [ERROR] Logs directory not found: {logs_dir.resolve()}")
+        return
+
+    method_seeds = defaultdict(set)
+    # Primary pattern: craftax_dreamerv3-<method>-<seed>
+    pattern_primary = re.compile(r"^craftax_dreamerv3-(.+)-(\d+)$")
+    # Fallback pattern: craftax_<method>-<seed>  (but NOT craftax_dreamerv3-*)
+    pattern_fallback = re.compile(r"^craftax_(.+)-(\d+)$")
+
+    for entry in sorted(logs_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        name = entry.name
+        m = pattern_primary.match(name)
+        if m:
+            method_key = m.group(1)
+            seed = int(m.group(2))
+            method_seeds[method_key].add(seed)
+            continue
+        m = pattern_fallback.match(name)
+        if m:
+            method_key = m.group(1)
+            seed = int(m.group(2))
+            # Avoid capturing partial matches like "dreamerv3" itself
+            if method_key != "dreamerv3":
+                method_seeds[method_key].add(seed)
+
+    if not method_seeds:
+        print("  [WARNING] No experiment folders discovered in logs/.")
+        return
+
+    # Collect all seeds (union across all methods)
+    all_seeds = set()
+    for seeds in method_seeds.values():
+        all_seeds.update(seeds)
+    SEEDS = sorted(all_seeds)
+
+    # Build METHODS dict, preserving a deterministic order:
+    # known methods first (cl, original), then alphabetical
+    known_order = ["cl", "original"]
+    ordered_keys = [k for k in known_order if k in method_seeds]
+    remaining = sorted(k for k in method_seeds if k not in known_order)
+    ordered_keys.extend(remaining)
+
+    METHODS = {}
+    COLORS = {}
+    for i, mk in enumerate(ordered_keys):
+        METHODS[mk] = _method_display_name(mk)
+        COLORS[mk] = _BASE_PALETTE[i % len(_BASE_PALETTE)]
+
+    print(f"  Discovered {len(METHODS)} methods: {list(METHODS.keys())}")
+    print(f"  Seeds: {SEEDS}")
+    for mk in METHODS:
+        found_seeds = sorted(method_seeds[mk])
+        print(f"    {mk}: seeds {found_seeds}")
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Data Loading
@@ -216,8 +354,10 @@ def load_all_runs():
         for seed in SEEDS:
             folder = LOGS_DIR / f"craftax_dreamerv3-{method_key}-{seed}"
             if not folder.exists():
-                print(f"  [WARNING] Missing folder: {folder}")
-                continue
+                # Try fallback pattern without dreamerv3 prefix
+                folder = LOGS_DIR / f"craftax_{method_key}-{seed}"
+                if not folder.exists():
+                    continue
             run = {}
             metrics_path = folder / "metrics.jsonl"
             online_path = folder / "online_metrics.jsonl"
@@ -295,35 +435,60 @@ def plot_mean_std(ax, grid, matrix, color, label):
     ax.fill_between(grid, mu - std, mu + std, color=color, alpha=ALPHA_FILL)
 
 
-def add_significance_annotation(ax, grid, mat_a, mat_b, y_pos=None):
-    """Add a significance star at the final step if p < 0.05 (Welch's t-test)."""
-    final_a = mat_a[:, -1]
-    final_b = mat_b[:, -1]
-    if len(final_a) < 2 or len(final_b) < 2:
+def add_pairwise_significance(ax, grid, mats, y_pos=None):
+    """Add significance stars at the final step for all pairs of methods.
+
+    Only annotates pairs where p < SIGNIFICANCE_LEVEL. Uses a stacked
+    offset to avoid overlapping annotations when many pairs are significant.
+    """
+    method_keys = [mk for mk in METHODS if mk in mats]
+    if len(method_keys) < 2:
         return
-    t_stat, p_val = stats.ttest_ind(final_a, final_b, equal_var=False)
-    if p_val < SIGNIFICANCE_LEVEL:
-        if y_pos is None:
-            y_pos = max(final_a.mean(), final_b.mean())
-        star = "***" if p_val < 0.001 else ("**" if p_val < 0.01 else "*")
+
+    annotations = []
+    for i in range(len(method_keys)):
+        for j in range(i + 1, len(method_keys)):
+            mk_a, mk_b = method_keys[i], method_keys[j]
+            final_a = mats[mk_a][:, -1]
+            final_b = mats[mk_b][:, -1]
+            if len(final_a) < 2 or len(final_b) < 2:
+                continue
+            _, p_val = stats.ttest_ind(final_a, final_b, equal_var=False)
+            if p_val < SIGNIFICANCE_LEVEL:
+                star = "***" if p_val < 0.001 else ("**" if p_val < 0.01 else "*")
+                annotations.append((star, p_val, mk_a, mk_b, final_a, final_b))
+
+    if not annotations:
+        return
+
+    # Stack annotations vertically
+    base_y = y_pos
+    if base_y is None:
+        all_final_means = [mats[mk][:, -1].mean() for mk in mats]
+        base_y = max(all_final_means)
+
+    y_range = ax.get_ylim()[1] - ax.get_ylim()[0] if ax.get_ylim()[1] != ax.get_ylim()[0] else 1.0
+    for k, (star, p_val, mk_a, mk_b, _, _) in enumerate(annotations):
+        y_offset = base_y + (k + 1) * y_range * 0.05
+        short_a = METHODS[mk_a].split("-")[-1][:6]
+        short_b = METHODS[mk_b].split("-")[-1][:6]
         ax.annotate(
-            f"{star}\np={p_val:.4f}",
-            xy=(grid[-1], y_pos),
-            fontsize=9,
+            f"{star} p={p_val:.3f}\n({short_a} vs {short_b})",
+            xy=(grid[-1], y_offset),
+            fontsize=7,
             ha="right",
             va="bottom",
             color="black",
             fontweight="bold",
             bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="gray", alpha=0.8),
         )
-    return p_val
 
 
 def format_ax(ax, title, xlabel="Environment Steps", ylabel=""):
     ax.set_title(title, fontsize=13, fontweight="bold")
     ax.set_xlabel(xlabel, fontsize=11)
     ax.set_ylabel(ylabel, fontsize=11)
-    ax.legend(fontsize=10, loc="best")
+    ax.legend(fontsize=9, loc="best")
     ax.grid(True, alpha=0.3)
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1e3:.0f}k"))
     ax.spines["top"].set_visible(False)
@@ -331,7 +496,7 @@ def format_ax(ax, title, xlabel="Environment Steps", ylabel=""):
 
 
 def build_curves(data, source, value_key, step_key="step", smooth=SMOOTH_WINDOW):
-    """Build interpolated matrices for both methods."""
+    """Build interpolated matrices for all methods."""
     results = {}
     for method_key in METHODS:
         all_s, all_v = [], []
@@ -346,6 +511,11 @@ def build_curves(data, source, value_key, step_key="step", smooth=SMOOTH_WINDOW)
         grid, mat = interpolate_to_common_grid(all_s, all_v)
         results[method_key] = (grid, mat)
     return results
+
+
+def _method_keys_sorted():
+    """Return method keys in deterministic plot order."""
+    return list(METHODS.keys())
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -371,8 +541,8 @@ def figure_episode_return_and_length(data):
                 plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk])
                 mats[mk] = mat
                 ref_grid = grid
-        if "cl" in mats and "original" in mats and ref_grid is not None:
-            add_significance_annotation(ax, ref_grid, mats["cl"], mats["original"])
+        if ref_grid is not None and len(mats) >= 2:
+            add_pairwise_significance(ax, ref_grid, mats)
         format_ax(ax, title, ylabel=ylabel)
 
         # --- Stats ---
@@ -390,11 +560,12 @@ def figure_episode_return_and_length(data):
                 last_scores = [r["episode/score"] for r in records[-50:] if "episode/score" in r]
                 if last_scores:
                     arr = np.array(last_scores)
-                    stats_lines.append(f"    {METHODS[mk]} seed={seed}: {arr.mean():.4f} ± {arr.std():.4f}")
+                    stats_lines.append(f"    {METHODS[mk]} seed={seed}: {arr.mean():.4f} +/- {arr.std():.4f}")
 
     report.add_section("Fig 01: Episode Return & Length", "\n".join(stats_lines))
 
-    fig.suptitle("Episode Metrics: CL vs Original DreamerV3", fontsize=15, fontweight="bold", y=1.02)
+    n_methods = len(METHODS)
+    fig.suptitle(f"Episode Metrics ({n_methods} methods)", fontsize=15, fontweight="bold", y=1.02)
     fig.tight_layout()
     fig.savefig(OUTPUT_DIR / "01_episode_return_length.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
@@ -420,8 +591,8 @@ def figure_online_return_and_success(data):
                 plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk])
                 mats[mk] = mat
                 ref_grid = grid
-        if "cl" in mats and "original" in mats and ref_grid is not None:
-            add_significance_annotation(ax, ref_grid, mats["cl"], mats["original"])
+        if ref_grid is not None and len(mats) >= 2:
+            add_pairwise_significance(ax, ref_grid, mats)
         format_ax(ax, title, ylabel=ylabel)
 
         stats_lines.append(curve_endpoint_stats(curves, title))
@@ -445,9 +616,9 @@ def figure_online_return_and_success(data):
             arr = np.array(steps_to)
             valid = arr[~np.isnan(arr)]
             if len(valid) > 0:
-                stats_lines.append(f"    {METHODS[mk]} → {threshold:.0%}: {valid.mean():.0f} ± {valid.std():.0f} steps ({len(valid)}/{len(arr)} seeds reached)")
+                stats_lines.append(f"    {METHODS[mk]} -> {threshold:.0%}: {valid.mean():.0f} +/- {valid.std():.0f} steps ({len(valid)}/{len(arr)} seeds reached)")
             else:
-                stats_lines.append(f"    {METHODS[mk]} → {threshold:.0%}: not reached by any seed")
+                stats_lines.append(f"    {METHODS[mk]} -> {threshold:.0%}: not reached by any seed")
 
     report.add_section("Fig 02: Online Return & Success Rate", "\n".join(stats_lines))
 
@@ -482,13 +653,13 @@ def figure_world_model_losses(data):
                 plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk])
                 mats[mk] = mat
                 ref_grid = grid
-        if "cl" in mats and "original" in mats and ref_grid is not None:
-            add_significance_annotation(ax, ref_grid, mats["cl"], mats["original"])
+        if ref_grid is not None and len(mats) >= 2:
+            add_pairwise_significance(ax, ref_grid, mats)
         format_ax(ax, title, ylabel="Loss")
 
         stats_lines.append(curve_endpoint_stats(curves, title))
 
-    # Policy & Value loss stats
+    # Policy & Value loss on the last subplot
     for value_key, ls, label_suffix in [
         ("loss/policy", "-", "Policy"), ("loss/value", "--", "Value")
     ]:
@@ -506,7 +677,7 @@ def figure_world_model_losses(data):
     format_ax(axes[5], "Policy & Value Loss", ylabel="Loss")
 
     # Convergence analysis: step where loss drops below 2x final value
-    stats_lines.append("\n  Convergence speed (step where loss first drops below 2× final value):")
+    stats_lines.append("\n  Convergence speed (step where loss first drops below 2x final value):")
     for value_key, title in loss_keys:
         for mk in METHODS:
             conv_steps = []
@@ -525,7 +696,7 @@ def figure_world_model_losses(data):
                             break
             if conv_steps:
                 arr = np.array(conv_steps)
-                stats_lines.append(f"    {title} / {METHODS[mk]}: {arr.mean():.0f} ± {arr.std():.0f} steps")
+                stats_lines.append(f"    {title} / {METHODS[mk]}: {arr.mean():.0f} +/- {arr.std():.0f} steps")
 
     report.add_section("Fig 03: World Model & Actor-Critic Losses", "\n".join(stats_lines))
 
@@ -546,7 +717,6 @@ def figure_td_error(data):
         ("td_error_max", "td_error/max", "TD Error (max)", "Max TD Error"),
     ]):
         ax = axes[idx]
-        used_key = None
         for value_key in [vk1, vk2]:
             curves = build_curves(data, "online", value_key, smooth=30)
             any_data = False
@@ -556,7 +726,6 @@ def figure_td_error(data):
                     plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk])
                     any_data = True
             if any_data:
-                used_key = value_key
                 break
         format_ax(ax, title, ylabel=ylabel)
 
@@ -623,8 +792,8 @@ def figure_exploration_metrics(data):
         if not any_data:
             ax.text(0.5, 0.5, "No data / all zeros", transform=ax.transAxes,
                     ha="center", va="center", fontsize=11, color="gray")
-        if "cl" in mats and "original" in mats and ref_grid is not None:
-            add_significance_annotation(ax, ref_grid, mats["cl"], mats["original"])
+        if ref_grid is not None and len(mats) >= 2:
+            add_pairwise_significance(ax, ref_grid, mats)
         format_ax(ax, title, ylabel="Value")
 
         # Stats for each exploration metric
@@ -640,11 +809,15 @@ def figure_exploration_metrics(data):
                 grid, mat = curves[mk]
                 stats_lines.append(f"    {METHODS[mk]}: final={fmt_dist_short(mat[:, -1])}, "
                                    f"peak_mean={mat.mean(axis=0).max():.4f} at step ~{grid[mat.mean(axis=0).argmax()]:.0f}")
-            if len(present_methods) == 2:
-                _, p, sig = welch_t(mats["cl"][:, -1], mats["original"][:, -1])
-                stats_lines.append(f"    Final-point Welch t-test: p={p:.4f} ({sig})")
+            # Pairwise tests
+            if len(present_methods) >= 2:
+                for i in range(len(present_methods)):
+                    for j in range(i + 1, len(present_methods)):
+                        mk_a, mk_b = present_methods[i], present_methods[j]
+                        _, p, sig = welch_t(mats[mk_a][:, -1], mats[mk_b][:, -1])
+                        stats_lines.append(f"    Welch t ({METHODS[mk_a]} vs {METHODS[mk_b]}): p={p:.4f} ({sig})")
         else:
-            stats_lines.append(f"  {title}: All zeros or no data for both methods.")
+            stats_lines.append(f"  {title}: All zeros or no data for all methods.")
 
     # Value overestimation ratio
     stats_lines.append("\n  Value Overestimation (imagined / actual at final point):")
@@ -687,8 +860,8 @@ def figure_forgetting_and_frontier(data):
                 plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk])
                 mats[mk] = mat
                 ref_grid = grid
-        if "cl" in mats and "original" in mats and ref_grid is not None:
-            add_significance_annotation(ax, ref_grid, mats["cl"], mats["original"])
+        if ref_grid is not None and len(mats) >= 2:
+            add_pairwise_significance(ax, ref_grid, mats)
         format_ax(ax, title, ylabel=ylabel)
 
         stats_lines.append(curve_endpoint_stats(curves, title))
@@ -702,12 +875,23 @@ def figure_forgetting_and_frontier(data):
             peak_per_seed = mat.max(axis=1)
             peak_step_per_seed = grid[mat.argmax(axis=1)]
             stats_lines.append(f"    {METHODS[mk]}: peak = {fmt_dist_short(peak_per_seed)}, "
-                               f"at step ~{peak_step_per_seed.mean():.0f} ± {peak_step_per_seed.std():.0f}")
-    if "cl" in mats and "original" in mats:
-        cl_peak = build_curves(data, "online", "aggregate_forgetting", smooth=20)["cl"][1].max(axis=1)
-        orig_peak = build_curves(data, "online", "aggregate_forgetting", smooth=20)["original"][1].max(axis=1)
-        _, p, sig = welch_t(cl_peak, orig_peak)
-        stats_lines.append(f"    Peak forgetting Welch t-test: p={p:.4f} ({sig})")
+                               f"at step ~{peak_step_per_seed.mean():.0f} +/- {peak_step_per_seed.std():.0f}")
+
+    # Pairwise peak forgetting tests
+    method_keys = list(METHODS.keys())
+    if len(method_keys) >= 2:
+        forg_curves = build_curves(data, "online", "aggregate_forgetting", smooth=20)
+        peak_data = {}
+        for mk in method_keys:
+            grid, mat = forg_curves[mk]
+            if grid is not None and mat is not None:
+                peak_data[mk] = mat.max(axis=1)
+        pk_keys = list(peak_data.keys())
+        for i in range(len(pk_keys)):
+            for j in range(i + 1, len(pk_keys)):
+                mk_a, mk_b = pk_keys[i], pk_keys[j]
+                _, p, sig = welch_t(peak_data[mk_a], peak_data[mk_b])
+                stats_lines.append(f"    Peak forgetting ({METHODS[mk_a]} vs {METHODS[mk_b]}): p={p:.4f} ({sig})")
 
     report.add_section("Fig 06: Forgetting & Frontier Rate", "\n".join(stats_lines))
 
@@ -719,7 +903,8 @@ def figure_forgetting_and_frontier(data):
 
 
 def figure_per_achievement_rates(data):
-    """Fig 7: Per-achievement rate comparison at final evaluation (bar chart)."""
+    """Fig 7: Per-achievement rate comparison at final evaluation (grouped bar chart)."""
+    n_methods = len(METHODS)
     fig, ax = plt.subplots(figsize=(16, 7))
     stats_lines = []
 
@@ -737,50 +922,70 @@ def figure_per_achievement_rates(data):
             final_rates[mk] = np.array(seed_rates)
 
     x = np.arange(len(ACHIEVEMENT_NAMES))
-    width = 0.35
+    width = 0.8 / max(n_methods, 1)
 
-    for i, mk in enumerate(["cl", "original"]):
+    for i, mk in enumerate(_method_keys_sorted()):
         if mk not in final_rates:
             continue
         mat = final_rates[mk]
         mu = mat.mean(axis=0)
         std = mat.std(axis=0)
-        offset = -width / 2 + i * width
-        bars = ax.bar(x + offset, mu, width, yerr=std, label=METHODS[mk],
-                       color=COLORS[mk], alpha=0.85, capsize=3, edgecolor="white")
+        offset = -0.4 + (i + 0.5) * width
+        ax.bar(x + offset, mu, width, yerr=std, label=METHODS[mk],
+               color=COLORS[mk], alpha=0.85, capsize=3, edgecolor="white")
 
-    # Significance per achievement + stats
-    stats_lines.append("  Per-achievement rates (mean ± std) and significance tests:")
-    stats_lines.append(f"    {'Achievement':<24} {'DreamerV3-CL':<20} {'DreamerV3-Original':<20} {'p-value':<16} {'Cohen d':<10}")
-    stats_lines.append("    " + "-" * 90)
+    # Significance per achievement + stats -- pairwise
+    stats_lines.append("  Per-achievement rates (mean +/- std) and pairwise significance:")
+    header_parts = [f"{'Achievement':<24}"]
+    for mk in final_rates:
+        header_parts.append(f"{METHODS[mk]:<20}")
+    stats_lines.append("    " + " ".join(header_parts))
+    stats_lines.append("    " + "-" * (24 + 22 * len(final_rates)))
 
-    if "cl" in final_rates and "original" in final_rates:
+    method_keys_with_data = [mk for mk in _method_keys_sorted() if mk in final_rates]
+
+    for j in range(len(ACHIEVEMENT_NAMES)):
+        parts = [f"{ACHIEVEMENT_NAMES[j]:<24}"]
+        for mk in method_keys_with_data:
+            vals = final_rates[mk][:, j]
+            parts.append(f"{fmt_dist_short(vals):<20}")
+        stats_lines.append("    " + " ".join(parts))
+
+    # Pairwise per-achievement significance at top of bars
+    if len(method_keys_with_data) >= 2:
         for j in range(len(ACHIEVEMENT_NAMES)):
-            a = final_rates["cl"][:, j]
-            b = final_rates["original"][:, j]
-            _, p, sig = welch_t(a, b)
-            pooled = np.sqrt((a.std()**2 + b.std()**2) / 2)
-            d = (a.mean() - b.mean()) / pooled if pooled > 1e-8 else 0.0
-            p_str = f"{p:.4f} ({sig})" if not np.isnan(p) else "N/A"
-            stats_lines.append(f"    {ACHIEVEMENT_NAMES[j]:<24} {fmt_dist_short(a):<20} {fmt_dist_short(b):<20} {p_str:<16} {d:+.3f}")
-
-            if not np.isnan(p) and p < SIGNIFICANCE_LEVEL:
-                y_top = max(a.mean() + a.std(), b.mean() + b.std()) + 0.03
-                star = "***" if p < 0.001 else ("**" if p < 0.01 else "*")
-                ax.text(j, min(y_top, 1.05), star, ha="center", fontsize=8, fontweight="bold")
+            pair_results = []
+            for i_a in range(len(method_keys_with_data)):
+                for i_b in range(i_a + 1, len(method_keys_with_data)):
+                    mk_a = method_keys_with_data[i_a]
+                    mk_b = method_keys_with_data[i_b]
+                    a = final_rates[mk_a][:, j]
+                    b = final_rates[mk_b][:, j]
+                    _, p, sig = welch_t(a, b)
+                    if not np.isnan(p) and p < SIGNIFICANCE_LEVEL:
+                        star = "***" if p < 0.001 else ("**" if p < 0.01 else "*")
+                        pair_results.append(star)
+            if pair_results:
+                y_top = max(final_rates[mk][:, j].mean() + final_rates[mk][:, j].std()
+                            for mk in method_keys_with_data) + 0.03
+                ax.text(j, min(y_top, 1.05), pair_results[0], ha="center", fontsize=7, fontweight="bold")
 
     # Aggregate: total number of achievements with rate > thresholds
     for thresh in [0.01, 0.05, 0.10, 0.50]:
         stats_lines.append(f"\n  Achievements with rate > {thresh:.0%}:")
-        for mk in ["cl", "original"]:
-            if mk in final_rates:
-                counts = (final_rates[mk] > thresh).sum(axis=1).astype(float)
-                stats_lines.append(f"    {METHODS[mk]}: {fmt_dist_short(counts)}")
-        if "cl" in final_rates and "original" in final_rates:
-            c = (final_rates["cl"] > thresh).sum(axis=1).astype(float)
-            o = (final_rates["original"] > thresh).sum(axis=1).astype(float)
-            _, p, sig = welch_t(c, o)
-            stats_lines.append(f"    Welch t-test: p={p:.4f} ({sig})")
+        for mk in method_keys_with_data:
+            counts = (final_rates[mk] > thresh).sum(axis=1).astype(float)
+            stats_lines.append(f"    {METHODS[mk]}: {fmt_dist_short(counts)}")
+        # Pairwise tests
+        if len(method_keys_with_data) >= 2:
+            for i_a in range(len(method_keys_with_data)):
+                for i_b in range(i_a + 1, len(method_keys_with_data)):
+                    mk_a = method_keys_with_data[i_a]
+                    mk_b = method_keys_with_data[i_b]
+                    c_a = (final_rates[mk_a] > thresh).sum(axis=1).astype(float)
+                    c_b = (final_rates[mk_b] > thresh).sum(axis=1).astype(float)
+                    _, p, sig = welch_t(c_a, c_b)
+                    stats_lines.append(f"    {METHODS[mk_a]} vs {METHODS[mk_b]}: p={p:.4f} ({sig})")
 
     report.add_section("Fig 07: Per-Achievement Rates", "\n".join(stats_lines))
 
@@ -789,7 +994,7 @@ def figure_per_achievement_rates(data):
                         fontsize=8, rotation=45, ha="right")
     ax.set_ylabel("Achievement Rate", fontsize=12)
     ax.set_title("Per-Achievement Rates at Final Evaluation", fontsize=14, fontweight="bold")
-    ax.legend(fontsize=11)
+    ax.legend(fontsize=10)
     ax.grid(True, axis="y", alpha=0.3)
     ax.set_ylim(0, 1.1)
     ax.spines["top"].set_visible(False)
@@ -803,6 +1008,7 @@ def figure_per_achievement_rates(data):
 
 def figure_per_achievement_forgetting(data):
     """Fig 8: Per-achievement forgetting at final evaluation."""
+    n_methods = len(METHODS)
     fig, ax = plt.subplots(figsize=(16, 7))
     stats_lines = []
 
@@ -822,48 +1028,54 @@ def figure_per_achievement_forgetting(data):
             final_forg[mk] = np.array(seed_forg)
 
     x = np.arange(len(ACHIEVEMENT_NAMES))
-    width = 0.35
+    width = 0.8 / max(n_methods, 1)
 
-    for i, mk in enumerate(["cl", "original"]):
+    for i, mk in enumerate(_method_keys_sorted()):
         if mk not in final_forg:
             continue
         mat = final_forg[mk]
         mu = mat.mean(axis=0)
         std = mat.std(axis=0)
-        offset = -width / 2 + i * width
+        offset = -0.4 + (i + 0.5) * width
         ax.bar(x + offset, mu, width, yerr=std, label=METHODS[mk],
                color=COLORS[mk], alpha=0.85, capsize=3, edgecolor="white")
 
     # Stats table
-    stats_lines.append("  Per-achievement forgetting (mean ± std) and significance:")
-    stats_lines.append(f"    {'Achievement':<24} {'DreamerV3-CL':<20} {'DreamerV3-Original':<20} {'p-value':<16} {'Winner':<10}")
-    stats_lines.append("    " + "-" * 90)
-    if "cl" in final_forg and "original" in final_forg:
-        for j in range(len(ACHIEVEMENT_NAMES)):
-            a = final_forg["cl"][:, j]
-            b = final_forg["original"][:, j]
-            _, p, sig = welch_t(a, b)
-            p_str = f"{p:.4f} ({sig})" if not np.isnan(p) else "N/A"
-            winner = "CL" if a.mean() < b.mean() else ("Original" if b.mean() < a.mean() else "Tie")
-            if a.mean() == 0 and b.mean() == 0:
-                winner = "-"
-            stats_lines.append(f"    {ACHIEVEMENT_NAMES[j]:<24} {fmt_dist_short(a):<20} {fmt_dist_short(b):<20} {p_str:<16} {winner:<10}")
+    method_keys_with_data = [mk for mk in _method_keys_sorted() if mk in final_forg]
+    stats_lines.append("  Per-achievement forgetting (mean +/- std) and pairwise significance:")
+    header_parts = [f"{'Achievement':<24}"]
+    for mk in method_keys_with_data:
+        header_parts.append(f"{METHODS[mk]:<20}")
+    stats_lines.append("    " + " ".join(header_parts))
+    stats_lines.append("    " + "-" * (24 + 22 * len(method_keys_with_data)))
 
-        # Aggregate: mean forgetting across all achievements
-        cl_agg = final_forg["cl"].mean(axis=1)
-        orig_agg = final_forg["original"].mean(axis=1)
-        _, p, sig = welch_t(cl_agg, orig_agg)
+    for j in range(len(ACHIEVEMENT_NAMES)):
+        parts = [f"{ACHIEVEMENT_NAMES[j]:<24}"]
+        for mk in method_keys_with_data:
+            vals = final_forg[mk][:, j]
+            parts.append(f"{fmt_dist_short(vals):<20}")
+        stats_lines.append("    " + " ".join(parts))
+
+    # Aggregate: mean forgetting across all achievements
+    if len(method_keys_with_data) >= 2:
+        agg_data = {}
+        for mk in method_keys_with_data:
+            agg_data[mk] = final_forg[mk].mean(axis=1)
         stats_lines.append(f"\n  Mean forgetting across all achievements:")
-        stats_lines.append(f"    DreamerV3-CL:       {fmt_dist(cl_agg)}")
-        stats_lines.append(f"    DreamerV3-Original: {fmt_dist(orig_agg)}")
-        stats_lines.append(f"    Welch t-test: p={p:.4f} ({sig})")
+        for mk in method_keys_with_data:
+            stats_lines.append(f"    {METHODS[mk]}: {fmt_dist(agg_data[mk])}")
+        for i_a in range(len(method_keys_with_data)):
+            for i_b in range(i_a + 1, len(method_keys_with_data)):
+                mk_a, mk_b = method_keys_with_data[i_a], method_keys_with_data[i_b]
+                _, p, sig = welch_t(agg_data[mk_a], agg_data[mk_b])
+                stats_lines.append(f"    {METHODS[mk_a]} vs {METHODS[mk_b]}: p={p:.4f} ({sig})")
 
-        # Top-3 most forgotten achievements per method
-        for mk in ["cl", "original"]:
-            mu = final_forg[mk].mean(axis=0)
-            top3 = np.argsort(mu)[::-1][:3]
-            names = [f"{ACHIEVEMENT_NAMES[i]} ({mu[i]:.4f})" for i in top3]
-            stats_lines.append(f"  Top-3 most forgotten ({METHODS[mk]}): {', '.join(names)}")
+    # Top-3 most forgotten achievements per method
+    for mk in method_keys_with_data:
+        mu = final_forg[mk].mean(axis=0)
+        top3 = np.argsort(mu)[::-1][:3]
+        names = [f"{ACHIEVEMENT_NAMES[i]} ({mu[i]:.4f})" for i in top3]
+        stats_lines.append(f"  Top-3 most forgotten ({METHODS[mk]}): {', '.join(names)}")
 
     report.add_section("Fig 08: Per-Achievement Forgetting", "\n".join(stats_lines))
 
@@ -872,7 +1084,7 @@ def figure_per_achievement_forgetting(data):
                         fontsize=8, rotation=45, ha="right")
     ax.set_ylabel("Forgetting", fontsize=12)
     ax.set_title("Per-Achievement Forgetting at Final Step", fontsize=14, fontweight="bold")
-    ax.legend(fontsize=11)
+    ax.legend(fontsize=10)
     ax.grid(True, axis="y", alpha=0.3)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -884,14 +1096,20 @@ def figure_per_achievement_forgetting(data):
 
 
 def figure_score_distribution(data):
-    """Fig 9: Score distribution at final evaluation."""
-    fig, axes = plt.subplots(1, 2, figsize=FIGSIZE_WIDE)
+    """Fig 9: Score distribution at final evaluation -- one subplot per method."""
+    n_methods = len(METHODS)
+    n_cols = min(n_methods, 4)
+    n_rows = (n_methods + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 5 * n_rows), squeeze=False)
+    axes_flat = axes.flatten()
     bins_labels = ["0-1", "1-2", "2-3", "3-4", "4-5", "5+"]
     stats_lines = []
 
     all_dists = {}
-    for idx, mk in enumerate(["cl", "original"]):
-        ax = axes[idx]
+    for idx, mk in enumerate(_method_keys_sorted()):
+        ax = axes_flat[idx] if idx < len(axes_flat) else None
+        if ax is None:
+            continue
         seed_dists = []
         for seed in SEEDS:
             if seed not in data[mk]:
@@ -912,10 +1130,10 @@ def figure_score_distribution(data):
             ax.set_xticks(x)
             ax.set_xticklabels(bins_labels[:len(mu)], fontsize=10)
 
-            stats_lines.append(f"  {METHODS[mk]} score distribution (mean ± std across seeds):")
+            stats_lines.append(f"  {METHODS[mk]} score distribution (mean +/- std across seeds):")
             for b in range(len(mu)):
                 lbl = bins_labels[b] if b < len(bins_labels) else f"bin_{b}"
-                stats_lines.append(f"    {lbl}: {mu[b]:.4f} ± {std[b]:.4f}")
+                stats_lines.append(f"    {lbl}: {mu[b]:.4f} +/- {std[b]:.4f}")
 
         ax.set_title(f"{METHODS[mk]}", fontsize=13, fontweight="bold")
         ax.set_xlabel("Score Bucket", fontsize=11)
@@ -924,16 +1142,22 @@ def figure_score_distribution(data):
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
 
-    # KL divergence between distributions
-    if "cl" in all_dists and "original" in all_dists:
-        cl_mu = all_dists["cl"].mean(axis=0)
-        orig_mu = all_dists["original"].mean(axis=0)
-        # Add small epsilon for numerical stability
-        eps = 1e-8
-        kl = np.sum(cl_mu * np.log((cl_mu + eps) / (orig_mu + eps)))
-        stats_lines.append(f"\n  KL divergence (CL || Original): {kl:.6f}")
+    # Hide unused axes
+    for idx in range(n_methods, len(axes_flat)):
+        axes_flat[idx].set_visible(False)
 
-    # Note about score_distribution being per-episode
+    # Pairwise KL divergence
+    dist_keys = list(all_dists.keys())
+    if len(dist_keys) >= 2:
+        eps = 1e-8
+        for i_a in range(len(dist_keys)):
+            for i_b in range(i_a + 1, len(dist_keys)):
+                mk_a, mk_b = dist_keys[i_a], dist_keys[i_b]
+                mu_a = all_dists[mk_a].mean(axis=0)
+                mu_b = all_dists[mk_b].mean(axis=0)
+                kl = np.sum(mu_a * np.log((mu_a + eps) / (mu_b + eps)))
+                stats_lines.append(f"\n  KL divergence ({METHODS[mk_a]} || {METHODS[mk_b]}): {kl:.6f}")
+
     stats_lines.append("\n  NOTE: score_distribution is computed from the last episode's window,")
     stats_lines.append("  not a running average. Interpret with caution.")
 
@@ -948,11 +1172,12 @@ def figure_score_distribution(data):
 
 def figure_achievement_heatmap_over_time(data):
     """Fig 10: Achievement rate heatmap over training steps for each method."""
-    fig, axes = plt.subplots(2, 1, figsize=(16, 12))
+    n_methods = len(METHODS)
+    fig, axes = plt.subplots(n_methods, 1, figsize=(16, 6 * n_methods), squeeze=False)
     stats_lines = []
 
-    for idx, mk in enumerate(["cl", "original"]):
-        ax = axes[idx]
+    for idx, mk in enumerate(_method_keys_sorted()):
+        ax = axes[idx, 0]
         seed_data = []
         for seed in SEEDS:
             if seed not in data[mk]:
@@ -997,19 +1222,11 @@ def figure_achievement_heatmap_over_time(data):
         plt.colorbar(im, ax=ax, label="Achievement Rate", shrink=0.8)
 
         # Stats: first step each achievement exceeds 10% and 50%
-        stats_lines.append(f"  {METHODS[mk]} — Step where achievement first exceeds threshold (mean across seeds):")
+        stats_lines.append(f"  {METHODS[mk]} -- Step where achievement first exceeds threshold (mean across seeds):")
         stats_lines.append(f"    {'Achievement':<24} {'> 10%':<18} {'> 50%':<18} {'Final rate':<15}")
         stats_lines.append("    " + "-" * 65)
         for j in range(len(ACHIEVEMENT_NAMES)):
             final_rate = mean_rates[j, -1]
-            for thresh, label in [(0.10, "> 10%"), (0.50, "> 50%")]:
-                exceed_idx = np.where(mean_rates[j] >= thresh)[0]
-                if len(exceed_idx) > 0:
-                    step_val = grid[exceed_idx[0]]
-                    thresh_strs = {label: f"{step_val:.0f}"}
-                else:
-                    thresh_strs = {label: "never"}
-            # Compute both thresholds
             t10_idx = np.where(mean_rates[j] >= 0.10)[0]
             t50_idx = np.where(mean_rates[j] >= 0.50)[0]
             t10 = f"{grid[t10_idx[0]]:.0f}" if len(t10_idx) > 0 else "never"
@@ -1026,8 +1243,8 @@ def figure_achievement_heatmap_over_time(data):
 
 
 def figure_summary_table(data):
-    """Fig 11: Summary statistics table with significance tests."""
-    fig, ax = plt.subplots(figsize=(14, 8))
+    """Fig 11: Summary statistics table with pairwise significance tests."""
+    fig, ax = plt.subplots(figsize=(max(14, 4 * len(METHODS) + 6), 8))
     ax.axis("off")
     stats_lines = []
 
@@ -1038,14 +1255,20 @@ def figure_summary_table(data):
         ("per_task_aggregate_forgetting", "Aggregate Forgetting (task 0)"),
     ]
 
+    method_keys = _method_keys_sorted()
     rows = []
+
+    # Dynamic header
+    header_parts = [f"{'Metric':<30}"]
+    for mk in method_keys:
+        header_parts.append(f"{METHODS[mk]:<28}")
     stats_lines.append("  Summary statistics from metrics_summary.json:")
-    stats_lines.append(f"    {'Metric':<30} {'DreamerV3-CL':<28} {'DreamerV3-Original':<28} {'t-stat':<10} {'p-value':<12} {'Sig':<6} {'Cohen d':<10}")
-    stats_lines.append("    " + "-" * 124)
+    stats_lines.append("    " + " ".join(header_parts))
+    stats_lines.append("    " + "-" * (30 + 30 * len(method_keys)))
 
     for key, label in metrics_to_compare:
         vals = {}
-        for mk in METHODS:
+        for mk in method_keys:
             seed_vals = []
             for seed in SEEDS:
                 if seed not in data[mk]:
@@ -1059,30 +1282,34 @@ def figure_summary_table(data):
                         seed_vals.append(v)
             vals[mk] = np.array(seed_vals) if seed_vals else np.array([])
 
-        cl_vals = vals.get("cl", np.array([]))
-        orig_vals = vals.get("original", np.array([]))
+        row = [label]
+        line_parts = [f"{label:<30}"]
+        for mk in method_keys:
+            v = vals.get(mk, np.array([]))
+            s = f"{v.mean():.4f} +/- {v.std():.4f}" if len(v) > 0 else "N/A"
+            row.append(s)
+            line_parts.append(f"{s:<28}")
+        stats_lines.append("    " + " ".join(line_parts))
 
-        cl_str = f"{cl_vals.mean():.4f} ± {cl_vals.std():.4f}" if len(cl_vals) > 0 else "N/A"
-        orig_str = f"{orig_vals.mean():.4f} ± {orig_vals.std():.4f}" if len(orig_vals) > 0 else "N/A"
-
-        if len(cl_vals) >= 2 and len(orig_vals) >= 2:
-            t, p = stats.ttest_ind(cl_vals, orig_vals, equal_var=False)
-            sig = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else "n.s."))
-            p_str = f"{p:.4f} ({sig})"
-            pooled = np.sqrt((cl_vals.std()**2 + orig_vals.std()**2) / 2)
-            d = (cl_vals.mean() - orig_vals.mean()) / pooled if pooled > 1e-8 else 0.0
-            stats_lines.append(f"    {label:<30} {cl_str:<28} {orig_str:<28} {t:+.4f}    {p:.4f}       {sig:<6} {d:+.4f}")
-        else:
-            p_str = "N/A"
-            stats_lines.append(f"    {label:<30} {cl_str:<28} {orig_str:<28} {'N/A':<10} {'N/A':<12} {'N/A':<6} {'N/A':<10}")
-
-        rows.append([label, cl_str, orig_str, p_str])
+        # Best pairwise p-value for the table
+        best_p_str = "N/A"
+        if len(method_keys) >= 2:
+            for i_a in range(len(method_keys)):
+                for i_b in range(i_a + 1, len(method_keys)):
+                    mk_a, mk_b = method_keys[i_a], method_keys[i_b]
+                    a = vals.get(mk_a, np.array([]))
+                    b = vals.get(mk_b, np.array([]))
+                    if len(a) >= 2 and len(b) >= 2:
+                        _, p, sig = welch_t(a, b)
+                        stats_lines.append(f"      {METHODS[mk_a]} vs {METHODS[mk_b]}: p={p:.4f} ({sig})")
+        row.append(best_p_str)
+        rows.append(row)
 
     # Per-seed raw values for transparency
     stats_lines.append("\n  Per-seed raw values:")
     for key, label in metrics_to_compare:
         stats_lines.append(f"    {label}:")
-        for mk in METHODS:
+        for mk in method_keys:
             for seed in SEEDS:
                 if seed not in data[mk]:
                     continue
@@ -1093,9 +1320,8 @@ def figure_summary_table(data):
                 stats_lines.append(f"      {METHODS[mk]} seed={seed}: {v}")
 
     # Achievements unlocked
-    cl_unlock = orig_unlock = np.array([])
-    cl_str = orig_str = "N/A"
-    for mk in METHODS:
+    unlock_data = {}
+    for mk in method_keys:
         seed_totals = []
         for seed in SEEDS:
             if seed not in data[mk]:
@@ -1105,30 +1331,40 @@ def figure_summary_table(data):
             if rates and rates[0]:
                 seed_totals.append(sum(1 for r in rates[0] if r > 0.01))
         if seed_totals:
-            vals_arr = np.array(seed_totals, dtype=float)
-            if mk == "cl":
-                cl_unlock = vals_arr
-                cl_str = f"{vals_arr.mean():.1f} ± {vals_arr.std():.1f}"
-            else:
-                orig_unlock = vals_arr
-                orig_str = f"{vals_arr.mean():.1f} ± {vals_arr.std():.1f}"
+            unlock_data[mk] = np.array(seed_totals, dtype=float)
 
-    if len(cl_unlock) >= 2 and len(orig_unlock) >= 2:
-        _, p = stats.ttest_ind(cl_unlock, orig_unlock, equal_var=False)
-        sig = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else "n.s."))
-        p_str = f"{p:.4f} ({sig})"
-    else:
-        p_str = "N/A"
-    rows.append(["Achievements Unlocked (>1%)", cl_str, orig_str, p_str])
-    stats_lines.append(f"\n  Achievements unlocked (>1%): CL={cl_str}, Original={orig_str}, p={p_str}")
+    row = ["Achievements Unlocked (>1%)"]
+    for mk in method_keys:
+        if mk in unlock_data:
+            arr = unlock_data[mk]
+            row.append(f"{arr.mean():.1f} +/- {arr.std():.1f}")
+        else:
+            row.append("N/A")
+    row.append("")  # placeholder for p-value column
+    rows.append(row)
+
+    if len(unlock_data) >= 2:
+        uk_keys = list(unlock_data.keys())
+        for i_a in range(len(uk_keys)):
+            for i_b in range(i_a + 1, len(uk_keys)):
+                mk_a, mk_b = uk_keys[i_a], uk_keys[i_b]
+                _, p, sig = welch_t(unlock_data[mk_a], unlock_data[mk_b])
+                stats_lines.append(f"\n  Achievements unlocked {METHODS[mk_a]} vs {METHODS[mk_b]}: p={p:.4f} ({sig})")
 
     report.add_section("Fig 11: Summary Table", "\n".join(stats_lines))
 
-    col_labels = ["Metric", "DreamerV3-CL", "DreamerV3-Original", "p-value (Welch t)"]
+    # Build table columns dynamically
+    col_labels = ["Metric"] + [METHODS[mk] for mk in method_keys] + ["Pairwise p"]
+    # Ensure all rows have the right length
+    for r in rows:
+        while len(r) < len(col_labels):
+            r.append("")
+
     table = ax.table(cellText=rows, colLabels=col_labels, loc="center",
-                      cellLoc="center", colWidths=[0.28, 0.24, 0.24, 0.24])
+                      cellLoc="center",
+                      colWidths=[0.20] + [0.18] * len(method_keys) + [0.14])
     table.auto_set_font_size(False)
-    table.set_fontsize(10)
+    table.set_fontsize(9)
     table.scale(1.0, 1.8)
 
     for j in range(len(col_labels)):
@@ -1141,7 +1377,7 @@ def figure_summary_table(data):
             cell = table[i + 1, j]
             cell.set_facecolor("#ecf0f1" if i % 2 == 0 else "white")
 
-    ax.set_title("Summary Statistics with Significance Tests (3 seeds)",
+    ax.set_title(f"Summary Statistics ({len(SEEDS)} seeds, {len(METHODS)} methods)",
                   fontsize=14, fontweight="bold", pad=20)
 
     fig.tight_layout()
@@ -1173,9 +1409,12 @@ def figure_top_achievement_curves(data):
     axes = axes.flatten()
     stats_lines = []
 
-    stats_lines.append("  Top-8 achievements by mean final rate (across both methods):")
-    stats_lines.append(f"    {'Rank':<6} {'Achievement':<24} {'CL final':<20} {'Orig final':<20} {'p-value':<16} {'Cohen d':<10}")
-    stats_lines.append("    " + "-" * 96)
+    stats_lines.append("  Top-8 achievements by mean final rate (across all methods):")
+    header_parts = [f"{'Rank':<6}", f"{'Achievement':<24}"]
+    for mk in METHODS:
+        header_parts.append(f"{METHODS[mk]:<20}")
+    stats_lines.append("    " + " ".join(header_parts))
+    stats_lines.append("    " + "-" * (30 + 22 * len(METHODS)))
 
     for plot_idx, ach_idx in enumerate(top_indices):
         ax = axes[plot_idx]
@@ -1207,20 +1446,18 @@ def figure_top_achievement_curves(data):
                 mats[mk] = mat
                 ref_grid = grid
 
-        if "cl" in mats and "original" in mats and ref_grid is not None:
-            add_significance_annotation(ax, ref_grid, mats["cl"], mats["original"])
+        if ref_grid is not None and len(mats) >= 2:
+            add_pairwise_significance(ax, ref_grid, mats)
 
         format_ax(ax, ach_name.replace("_", " ").title(), ylabel="Rate")
         ax.set_ylim(-0.05, 1.05)
 
         # Stats for this achievement
-        cl_f = mats["cl"][:, -1] if "cl" in mats else np.array([])
-        orig_f = mats["original"][:, -1] if "original" in mats else np.array([])
-        _, p, sig = welch_t(cl_f, orig_f)
-        pooled = np.sqrt((cl_f.std()**2 + orig_f.std()**2) / 2) if len(cl_f) > 0 and len(orig_f) > 0 else 0
-        d = (cl_f.mean() - orig_f.mean()) / pooled if pooled > 1e-8 else 0.0
-        p_str = f"{p:.4f} ({sig})" if not np.isnan(p) else "N/A"
-        stats_lines.append(f"    {plot_idx+1:<6} {ach_name:<24} {fmt_dist_short(cl_f):<20} {fmt_dist_short(orig_f):<20} {p_str:<16} {d:+.3f}")
+        line_parts = [f"{plot_idx+1:<6}", f"{ach_name:<24}"]
+        for mk in METHODS:
+            f_vals = mats[mk][:, -1] if mk in mats else np.array([])
+            line_parts.append(f"{fmt_dist_short(f_vals):<20}")
+        stats_lines.append("    " + " ".join(line_parts))
 
     report.add_section("Fig 12: Top-8 Achievement Curves", "\n".join(stats_lines))
 
@@ -1272,9 +1509,14 @@ def figure_max_return_and_depth(data):
             if mk in mats:
                 final_vals = mats[mk][:, -1]
                 stats_lines.append(f"    {METHODS[mk]} final: {fmt_dist(final_vals)}")
-        if "cl" in mats and "original" in mats:
-            _, p, sig = welch_t(mats["cl"][:, -1], mats["original"][:, -1])
-            stats_lines.append(f"    Welch t-test: p={p:.4f} ({sig})")
+        # Pairwise tests
+        mk_with_data = [mk for mk in METHODS if mk in mats]
+        if len(mk_with_data) >= 2:
+            for i_a in range(len(mk_with_data)):
+                for i_b in range(i_a + 1, len(mk_with_data)):
+                    mk_a, mk_b = mk_with_data[i_a], mk_with_data[i_b]
+                    _, p, sig = welch_t(mats[mk_a][:, -1], mats[mk_b][:, -1])
+                    stats_lines.append(f"    {METHODS[mk_a]} vs {METHODS[mk_b]}: p={p:.4f} ({sig})")
 
     # Step where max return first reaches various thresholds
     stats_lines.append("\n  Steps to reach max return thresholds:")
@@ -1294,9 +1536,9 @@ def figure_max_return_and_depth(data):
                     steps_to.append(np.nan)
             valid = np.array([s for s in steps_to if not np.isnan(s)])
             if len(valid) > 0:
-                stats_lines.append(f"    {METHODS[mk]} → max_return≥{thresh}: {valid.mean():.0f} ± {valid.std():.0f} ({len(valid)}/{len(steps_to)} seeds)")
+                stats_lines.append(f"    {METHODS[mk]} -> max_return>={thresh}: {valid.mean():.0f} +/- {valid.std():.0f} ({len(valid)}/{len(steps_to)} seeds)")
             else:
-                stats_lines.append(f"    {METHODS[mk]} → max_return≥{thresh}: not reached")
+                stats_lines.append(f"    {METHODS[mk]} -> max_return>={thresh}: not reached")
 
     report.add_section("Fig 13: Max Return & Depth", "\n".join(stats_lines))
 
@@ -1309,26 +1551,37 @@ def figure_max_return_and_depth(data):
 
 def figure_individual_seed_runs(data):
     """Fig 14: Individual seed trajectories (episode return) for transparency."""
-    fig, axes = plt.subplots(1, 2, figsize=FIGSIZE_WIDE)
-    seed_linestyles = {1: "-", 4: "--", 42: ":"}
+    n_methods = len(METHODS)
+    n_cols = min(n_methods, 4)
+    n_rows = (n_methods + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 5 * n_rows), squeeze=False)
+    axes_flat = axes.flatten()
+    seed_linestyles = ["-", "--", ":", "-.", (0, (3, 1, 1, 1)), (0, (5, 1))]
     stats_lines = []
 
     stats_lines.append("  Per-seed final episode return (smoothed, last value):")
     stats_lines.append(f"    {'Method':<24} {'Seed':<8} {'Final Return':<16} {'Num Episodes':<14} {'Total Steps':<14}")
     stats_lines.append("    " + "-" * 76)
 
-    for idx, mk in enumerate(["cl", "original"]):
-        ax = axes[idx]
-        for seed in SEEDS:
+    for idx, mk in enumerate(_method_keys_sorted()):
+        ax = axes_flat[idx] if idx < len(axes_flat) else None
+        if ax is None:
+            continue
+        for s_idx, seed in enumerate(SEEDS):
             if seed not in data[mk]:
                 continue
             records = data[mk][seed].get("metrics", [])
             s, v = extract_scalar_curve(records, "step", "episode/score", smooth=SMOOTH_WINDOW)
+            ls = seed_linestyles[s_idx % len(seed_linestyles)]
             if len(s) > 0:
-                ax.plot(s, v, linestyle=seed_linestyles[seed], color=COLORS[mk],
+                ax.plot(s, v, linestyle=ls, color=COLORS[mk],
                         label=f"seed={seed}", alpha=0.8, linewidth=1.5)
                 stats_lines.append(f"    {METHODS[mk]:<24} {seed:<8} {v[-1]:<16.4f} {len(records):<14} {s[-1]:<14.0f}")
         format_ax(ax, f"{METHODS[mk]}", ylabel="Episode Return")
+
+    # Hide unused axes
+    for idx in range(n_methods, len(axes_flat)):
+        axes_flat[idx].set_visible(False)
 
     # Inter-seed variance analysis
     stats_lines.append("\n  Inter-seed variance (coefficient of variation at final point):")
@@ -1377,13 +1630,22 @@ def figure_individual_seed_runs(data):
 
 def main():
     print("=" * 70)
-    print("Craftax: DreamerV3-CL vs DreamerV3-Original Comparative Analysis")
+    print("Craftax Experiment Comparative Analysis (Auto-Discovery)")
     print("=" * 70)
-    print(f"\nLoading data from {LOGS_DIR.resolve()} ...")
+    print(f"\nScanning {LOGS_DIR.resolve()} for experiment folders ...")
+    discover_methods(LOGS_DIR)
+
+    if not METHODS:
+        print("ERROR: No methods discovered. Check LOGS_DIR and folder naming.")
+        print("  Expected pattern: craftax_dreamerv3-<method>-<seed>")
+        return
+
+    print(f"\nLoading data ...")
     data = load_all_runs()
 
     total_runs = sum(len(v) for v in data.values())
-    print(f"\nLoaded {total_runs} / 6 expected runs.\n")
+    expected = len(METHODS) * len(SEEDS)
+    print(f"\nLoaded {total_runs} / {expected} expected runs.\n")
     if total_runs == 0:
         print("ERROR: No data found. Check LOGS_DIR and folder naming.")
         return
