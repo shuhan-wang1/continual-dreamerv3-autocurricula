@@ -195,9 +195,8 @@ def auc_comparison(curves, metric_name):
 LOGS_DIR = pathlib.Path("logs")
 SMOOTH_WINDOW = 50  # rolling window for smoothing curves
 INTERP_STEPS = 1000  # number of interpolation points on x-axis
-FIGSIZE_WIDE = (14, 5)
-FIGSIZE_TALL = (14, 8)
 ALPHA_FILL = 0.18
+MAX_SIG_ANNOTATIONS = 3  # max pairwise significance annotations on a single plot
 SIGNIFICANCE_LEVEL = 0.05
 OUTPUT_DIR = pathlib.Path("figures")
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -219,9 +218,11 @@ ACHIEVEMENT_NAMES = [
 # ──────────────────────────────────────────────────────────────────────
 # These globals will be populated at startup by discover_methods()
 
-METHODS = {}   # method_key -> display_name, e.g. {"cl": "DreamerV3-CL", ...}
-SEEDS = []     # sorted list of discovered seeds
-COLORS = {}    # method_key -> hex color
+METHODS = {}      # method_key -> display_name, e.g. {"cl": "DreamerV3-CL", ...}
+SEEDS = []        # sorted list of discovered seeds
+COLORS = {}       # method_key -> hex color
+LINESTYLES = {}   # method_key -> linestyle (solid, dashed, dotted, ...)
+MARKERS = {}      # method_key -> marker char ('o', 's', 'D', ...)
 
 # A colour palette that is colour-blind-friendly and extends to many methods.
 # The first two entries match the original colours for cl and original.
@@ -237,6 +238,23 @@ _BASE_PALETTE = [
     "#bcbd22",  # olive
     "#17becf",  # cyan
 ]
+
+_BASE_LINESTYLES = ["-", "--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 1)),
+                    (0, (3, 5, 1, 5, 1, 5)), "-", "--", "-."]
+_BASE_MARKERS = ["o", "s", "D", "^", "v", "P", "X", "*", "h", "p"]
+
+
+def _fig_size(base_w, base_h, n_methods=None, scale_w=True, scale_h=False):
+    """Return (w, h) figure size scaled to number of methods.
+
+    For shared-axis plots (all curves overlaid): widen for legend room.
+    For per-method subplot plots: caller controls n_cols/n_rows instead.
+    """
+    if n_methods is None:
+        n_methods = len(METHODS)
+    w = base_w * max(1.0, n_methods / 2.5) if scale_w else base_w
+    h = base_h * max(1.0, n_methods / 2.5) if scale_h else base_h
+    return (w, h)
 
 
 def _method_display_name(key: str) -> str:
@@ -265,7 +283,7 @@ def discover_methods(logs_dir: pathlib.Path):
 
     Also handles the pattern ``craftax_<method>-<seed>`` as a fallback.
     """
-    global METHODS, SEEDS, COLORS
+    global METHODS, SEEDS, COLORS, LINESTYLES, MARKERS
 
     if not logs_dir.exists():
         print(f"  [ERROR] Logs directory not found: {logs_dir.resolve()}")
@@ -314,9 +332,13 @@ def discover_methods(logs_dir: pathlib.Path):
 
     METHODS = {}
     COLORS = {}
+    LINESTYLES = {}
+    MARKERS = {}
     for i, mk in enumerate(ordered_keys):
         METHODS[mk] = _method_display_name(mk)
         COLORS[mk] = _BASE_PALETTE[i % len(_BASE_PALETTE)]
+        LINESTYLES[mk] = _BASE_LINESTYLES[i % len(_BASE_LINESTYLES)]
+        MARKERS[mk] = _BASE_MARKERS[i % len(_BASE_MARKERS)]
 
     print(f"  Discovered {len(METHODS)} methods: {list(METHODS.keys())}")
     print(f"  Seeds: {SEEDS}")
@@ -427,11 +449,21 @@ def interpolate_to_common_grid(all_steps, all_vals, n_points=INTERP_STEPS):
 # Plotting Helpers
 # ──────────────────────────────────────────────────────────────────────
 
-def plot_mean_std(ax, grid, matrix, color, label):
-    """Plot mean line with shaded std band."""
+def plot_mean_std(ax, grid, matrix, color, label, method_key=None):
+    """Plot mean line with shaded std band.
+
+    When *method_key* is given, linestyle and marker are looked up from
+    the global dicts so that each method is visually distinct even in
+    grayscale or with many overlapping curves.
+    """
     mu = matrix.mean(axis=0)
     std = matrix.std(axis=0)
-    ax.plot(grid, mu, color=color, label=label, linewidth=2)
+    ls = LINESTYLES.get(method_key, "-") if method_key else "-"
+    mk = MARKERS.get(method_key, None) if method_key else None
+    # markevery: show a marker every ~5% of the grid points
+    me = max(1, len(grid) // 20) if mk else None
+    ax.plot(grid, mu, color=color, label=label, linewidth=2,
+            linestyle=ls, marker=mk, markevery=me, markersize=4)
     ax.fill_between(grid, mu - std, mu + std, color=color, alpha=ALPHA_FILL)
 
 
@@ -461,6 +493,10 @@ def add_pairwise_significance(ax, grid, mats, y_pos=None):
     if not annotations:
         return
 
+    # Sort by p-value (most significant first) and cap count to avoid clutter
+    annotations.sort(key=lambda x: x[1])
+    annotations = annotations[:MAX_SIG_ANNOTATIONS]
+
     # Stack annotations vertically
     base_y = y_pos
     if base_y is None:
@@ -485,10 +521,18 @@ def add_pairwise_significance(ax, grid, mats, y_pos=None):
 
 
 def format_ax(ax, title, xlabel="Environment Steps", ylabel=""):
+    """Format axis with adaptive legend placement based on number of methods."""
     ax.set_title(title, fontsize=13, fontweight="bold")
     ax.set_xlabel(xlabel, fontsize=11)
     ax.set_ylabel(ylabel, fontsize=11)
-    ax.legend(fontsize=9, loc="best")
+    n = len(METHODS)
+    if n <= 3:
+        ax.legend(fontsize=9, loc="best")
+    else:
+        # Many methods: use smaller font and place legend outside to avoid
+        # occluding curves.  ncol keeps it compact.
+        ax.legend(fontsize=8, loc="upper left", ncol=max(1, n // 2),
+                  framealpha=0.8)
     ax.grid(True, alpha=0.3)
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1e3:.0f}k"))
     ax.spines["top"].set_visible(False)
@@ -524,7 +568,7 @@ def _method_keys_sorted():
 
 def figure_episode_return_and_length(data):
     """Fig 1: Episode return and episode length over training steps."""
-    fig, axes = plt.subplots(1, 2, figsize=FIGSIZE_WIDE)
+    fig, axes = plt.subplots(1, 2, figsize=_fig_size(14, 5))
     stats_lines = []
 
     for idx, (value_key, ylabel, title) in enumerate([
@@ -538,7 +582,7 @@ def figure_episode_return_and_length(data):
         for mk in METHODS:
             grid, mat = curves[mk]
             if grid is not None and mat is not None:
-                plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk])
+                plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk], method_key=mk)
                 mats[mk] = mat
                 ref_grid = grid
         if ref_grid is not None and len(mats) >= 2:
@@ -574,7 +618,7 @@ def figure_episode_return_and_length(data):
 
 def figure_online_return_and_success(data):
     """Fig 2: Rolling return mean and success rate from online_metrics."""
-    fig, axes = plt.subplots(1, 2, figsize=FIGSIZE_WIDE)
+    fig, axes = plt.subplots(1, 2, figsize=_fig_size(14, 5))
     stats_lines = []
 
     for idx, (value_key, ylabel, title) in enumerate([
@@ -588,7 +632,7 @@ def figure_online_return_and_success(data):
         for mk in METHODS:
             grid, mat = curves[mk]
             if grid is not None and mat is not None:
-                plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk])
+                plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk], method_key=mk)
                 mats[mk] = mat
                 ref_grid = grid
         if ref_grid is not None and len(mats) >= 2:
@@ -638,7 +682,7 @@ def figure_world_model_losses(data):
         ("loss/dyn", "Dynamics Loss"),
         ("loss/rep", "Representation Loss"),
     ]
-    fig, axes = plt.subplots(2, 3, figsize=(16, 9))
+    fig, axes = plt.subplots(2, 3, figsize=_fig_size(16, 9))
     axes = axes.flatten()
     stats_lines = []
 
@@ -650,7 +694,7 @@ def figure_world_model_losses(data):
         for mk in METHODS:
             grid, mat = curves[mk]
             if grid is not None and mat is not None:
-                plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk])
+                plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk], method_key=mk)
                 mats[mk] = mat
                 ref_grid = grid
         if ref_grid is not None and len(mats) >= 2:
@@ -669,8 +713,11 @@ def figure_world_model_losses(data):
             if grid is not None and mat is not None:
                 mu = mat.mean(axis=0)
                 std = mat.std(axis=0)
+                mk_marker = MARKERS.get(mk)
+                me = max(1, len(grid) // 20) if mk_marker else None
                 axes[5].plot(grid, mu, color=COLORS[mk], linestyle=ls,
-                        label=f"{METHODS[mk]} ({label_suffix})", linewidth=1.5)
+                        label=f"{METHODS[mk]} ({label_suffix})", linewidth=1.5,
+                        marker=mk_marker, markevery=me, markersize=3)
                 axes[5].fill_between(grid, mu - std, mu + std,
                                 color=COLORS[mk], alpha=ALPHA_FILL * 0.7)
         stats_lines.append(curve_endpoint_stats(curves, f"{label_suffix} Loss"))
@@ -709,7 +756,7 @@ def figure_world_model_losses(data):
 
 def figure_td_error(data):
     """Fig 4: TD error mean and max over training."""
-    fig, axes = plt.subplots(1, 2, figsize=FIGSIZE_WIDE)
+    fig, axes = plt.subplots(1, 2, figsize=_fig_size(14, 5))
     stats_lines = []
 
     for idx, (vk1, vk2, ylabel, title) in enumerate([
@@ -723,7 +770,7 @@ def figure_td_error(data):
             for mk in METHODS:
                 grid, mat = curves[mk]
                 if grid is not None and mat is not None:
-                    plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk])
+                    plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk], method_key=mk)
                     any_data = True
             if any_data:
                 break
@@ -770,7 +817,7 @@ def figure_exploration_metrics(data):
         ("p2e/ensemble_disagreement", "Ensemble Disagreement"),
         ("p2e/intrinsic_reward", "Intrinsic Reward"),
     ]
-    fig, axes = plt.subplots(2, 3, figsize=(16, 9))
+    fig, axes = plt.subplots(2, 3, figsize=_fig_size(16, 9))
     axes = axes.flatten()
     stats_lines = []
 
@@ -785,7 +832,7 @@ def figure_exploration_metrics(data):
             if grid is not None and mat is not None:
                 if np.abs(mat).max() < 1e-12:
                     continue
-                plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk])
+                plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk], method_key=mk)
                 mats[mk] = mat
                 ref_grid = grid
                 any_data = True
@@ -843,7 +890,7 @@ def figure_exploration_metrics(data):
 
 def figure_forgetting_and_frontier(data):
     """Fig 6: Aggregate forgetting and frontier rate over training."""
-    fig, axes = plt.subplots(1, 2, figsize=FIGSIZE_WIDE)
+    fig, axes = plt.subplots(1, 2, figsize=_fig_size(14, 5))
     stats_lines = []
 
     for idx, (value_key, ylabel, title) in enumerate([
@@ -857,7 +904,7 @@ def figure_forgetting_and_frontier(data):
         for mk in METHODS:
             grid, mat = curves[mk]
             if grid is not None and mat is not None:
-                plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk])
+                plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk], method_key=mk)
                 mats[mk] = mat
                 ref_grid = grid
         if ref_grid is not None and len(mats) >= 2:
@@ -905,7 +952,8 @@ def figure_forgetting_and_frontier(data):
 def figure_per_achievement_rates(data):
     """Fig 7: Per-achievement rate comparison at final evaluation (grouped bar chart)."""
     n_methods = len(METHODS)
-    fig, ax = plt.subplots(figsize=(16, 7))
+    bar_w = max(16, 16 + (n_methods - 2) * 2)  # widen for many methods
+    fig, ax = plt.subplots(figsize=(bar_w, 7))
     stats_lines = []
 
     final_rates = {}
@@ -931,8 +979,11 @@ def figure_per_achievement_rates(data):
         mu = mat.mean(axis=0)
         std = mat.std(axis=0)
         offset = -0.4 + (i + 0.5) * width
+        ec = "black" if n_methods > 3 else "white"
+        al = max(0.6, 0.85 - 0.05 * n_methods)
         ax.bar(x + offset, mu, width, yerr=std, label=METHODS[mk],
-               color=COLORS[mk], alpha=0.85, capsize=3, edgecolor="white")
+               color=COLORS[mk], alpha=al, capsize=3, edgecolor=ec,
+               linewidth=0.5)
 
     # Significance per achievement + stats -- pairwise
     stats_lines.append("  Per-achievement rates (mean +/- std) and pairwise significance:")
@@ -1009,7 +1060,8 @@ def figure_per_achievement_rates(data):
 def figure_per_achievement_forgetting(data):
     """Fig 8: Per-achievement forgetting at final evaluation."""
     n_methods = len(METHODS)
-    fig, ax = plt.subplots(figsize=(16, 7))
+    bar_w = max(16, 16 + (n_methods - 2) * 2)
+    fig, ax = plt.subplots(figsize=(bar_w, 7))
     stats_lines = []
 
     final_forg = {}
@@ -1037,8 +1089,11 @@ def figure_per_achievement_forgetting(data):
         mu = mat.mean(axis=0)
         std = mat.std(axis=0)
         offset = -0.4 + (i + 0.5) * width
+        ec = "black" if n_methods > 3 else "white"
+        al = max(0.6, 0.85 - 0.05 * n_methods)
         ax.bar(x + offset, mu, width, yerr=std, label=METHODS[mk],
-               color=COLORS[mk], alpha=0.85, capsize=3, edgecolor="white")
+               color=COLORS[mk], alpha=al, capsize=3, edgecolor=ec,
+               linewidth=0.5)
 
     # Stats table
     method_keys_with_data = [mk for mk in _method_keys_sorted() if mk in final_forg]
@@ -1405,7 +1460,7 @@ def figure_top_achievement_curves(data):
     mean_final = np.mean(all_final_rates, axis=0)
     top_indices = np.argsort(mean_final)[::-1][:8]
 
-    fig, axes = plt.subplots(2, 4, figsize=(18, 8))
+    fig, axes = plt.subplots(2, 4, figsize=_fig_size(18, 8))
     axes = axes.flatten()
     stats_lines = []
 
@@ -1442,7 +1497,7 @@ def figure_top_achievement_curves(data):
                     all_v.append(v)
             grid, mat = interpolate_to_common_grid(all_s, all_v)
             if grid is not None and mat is not None:
-                plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk])
+                plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk], method_key=mk)
                 mats[mk] = mat
                 ref_grid = grid
 
@@ -1471,7 +1526,7 @@ def figure_top_achievement_curves(data):
 
 def figure_max_return_and_depth(data):
     """Fig 13: Per-task max return and max achievement depth over time."""
-    fig, axes = plt.subplots(1, 2, figsize=FIGSIZE_WIDE)
+    fig, axes = plt.subplots(1, 2, figsize=_fig_size(14, 5))
     stats_lines = []
 
     for idx, (value_key, ylabel, title) in enumerate([
@@ -1498,7 +1553,7 @@ def figure_max_return_and_depth(data):
                     all_v.append(np.array(vals, dtype=np.float64))
             grid, mat = interpolate_to_common_grid(all_s, all_v)
             if grid is not None and mat is not None:
-                plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk])
+                plot_mean_std(ax, grid, mat, COLORS[mk], METHODS[mk], method_key=mk)
                 mats[mk] = mat
                 ref_grid = grid
         format_ax(ax, title, ylabel=ylabel)
