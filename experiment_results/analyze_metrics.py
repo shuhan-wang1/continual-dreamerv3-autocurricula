@@ -964,18 +964,19 @@ def figure_per_achievement_rates(data):
                 continue
             summary = data[mk][seed].get("summary", {})
             rates = summary.get("per_task_achievement_rates", [[]])
-            if rates and len(rates[0]) == len(ACHIEVEMENT_NAMES):
-                seed_rates.append(rates[0])
+            if rates and len(rates[0]) >= len(ACHIEVEMENT_NAMES):
+                seed_rates.append(rates[0][:len(ACHIEVEMENT_NAMES)])
         if seed_rates:
             final_rates[mk] = np.array(seed_rates)
 
-    x = np.arange(len(ACHIEVEMENT_NAMES))
+    n_ach = len(ACHIEVEMENT_NAMES)
+    x = np.arange(n_ach)
     width = 0.8 / max(n_methods, 1)
 
     for i, mk in enumerate(_method_keys_sorted()):
         if mk not in final_rates:
             continue
-        mat = final_rates[mk]
+        mat = final_rates[mk][:, :n_ach]
         mu = mat.mean(axis=0)
         std = mat.std(axis=0)
         offset = -0.4 + (i + 0.5) * width
@@ -1074,18 +1075,19 @@ def figure_per_achievement_forgetting(data):
             if online:
                 last = online[-1]
                 forg = last.get("per_achievement_forgetting", [])
-                if len(forg) == len(ACHIEVEMENT_NAMES):
-                    seed_forg.append(forg)
+                if len(forg) >= len(ACHIEVEMENT_NAMES):
+                    seed_forg.append(forg[:len(ACHIEVEMENT_NAMES)])
         if seed_forg:
             final_forg[mk] = np.array(seed_forg)
 
-    x = np.arange(len(ACHIEVEMENT_NAMES))
+    n_ach = len(ACHIEVEMENT_NAMES)
+    x = np.arange(n_ach)
     width = 0.8 / max(n_methods, 1)
 
     for i, mk in enumerate(_method_keys_sorted()):
         if mk not in final_forg:
             continue
-        mat = final_forg[mk]
+        mat = final_forg[mk][:, :n_ach]
         mu = mat.mean(axis=0)
         std = mat.std(axis=0)
         offset = -0.4 + (i + 0.5) * width
@@ -1242,9 +1244,9 @@ def figure_achievement_heatmap_over_time(data):
             rates_over_time = []
             for r in online:
                 par = r.get("per_achievement_rates", [])
-                if len(par) == len(ACHIEVEMENT_NAMES):
+                if len(par) >= len(ACHIEVEMENT_NAMES):
                     steps.append(r["step"])
-                    rates_over_time.append(par)
+                    rates_over_time.append(par[:len(ACHIEVEMENT_NAMES)])
             if steps:
                 seed_data.append((np.array(steps), np.array(rates_over_time)))
 
@@ -1346,8 +1348,9 @@ def figure_summary_table(data):
             line_parts.append(f"{s:<28}")
         stats_lines.append("    " + " ".join(line_parts))
 
-        # Best pairwise p-value for the table
-        best_p_str = "N/A"
+        # Best (smallest) pairwise p-value for the table cell
+        best_p = None
+        best_sig = "N/A"
         if len(method_keys) >= 2:
             for i_a in range(len(method_keys)):
                 for i_b in range(i_a + 1, len(method_keys)):
@@ -1357,7 +1360,10 @@ def figure_summary_table(data):
                     if len(a) >= 2 and len(b) >= 2:
                         _, p, sig = welch_t(a, b)
                         stats_lines.append(f"      {METHODS[mk_a]} vs {METHODS[mk_b]}: p={p:.4f} ({sig})")
-        row.append(best_p_str)
+                        if best_p is None or p < best_p:
+                            best_p = p
+                            best_sig = f"{p:.4f} ({sig})"
+        row.append(best_sig if best_p is not None else "N/A")
         rows.append(row)
 
     # Per-seed raw values for transparency
@@ -1450,8 +1456,8 @@ def figure_top_achievement_curves(data):
                 continue
             summary = data[mk][seed].get("summary", {})
             rates = summary.get("per_task_achievement_rates", [[]])
-            if rates and len(rates[0]) == len(ACHIEVEMENT_NAMES):
-                all_final_rates.append(rates[0])
+            if rates and len(rates[0]) >= len(ACHIEVEMENT_NAMES):
+                all_final_rates.append(rates[0][:len(ACHIEVEMENT_NAMES)])
 
     if not all_final_rates:
         print("  Skipping top achievement curves (no data)")
@@ -1544,10 +1550,17 @@ def figure_max_return_and_depth(data):
                 online = data[mk][seed].get("online", [])
                 steps, vals = [], []
                 for r in online:
-                    v = r.get(value_key, [])
-                    if isinstance(v, list) and len(v) > 0:
+                    v = r.get(value_key)
+                    if v is None:
+                        continue
+                    # Handle both scalar and list formats
+                    if isinstance(v, list):
+                        if len(v) > 0:
+                            steps.append(r["step"])
+                            vals.append(v[0])
+                    elif isinstance(v, (int, float)) and not np.isnan(v):
                         steps.append(r["step"])
-                        vals.append(v[0])
+                        vals.append(v)
                 if len(steps) > 1:
                     all_s.append(np.array(steps, dtype=np.float64))
                     all_v.append(np.array(vals, dtype=np.float64))
@@ -1583,8 +1596,15 @@ def figure_max_return_and_depth(data):
                     continue
                 online = data[mk][seed].get("online", [])
                 for r in online:
-                    v = r.get("per_task_max_return", [])
-                    if isinstance(v, list) and len(v) > 0 and v[0] >= thresh:
+                    v = r.get("per_task_max_return")
+                    if v is None:
+                        continue
+                    val = None
+                    if isinstance(v, list) and len(v) > 0:
+                        val = v[0]
+                    elif isinstance(v, (int, float)):
+                        val = v
+                    if val is not None and not np.isnan(val) and val >= thresh:
                         steps_to.append(r["step"])
                         break
                 else:
