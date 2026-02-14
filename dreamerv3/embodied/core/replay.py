@@ -68,6 +68,7 @@ class Replay:
     self.save_wait = save_wait
 
     self.metrics = {'samples': 0, 'inserts': 0, 'updates': 0}
+    self.last_inserted_itemid = None  # Track last inserted item for NLR
 
   def __len__(self):
     return len(self.items)
@@ -208,6 +209,7 @@ class Replay:
     self.sampler[itemid] = stepids
     self.fifo.append(itemid)
     self.item_keys.append(itemid)
+    self.last_inserted_itemid = itemid
 
   def _remove(self):
     """Remove the oldest item (FIFO eviction)."""
@@ -435,6 +437,32 @@ class Replay:
       numitems[uuid] = lengths[uuid] + 1 - self.length + future.get(succ, 0)
     numitems = {k: np.clip(v, 0, lengths[k]) for k, v in numitems.items()}
     return numitems
+
+  def update_nlr_episode(self, achievements, reward, item_keys=None):
+    """Notify the NLR selector about episode-level metadata.
+
+    Call this at the end of every episode when NLR sampling is active.
+    If ``item_keys`` is None, uses the most recently inserted item.
+
+    Parameters
+    ----------
+    achievements : np.ndarray[bool]  (num_achievements,)
+        Binary vector of achievements unlocked in this episode.
+    reward : float
+        Cumulative episodic reward.
+    item_keys : list[int] or None
+        Item keys from this episode to tag.  If None, uses last inserted.
+    """
+    from . import selectors as sel_module
+    if not isinstance(self.sampler, sel_module.NoveltyLearnabilityRecency):
+      return  # Not using NLR — no-op
+    if item_keys is None:
+      if self.last_inserted_itemid is not None:
+        item_keys = [self.last_inserted_itemid]
+      else:
+        return
+    for key in item_keys:
+      self.sampler.update_episode_stats(key, achievements, reward)
 
   def _notempty(self, reason=False):
     if reason:

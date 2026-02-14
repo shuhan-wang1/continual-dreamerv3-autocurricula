@@ -220,6 +220,28 @@ def parse_craftax_args(args=None):
     parser.add_argument('--recent_window', type=int, default=1000,
                         help='Window size for recent experience sampling.')
 
+    # Novelty-Learnability-Recency (NLR) replay sampling
+    parser.add_argument('--nlr_sampling', default=False, action='store_true',
+                        help='Enable NLR replay sampling (overrides recent_frac/50:50 strategy). '
+                             'Splits buffer into novel (low success-rate achievements), '
+                             'learnable (above-baseline reward), and recent (exploration) pools.')
+    parser.add_argument('--nlr_novel_frac', type=float, default=0.35,
+                        help='NLR: fraction of samples from the novelty pool (default 0.35).')
+    parser.add_argument('--nlr_learnable_frac', type=float, default=0.35,
+                        help='NLR: fraction of samples from the learnability pool (default 0.35).')
+    parser.add_argument('--nlr_recent_frac', type=float, default=0.30,
+                        help='NLR: fraction of samples from the recent pool (default 0.30).')
+    parser.add_argument('--nlr_recent_window', type=int, default=1000,
+                        help='NLR: window size for the recent pool triangular sampling.')
+    parser.add_argument('--nlr_reward_ema_decay', type=float, default=0.99,
+                        help='NLR: EMA decay for reward baseline in learnability scoring.')
+    parser.add_argument('--nlr_novelty_eps', type=float, default=0.01,
+                        help='NLR: epsilon added to success rate in novelty scoring (1/(rate+eps)).')
+    parser.add_argument('--nlr_novelty_temp', type=float, default=1.0,
+                        help='NLR: temperature for novelty pool sampling distribution.')
+    parser.add_argument('--nlr_learnability_temp', type=float, default=1.0,
+                        help='NLR: temperature for learnability pool sampling distribution.')
+
     # Exploration
     parser.add_argument('--plan2explore', default=True, action='store_true',
                         help='Enable plan2explore exploration strategy (default: enabled).')

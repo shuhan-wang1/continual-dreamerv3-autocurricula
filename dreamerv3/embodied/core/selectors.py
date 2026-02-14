@@ -349,6 +349,268 @@ class RewardWeighted:
         self.rewards[self.indices[key]] = reward
 
 
+class NoveltyLearnabilityRecency:
+  """Novelty-Learnability-Recency (NLR) replay selector for open-ended learning.
+
+  Splits the replay buffer sampling into three pools:
+    - **Novel pool** (default 35%): Trajectories containing achievements with
+      low success rate.  Priority ∝ 1 / (success_rate + ε) so that rarely-
+      accomplished achievements are revisited until they become routine.
+    - **Learnable pool** (default 35%): Trajectories whose episodic reward
+      exceeds the running mean reward (advantage-based, GRPO-style).  These
+      contain the strongest learning signal for improvement.
+    - **Recent pool** (default 30%): Triangular recency-weighted sampling
+      over a sliding window of the most recent items, acting as an
+      exploration hedge to surface not-yet-categorised value.
+
+  Trajectories can appear in multiple pools (duplication allowed) so that
+  items which are *both* novel and learnable are naturally over-sampled.
+
+  The selector maintains per-achievement success-rate statistics and a
+  running reward baseline.  As the agent masters an achievement its
+  success rate rises, naturally deprioritising it in the novel pool and
+  making room for the next frontier.
+
+  Usage
+  -----
+  Instantiate via ``make_selector`` in ``train_craftax.py`` when the
+  ``--nlr_sampling`` flag is set.  Call ``update_episode_stats()`` at the
+  end of every episode from the training loop to feed novelty / reward
+  metadata into the selector.
+  """
+
+  def __init__(
+      self,
+      novel_frac=0.35,
+      learnable_frac=0.35,
+      recent_frac=0.30,
+      recent_window=1000,
+      num_achievements=67,
+      reward_ema_decay=0.99,
+      novelty_eps=0.01,
+      novelty_temp=1.0,
+      learnability_temp=1.0,
+      seed=0,
+  ):
+    assert abs(novel_frac + learnable_frac + recent_frac - 1.0) < 1e-6, \
+        f'Fractions must sum to 1, got {novel_frac + learnable_frac + recent_frac}'
+    self.novel_frac = novel_frac
+    self.learnable_frac = learnable_frac
+    self.recent_frac = recent_frac
+    self.recent_window = recent_window
+    self.num_achievements = num_achievements
+    self.novelty_eps = novelty_eps
+    self.novelty_temp = novelty_temp
+    self.learnability_temp = learnability_temp
+    self.rng = np.random.default_rng(seed)
+    self.lock = threading.Lock()
+
+    # ---- Item storage ----
+    self.keys = []           # all item keys in insertion order
+    self.indices = {}        # key -> position in self.keys
+    self.insertion_order = {}  # key -> monotonic counter for recency
+
+    # ---- Novel pool ----
+    self.novel_keys = []     # keys eligible for novelty sampling
+    self.novel_scores = []   # unnormalised novelty priority per key
+
+    # ---- Learnable pool ----
+    self.learn_keys = []     # keys eligible for learnability sampling
+    self.learn_scores = []   # unnormalised learnability priority per key
+
+    # ---- Per-achievement success-rate tracking ----
+    self.achievement_counts = np.zeros(num_achievements, dtype=np.float64)
+    self.achievement_successes = np.zeros(num_achievements, dtype=np.float64)
+
+    # ---- Reward baseline (exponential moving average) ----
+    self.reward_ema_decay = reward_ema_decay
+    self.reward_ema = 0.0
+    self.reward_ema_initialised = False
+
+    self._insert_counter = 0
+
+  # ------------------------------------------------------------------
+  # Public API: update per-episode statistics
+  # ------------------------------------------------------------------
+  def update_episode_stats(self, key, achievements, reward):
+    """Feed per-episode metadata to update novelty and learnability pools.
+
+    Must be called once at the end of every episode for the corresponding
+    item *key* that was inserted via ``__setitem__``.
+
+    Parameters
+    ----------
+    key : int
+        Item key returned by the replay buffer's ``_insert``.
+    achievements : np.ndarray[bool]  (num_achievements,)
+        Binary vector of achievements unlocked in this episode.
+    reward : float
+        Cumulative episodic reward.
+    """
+    with self.lock:
+      if key not in self.indices:
+        return  # item was already evicted
+
+      achievements = np.asarray(achievements, dtype=bool)
+
+      # --- Update achievement success rates ---
+      self.achievement_counts += 1  # every episode counts as an attempt
+      self.achievement_successes += achievements.astype(np.float64)
+
+      # --- Update reward EMA ---
+      if not self.reward_ema_initialised:
+        self.reward_ema = float(reward)
+        self.reward_ema_initialised = True
+      else:
+        self.reward_ema = (self.reward_ema_decay * self.reward_ema
+                           + (1.0 - self.reward_ema_decay) * float(reward))
+
+      # --- Compute novelty score ---
+      # Success rate for each achieved accomplishment
+      success_rates = np.where(
+          self.achievement_counts > 0,
+          self.achievement_successes / self.achievement_counts,
+          0.0,
+      )
+      # Novelty = mean inverse success rate across *achieved* items
+      achieved_mask = achievements.astype(bool)
+      if achieved_mask.any():
+        # The lower the success rate, the higher the novelty
+        inv_rates = 1.0 / (success_rates[achieved_mask] + self.novelty_eps)
+        novelty_score = float(np.mean(inv_rates))
+      else:
+        novelty_score = 0.0
+
+      # --- Compute learnability score ---
+      # Advantage = reward - baseline.  Only positive advantages qualify.
+      advantage = float(reward) - self.reward_ema
+      learnability_score = max(0.0, advantage)
+
+      # --- Insert into pools ---
+      if novelty_score > 0:
+        self.novel_keys.append(key)
+        self.novel_scores.append(novelty_score)
+      if learnability_score > 0:
+        self.learn_keys.append(key)
+        self.learn_scores.append(learnability_score)
+
+  def get_achievement_success_rates(self):
+    """Return current per-achievement success rates (for logging)."""
+    with self.lock:
+      mask = self.achievement_counts > 0
+      rates = np.zeros(self.num_achievements)
+      rates[mask] = self.achievement_successes[mask] / self.achievement_counts[mask]
+      return rates
+
+  # ------------------------------------------------------------------
+  # Selector interface (called by Replay)
+  # ------------------------------------------------------------------
+  def __len__(self):
+    return len(self.keys)
+
+  def __call__(self):
+    """Sample an item key according to the NLR strategy."""
+    with self.lock:
+      if len(self.keys) == 0:
+        raise IndexError('NLR selector is empty')
+
+      # Choose which pool to sample from
+      r = self.rng.random()
+      if r < self.novel_frac and len(self.novel_keys) > 0:
+        return self._sample_novel()
+      elif r < self.novel_frac + self.learnable_frac and len(self.learn_keys) > 0:
+        return self._sample_learnable()
+      else:
+        return self._sample_recent()
+
+  def __setitem__(self, key, stepids):
+    """Register a new item (called by Replay._insert)."""
+    with self.lock:
+      self.indices[key] = len(self.keys)
+      self.keys.append(key)
+      self._insert_counter += 1
+      self.insertion_order[key] = self._insert_counter
+
+  def __delitem__(self, key):
+    """Remove an evicted item from all pools."""
+    with self.lock:
+      if key not in self.indices:
+        return
+      assert 2 <= len(self), len(self)
+
+      # Remove from main list
+      idx = self.indices.pop(key)
+      last = self.keys.pop()
+      if idx != len(self.keys):
+        self.keys[idx] = last
+        self.indices[last] = idx
+
+      # Remove from insertion_order
+      self.insertion_order.pop(key, None)
+
+      # Remove from novel pool
+      self._remove_from_pool(key, self.novel_keys, self.novel_scores)
+
+      # Remove from learnable pool
+      self._remove_from_pool(key, self.learn_keys, self.learn_scores)
+
+  # ------------------------------------------------------------------
+  # Internal sampling methods
+  # ------------------------------------------------------------------
+  def _sample_novel(self):
+    """Sample from the novel pool, weighted by novelty score."""
+    scores = np.array(self.novel_scores, dtype=np.float64)
+    # Apply temperature scaling
+    scores = scores ** (1.0 / self.novelty_temp)
+    total = scores.sum()
+    if total <= 0:
+      # Fallback to recent if all scores are zero
+      return self._sample_recent()
+    probs = scores / total
+    idx = self.rng.choice(len(self.novel_keys), p=probs)
+    return self.novel_keys[idx]
+
+  def _sample_learnable(self):
+    """Sample from the learnable pool, weighted by advantage."""
+    scores = np.array(self.learn_scores, dtype=np.float64)
+    # Apply temperature scaling
+    scores = scores ** (1.0 / self.learnability_temp)
+    total = scores.sum()
+    if total <= 0:
+      return self._sample_recent()
+    probs = scores / total
+    idx = self.rng.choice(len(self.learn_keys), p=probs)
+    return self.learn_keys[idx]
+
+  def _sample_recent(self):
+    """Sample from recent items with triangular weighting."""
+    n = len(self.keys)
+    if n == 0:
+      raise IndexError('NLR selector is empty')
+    window = min(n, self.recent_window)
+    # Triangular distribution: most recent items get highest weight
+    weights = np.linspace(1.0, 0.0, window, endpoint=False)
+    total = weights.sum()
+    if total <= 0:
+      # Uniform fallback
+      idx = self.rng.integers(max(0, n - window), n).item()
+      return self.keys[idx]
+    probs = weights / total
+    # Sample within the recent window (end of self.keys)
+    start = n - window
+    local_idx = self.rng.choice(window, p=probs)
+    return self.keys[start + local_idx]
+
+  def _remove_from_pool(self, key, pool_keys, pool_scores):
+    """Remove a key from a (keys, scores) pool."""
+    try:
+      idx = pool_keys.index(key)
+      pool_keys.pop(idx)
+      pool_scores.pop(idx)
+    except ValueError:
+      pass  # key not in this pool
+
+
 class Mixture:
 
   def __init__(self, selectors, fractions, seed=0):

@@ -1183,9 +1183,32 @@ def make_selector(args, capacity, seed=0):
     - Reservoir sampling (random eviction) - use with eviction='reservoir' in make_replay
     - Recency-biased sampling
     - 50:50 sampling (half uniform, half triangular-recency) - Continual-Dreamer strategy
+    - NLR sampling (Novelty-Learnability-Recency) - for open-ended environments
     - Mixture of multiple strategies
     """
     from embodied.core import selectors
+
+    # ------------------------------------------------------------------
+    # NLR sampling (Novelty-Learnability-Recency) — overrides 50:50
+    # ------------------------------------------------------------------
+    if getattr(args, 'nlr_sampling', False):
+        nlr_selector = selectors.NoveltyLearnabilityRecency(
+            novel_frac=getattr(args, 'nlr_novel_frac', 0.35),
+            learnable_frac=getattr(args, 'nlr_learnable_frac', 0.35),
+            recent_frac=getattr(args, 'nlr_recent_frac', 0.30),
+            recent_window=getattr(args, 'nlr_recent_window', 1000),
+            num_achievements=NUM_CRAFTAX_ACHIEVEMENTS,
+            reward_ema_decay=getattr(args, 'nlr_reward_ema_decay', 0.99),
+            novelty_eps=getattr(args, 'nlr_novelty_eps', 0.01),
+            novelty_temp=getattr(args, 'nlr_novelty_temp', 1.0),
+            learnability_temp=getattr(args, 'nlr_learnability_temp', 1.0),
+            seed=seed,
+        )
+        print(f'[NLR] Novelty-Learnability-Recency sampling enabled: '
+              f'novel={args.nlr_novel_frac:.0%}, '
+              f'learnable={args.nlr_learnable_frac:.0%}, '
+              f'recent={args.nlr_recent_frac:.0%}')
+        return nlr_selector
 
     # Check if using 50:50 sampling (Continual-Dreamer strategy)
     # This is the recommended setup for continual learning with 8+ tasks.
@@ -1489,6 +1512,11 @@ def train_single(make_env, config, args, env_name=None):
     episodes = collections.defaultdict(elements.Agg)
     episode_achievements = {}  # Track achievements per worker
 
+    # NLR: track replay item keys per worker episode
+    nlr_active = getattr(args, 'nlr_sampling', False)
+    episode_item_keys = {}          # worker -> list of item keys inserted this episode
+    _prev_inserted_id = [None]      # mutable ref to detect new insertions
+
     # Shared state for training metrics
     training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0, 'latest_td_error': 0.0}
 
@@ -1499,9 +1527,17 @@ def train_single(make_env, config, args, env_name=None):
         if tran['is_first']:
             episode.reset()
             episode_achievements[worker] = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
+            episode_item_keys[worker] = []
 
         episode.add('score', tran['reward'], agg='sum')
         episode.add('length', 1, agg='sum')
+
+        # NLR: track newly inserted item keys for this worker's episode
+        if nlr_active and worker in episode_item_keys:
+            cur_id = replay.last_inserted_itemid
+            if cur_id is not None and cur_id != _prev_inserted_id[0]:
+                episode_item_keys[worker].append(cur_id)
+                _prev_inserted_id[0] = cur_id
 
         # Accumulate achievements throughout episode
         if 'log/achievements' in tran and worker in episode_achievements:
@@ -1515,6 +1551,14 @@ def train_single(make_env, config, args, env_name=None):
             score = result.pop('score')
             length = result.pop('length')
             logger.add({'score': score, 'length': length}, prefix='episode')
+
+            # NLR: feed episode metadata to replay selector
+            if nlr_active:
+                achievements = episode_achievements.get(
+                    worker, np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_))
+                keys = episode_item_keys.get(worker, [])
+                if keys:
+                    replay.update_nlr_episode(achievements, float(score), keys)
 
             if online is not None:
                 # Get final achievements for this episode
@@ -1888,15 +1932,28 @@ def cl_train_loop(make_envs, config, args, env_names=None):
             episode_achievements = {}  # Track achievements per worker
             current_task = task_id  # Capture for closure
 
+            # NLR: track replay item keys per worker episode
+            cl_nlr_active = getattr(args, 'nlr_sampling', False)
+            cl_episode_item_keys = {}
+            cl_prev_inserted_id = [None]
+
             def logfn(tran, worker):
                 episode = episodes[worker]
 
                 if tran['is_first']:
                     episode.reset()
                     episode_achievements[worker] = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
+                    cl_episode_item_keys[worker] = []
 
                 episode.add('score', tran['reward'], agg='sum')
                 episode.add('length', 1, agg='sum')
+
+                # NLR: track newly inserted item keys for this worker's episode
+                if cl_nlr_active and worker in cl_episode_item_keys:
+                    cur_id = replay.last_inserted_itemid
+                    if cur_id is not None and cur_id != cl_prev_inserted_id[0]:
+                        cl_episode_item_keys[worker].append(cur_id)
+                        cl_prev_inserted_id[0] = cur_id
 
                 # Accumulate achievements
                 if 'log/achievements' in tran and worker in episode_achievements:
@@ -1910,6 +1967,14 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                     score = result.pop('score')
                     length = result.pop('length')
                     logger.add({'score': score, 'length': length, 'task': current_task}, prefix='episode')
+
+                    # NLR: feed episode metadata to replay selector
+                    if cl_nlr_active:
+                        achievements = episode_achievements.get(
+                            worker, np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_))
+                        keys = cl_episode_item_keys.get(worker, [])
+                        if keys:
+                            replay.update_nlr_episode(achievements, float(score), keys)
 
                     if online is not None:
                         achievements = episode_achievements.get(worker, np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_))
