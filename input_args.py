@@ -220,32 +220,57 @@ def parse_craftax_args(args=None):
     parser.add_argument('--recent_window', type=int, default=1000,
                         help='Window size for recent experience sampling.')
 
-    # Novelty-Learnability-Recency (NLR) replay sampling
+    # ---- Privileged NLR/NLU (uses per-achievement decomposition — privileged info) ----
+    parser.add_argument('--nlr_privileged_sampling', default=False, action='store_true',
+                        help='Enable privileged NLR replay sampling. '
+                             'Novelty pool uses per-achievement success rates (privileged env info). '
+                             'Third pool: triangular recency.')
+    parser.add_argument('--nlu_privileged_sampling', default=False, action='store_true',
+                        help='Enable privileged NLU replay sampling. '
+                             'Like privileged NLR but third pool is uniform. '
+                             'Uses per-achievement success rates (privileged env info).')
+
+    # ---- Non-privileged NLR/NLU (2D reward×length grid — no privileged info) ----
     parser.add_argument('--nlr_sampling', default=False, action='store_true',
-                        help='Enable NLR replay sampling (overrides recent_frac/50:50 strategy). '
-                             'Splits buffer into novel (low success-rate achievements), '
-                             'learnable (above-baseline reward), and recent (triangular recency) pools.')
-    # Novelty-Learnability-Uniform (NLU) replay sampling (ablation variant)
+                        help='Enable NLR replay sampling (non-privileged). '
+                             'Novelty pool uses Bayesian 2D (reward, length) grid rarity. '
+                             'Third pool: triangular recency.')
     parser.add_argument('--nlu_sampling', default=False, action='store_true',
-                        help='Enable NLU replay sampling (like NLR but the third pool is uniform '
-                             'over the entire buffer instead of triangular recency). '
-                             'Use for ablation to test recency bias vs uniform sampling.')
+                        help='Enable NLU replay sampling (non-privileged). '
+                             'Like NLR but third pool is uniform. '
+                             'Novelty uses Bayesian 2D (reward, length) grid rarity.')
+
+    # ---- Shared NLR/NLU parameters (used by all variants) ----
     parser.add_argument('--nlr_novel_frac', type=float, default=0.35,
                         help='NLR: fraction of samples from the novelty pool (default 0.35).')
     parser.add_argument('--nlr_learnable_frac', type=float, default=0.35,
                         help='NLR: fraction of samples from the learnability pool (default 0.35).')
     parser.add_argument('--nlr_recent_frac', type=float, default=0.30,
-                        help='NLR: fraction of samples from the recent pool (default 0.30).')
+                        help='NLR: fraction of samples from the recent/uniform pool (default 0.30).')
     parser.add_argument('--nlr_recent_window', type=int, default=1000,
                         help='NLR: window size for the recent pool triangular sampling.')
     parser.add_argument('--nlr_reward_ema_decay', type=float, default=0.99,
                         help='NLR: EMA decay for reward baseline in learnability scoring.')
-    parser.add_argument('--nlr_novelty_eps', type=float, default=0.01,
-                        help='NLR: epsilon added to success rate in novelty scoring (1/(rate+eps)).')
     parser.add_argument('--nlr_novelty_temp', type=float, default=1.0,
                         help='NLR: temperature for novelty pool sampling distribution.')
     parser.add_argument('--nlr_learnability_temp', type=float, default=1.0,
                         help='NLR: temperature for learnability pool sampling distribution.')
+
+    # ---- Privileged-only parameters ----
+    parser.add_argument('--nlr_novelty_eps', type=float, default=0.01,
+                        help='Privileged NLR: epsilon added to success rate in novelty scoring.')
+
+    # ---- Non-privileged-only parameters (2D grid novelty) ----
+    parser.add_argument('--nlr_grid_reward_bins', type=int, default=5,
+                        help='Non-privileged NLR: number of quantile bins for reward axis.')
+    parser.add_argument('--nlr_grid_length_bins', type=int, default=10,
+                        help='Non-privileged NLR: number of quantile bins for length axis.')
+    parser.add_argument('--nlr_grid_recompute_every', type=int, default=500,
+                        help='Non-privileged NLR: recompute quantile bin edges every N episodes.')
+    parser.add_argument('--nlr_grid_prior_percentile', type=float, default=0.20,
+                        help='Non-privileged NLR: percentile of reward distribution for prior R_min.')
+    parser.add_argument('--nlr_grid_eps', type=float, default=0.01,
+                        help='Non-privileged NLR: epsilon added to bin counts for smoothing.')
 
     # Exploration
     parser.add_argument('--plan2explore', default=True, action='store_true',

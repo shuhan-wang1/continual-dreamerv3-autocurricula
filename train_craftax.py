@@ -1191,14 +1191,19 @@ def make_selector(args, capacity, seed=0):
     # ------------------------------------------------------------------
     # NLR / NLU sampling — overrides 50:50
     # ------------------------------------------------------------------
+    use_nlr_priv = getattr(args, 'nlr_privileged_sampling', False)
+    use_nlu_priv = getattr(args, 'nlu_privileged_sampling', False)
     use_nlr = getattr(args, 'nlr_sampling', False)
     use_nlu = getattr(args, 'nlu_sampling', False)
-    if use_nlr and use_nlu:
-        raise ValueError('--nlr_sampling and --nlu_sampling are mutually exclusive.')
+    nlr_flags = [use_nlr_priv, use_nlu_priv, use_nlr, use_nlu]
+    if sum(nlr_flags) > 1:
+        raise ValueError(
+            'At most one of --nlr_privileged_sampling, --nlu_privileged_sampling, '
+            '--nlr_sampling, --nlu_sampling can be set.')
 
-    if use_nlr or use_nlu:
-        # Shared kwargs — both use the same pool fractions / scoring params
-        shared_kwargs = dict(
+    # ---- Privileged variants (per-achievement novelty) ----
+    if use_nlr_priv or use_nlu_priv:
+        priv_kwargs = dict(
             novel_frac=getattr(args, 'nlr_novel_frac', 0.35),
             learnable_frac=getattr(args, 'nlr_learnable_frac', 0.35),
             recent_frac=getattr(args, 'nlr_recent_frac', 0.30),
@@ -1210,18 +1215,50 @@ def make_selector(args, capacity, seed=0):
             learnability_temp=getattr(args, 'nlr_learnability_temp', 1.0),
             seed=seed,
         )
-        if use_nlu:
-            selector = selectors.NoveltyLearnabilityUniform(**shared_kwargs)
-            tag = 'NLU'
+        if use_nlu_priv:
+            selector = selectors.PrivilegedNoveltyLearnabilityUniform(**priv_kwargs)
+            tag = 'NLU-privileged'
             third_pool = 'uniform'
         else:
-            selector = selectors.NoveltyLearnabilityRecency(**shared_kwargs)
-            tag = 'NLR'
+            selector = selectors.PrivilegedNoveltyLearnabilityRecency(**priv_kwargs)
+            tag = 'NLR-privileged'
             third_pool = 'recent (triangular)'
-        print(f'[{tag}] Novelty-Learnability-{third_pool} sampling enabled: '
+        print(f'[{tag}] Privileged Novelty-Learnability-{third_pool} sampling enabled: '
               f'novel={args.nlr_novel_frac:.0%}, '
               f'learnable={args.nlr_learnable_frac:.0%}, '
               f'third_pool({third_pool})={args.nlr_recent_frac:.0%}')
+        return selector
+
+    # ---- Non-privileged variants (2D grid novelty) ----
+    if use_nlr or use_nlu:
+        grid_kwargs = dict(
+            novel_frac=getattr(args, 'nlr_novel_frac', 0.35),
+            learnable_frac=getattr(args, 'nlr_learnable_frac', 0.35),
+            recent_frac=getattr(args, 'nlr_recent_frac', 0.30),
+            recent_window=getattr(args, 'nlr_recent_window', 1000),
+            reward_ema_decay=getattr(args, 'nlr_reward_ema_decay', 0.99),
+            novelty_temp=getattr(args, 'nlr_novelty_temp', 1.0),
+            learnability_temp=getattr(args, 'nlr_learnability_temp', 1.0),
+            grid_reward_bins=getattr(args, 'nlr_grid_reward_bins', 5),
+            grid_length_bins=getattr(args, 'nlr_grid_length_bins', 10),
+            grid_recompute_every=getattr(args, 'nlr_grid_recompute_every', 500),
+            grid_prior_percentile=getattr(args, 'nlr_grid_prior_percentile', 0.20),
+            grid_eps=getattr(args, 'nlr_grid_eps', 0.01),
+            seed=seed,
+        )
+        if use_nlu:
+            selector = selectors.NoveltyLearnabilityUniform(**grid_kwargs)
+            tag = 'NLU'
+            third_pool = 'uniform'
+        else:
+            selector = selectors.NoveltyLearnabilityRecency(**grid_kwargs)
+            tag = 'NLR'
+            third_pool = 'recent (triangular)'
+        print(f'[{tag}] Non-privileged Novelty-Learnability-{third_pool} sampling enabled: '
+              f'novel={args.nlr_novel_frac:.0%}, '
+              f'learnable={args.nlr_learnable_frac:.0%}, '
+              f'third_pool({third_pool})={args.nlr_recent_frac:.0%}, '
+              f'grid={args.nlr_grid_length_bins}x{args.nlr_grid_reward_bins}')
         return selector
 
     # Check if using 50:50 sampling (Continual-Dreamer strategy)
@@ -1527,7 +1564,9 @@ def train_single(make_env, config, args, env_name=None):
     episode_achievements = {}  # Track achievements per worker
 
     # NLR/NLU: track replay item keys per worker episode
-    nlr_active = getattr(args, 'nlr_sampling', False) or getattr(args, 'nlu_sampling', False)
+    nlr_privileged = getattr(args, 'nlr_privileged_sampling', False) or getattr(args, 'nlu_privileged_sampling', False)
+    nlr_nonpriv = getattr(args, 'nlr_sampling', False) or getattr(args, 'nlu_sampling', False)
+    nlr_active = nlr_privileged or nlr_nonpriv
     episode_item_keys = {}          # worker -> list of item keys inserted this episode
     _prev_inserted_id = [None]      # mutable ref to detect new insertions
 
@@ -1566,13 +1605,16 @@ def train_single(make_env, config, args, env_name=None):
             length = result.pop('length')
             logger.add({'score': score, 'length': length}, prefix='episode')
 
-            # NLR: feed episode metadata to replay selector
+            # NLR/NLU: feed episode metadata to replay selector
             if nlr_active:
-                achievements = episode_achievements.get(
-                    worker, np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_))
                 keys = episode_item_keys.get(worker, [])
                 if keys:
-                    replay.update_nlr_episode(achievements, float(score), keys)
+                    if nlr_privileged:
+                        achievements = episode_achievements.get(
+                            worker, np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_))
+                        replay.update_nlr_episode(achievements, float(score), keys)
+                    else:
+                        replay.update_nlr_episode_nonpriv(int(length), float(score), keys)
 
             if online is not None:
                 # Get final achievements for this episode
@@ -1947,7 +1989,9 @@ def cl_train_loop(make_envs, config, args, env_names=None):
             current_task = task_id  # Capture for closure
 
             # NLR/NLU: track replay item keys per worker episode
-            cl_nlr_active = getattr(args, 'nlr_sampling', False) or getattr(args, 'nlu_sampling', False)
+            cl_nlr_privileged = getattr(args, 'nlr_privileged_sampling', False) or getattr(args, 'nlu_privileged_sampling', False)
+            cl_nlr_nonpriv = getattr(args, 'nlr_sampling', False) or getattr(args, 'nlu_sampling', False)
+            cl_nlr_active = cl_nlr_privileged or cl_nlr_nonpriv
             cl_episode_item_keys = {}
             cl_prev_inserted_id = [None]
 
@@ -1982,13 +2026,16 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                     length = result.pop('length')
                     logger.add({'score': score, 'length': length, 'task': current_task}, prefix='episode')
 
-                    # NLR: feed episode metadata to replay selector
+                    # NLR/NLU: feed episode metadata to replay selector
                     if cl_nlr_active:
-                        achievements = episode_achievements.get(
-                            worker, np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_))
                         keys = cl_episode_item_keys.get(worker, [])
                         if keys:
-                            replay.update_nlr_episode(achievements, float(score), keys)
+                            if cl_nlr_privileged:
+                                achievements = episode_achievements.get(
+                                    worker, np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_))
+                                replay.update_nlr_episode(achievements, float(score), keys)
+                            else:
+                                replay.update_nlr_episode_nonpriv(int(length), float(score), keys)
 
                     if online is not None:
                         achievements = episode_achievements.get(worker, np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_))

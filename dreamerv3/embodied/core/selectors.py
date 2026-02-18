@@ -349,34 +349,23 @@ class RewardWeighted:
         self.rewards[self.indices[key]] = reward
 
 
-class NoveltyLearnabilityRecency:
-  """Novelty-Learnability-Recency (NLR) replay selector for open-ended learning.
+class PrivilegedNoveltyLearnabilityRecency:
+  """Privileged NLR replay selector — uses per-achievement decomposition.
+
+  **WARNING**: This selector uses privileged environment information
+  (the 67-dimensional achievement vector) that the agent's policy network
+  never observes.  Use ``--nlr_privileged_sampling`` to enable.
 
   Splits the replay buffer sampling into three pools:
     - **Novel pool** (default 35%): Trajectories containing achievements with
       low success rate.  Priority ∝ 1 / (success_rate + ε) so that rarely-
       accomplished achievements are revisited until they become routine.
     - **Learnable pool** (default 35%): Trajectories whose episodic reward
-      exceeds the running mean reward (advantage-based, GRPO-style).  These
-      contain the strongest learning signal for improvement.
+      exceeds the running mean reward (advantage-based, GRPO-style).
     - **Recent pool** (default 30%): Triangular recency-weighted sampling
-      over a sliding window of the most recent items, keeping training
-      anchored to on-policy data and surfacing not-yet-categorised value.
+      over a sliding window of the most recent items.
 
-  Trajectories can appear in multiple pools (duplication allowed) so that
-  items which are *both* novel and learnable are naturally over-sampled.
-
-  The selector maintains per-achievement success-rate statistics and a
-  running reward baseline.  As the agent masters an achievement its
-  success rate rises, naturally deprioritising it in the novel pool and
-  making room for the next frontier.
-
-  Usage
-  -----
-  Instantiate via ``make_selector`` in ``train_craftax.py`` when the
-  ``--nlr_sampling`` flag is set.  Call ``update_episode_stats()`` at the
-  end of every episode from the training loop to feed novelty / reward
-  metadata into the selector.
+  Trajectories can appear in multiple pools (duplication allowed).
   """
 
   def __init__(
@@ -512,7 +501,7 @@ class NoveltyLearnabilityRecency:
     """Sample an item key according to the NLR strategy."""
     with self.lock:
       if len(self.keys) == 0:
-        raise IndexError('NLR selector is empty')
+        raise IndexError('Privileged NLR selector is empty')
 
       # Choose which pool to sample from
       r = self.rng.random()
@@ -586,7 +575,7 @@ class NoveltyLearnabilityRecency:
     """Sample from recent items with triangular weighting."""
     n = len(self.keys)
     if n == 0:
-      raise IndexError('NLR selector is empty')
+      raise IndexError('Privileged NLR selector is empty (recent)')
     window = min(n, self.recent_window)
     # Triangular distribution: most recent items get highest weight
     weights = np.linspace(1.0, 0.0, window, endpoint=False)
@@ -611,15 +600,446 @@ class NoveltyLearnabilityRecency:
       pass  # key not in this pool
 
 
+class PrivilegedNoveltyLearnabilityUniform(PrivilegedNoveltyLearnabilityRecency):
+  """Privileged NLU replay selector — uses per-achievement decomposition.
+
+  **WARNING**: Uses privileged environment information.  See
+  ``PrivilegedNoveltyLearnabilityRecency`` docstring.
+
+  Identical to privileged NLR except the third pool samples **uniformly**
+  from the entire buffer instead of triangular recency-weighted sampling.
+  """
+
+  def _sample_recent(self):
+    """Sample uniformly from the entire buffer (overrides NLR triangular)."""
+    n = len(self.keys)
+    if n == 0:
+      raise IndexError('Privileged NLU selector is empty')
+    idx = self.rng.integers(0, n).item()
+    return self.keys[idx]
+
+
+# ====================================================================
+# Non-privileged NLR / NLU — 2D (reward, length) grid novelty
+# ====================================================================
+
+class NoveltyLearnabilityRecency:
+  """Non-privileged NLR replay selector using Bayesian 2D grid novelty.
+
+  Replaces the privileged per-achievement novelty scoring with a
+  non-privileged approach: a quantile-adaptive 2D histogram over
+  (episode_length, episodic_reward) space.  Novelty is defined as the
+  inverse bin count weighted by a sigmoid × linear prior that favours
+  medium-to-high reward episodes.
+
+  **No privileged information is used.**  The selector only observes
+  the same scalar reward and episode length available to the agent.
+
+  Novelty score for trajectory k in bin b:
+      score(k) = sigma((R_b - R_min) / beta) * R_b  /  (n_b + eps)
+
+  where R_b is the bin midpoint reward, R_min is the 20th-percentile
+  reward, beta is an adaptive sharpness parameter, and n_b is the
+  count of episodes in bin b.
+
+  Pools:
+    - **Novel pool** (default 35%): Bayesian 2D grid rarity scoring.
+    - **Learnable pool** (default 35%): Above-baseline reward (unchanged).
+    - **Recent pool** (default 30%): Triangular recency-weighted sampling.
+  """
+
+  def __init__(
+      self,
+      novel_frac=0.35,
+      learnable_frac=0.35,
+      recent_frac=0.30,
+      recent_window=1000,
+      reward_ema_decay=0.99,
+      novelty_temp=1.0,
+      learnability_temp=1.0,
+      grid_reward_bins=5,
+      grid_length_bins=10,
+      grid_recompute_every=500,
+      grid_prior_percentile=0.20,
+      grid_eps=0.01,
+      seed=0,
+  ):
+    assert abs(novel_frac + learnable_frac + recent_frac - 1.0) < 1e-6, \
+        f'Fractions must sum to 1, got {novel_frac + learnable_frac + recent_frac}'
+    self.novel_frac = novel_frac
+    self.learnable_frac = learnable_frac
+    self.recent_frac = recent_frac
+    self.recent_window = recent_window
+    self.novelty_temp = novelty_temp
+    self.learnability_temp = learnability_temp
+    self.rng = np.random.default_rng(seed)
+    self.lock = threading.Lock()
+
+    # ---- Item storage ----
+    self.keys = []           # all item keys in insertion order
+    self.indices = {}        # key -> position in self.keys
+    self.insertion_order = {}  # key -> monotonic counter for recency
+
+    # ---- Novel pool ----
+    self.novel_keys = []     # keys eligible for novelty sampling
+    self.novel_scores = []   # unnormalised novelty priority per key
+
+    # ---- Learnable pool ----
+    self.learn_keys = []     # keys eligible for learnability sampling
+    self.learn_scores = []   # unnormalised learnability priority per key
+
+    # ---- Reward baseline (EMA) ----
+    self.reward_ema_decay = reward_ema_decay
+    self.reward_ema = 0.0
+    self.reward_ema_initialised = False
+
+    # ---- 2D grid novelty ----
+    self.grid_reward_bins = grid_reward_bins
+    self.grid_length_bins = grid_length_bins
+    self.grid_recompute_every = grid_recompute_every
+    self.grid_prior_percentile = grid_prior_percentile
+    self.grid_eps = grid_eps
+
+    # Per-episode metadata for grid computation
+    self._episode_rewards = []   # reward for each key (parallel to self.keys)
+    self._episode_lengths = []   # length for each key (parallel to self.keys)
+    self._key_to_bin = {}        # key -> (len_bin, rew_bin)
+
+    # Grid state
+    self._grid_counts = np.zeros(
+        (grid_length_bins, grid_reward_bins), dtype=np.float64)
+    self._reward_edges = None    # quantile edges, shape (grid_reward_bins + 1,)
+    self._length_edges = None    # quantile edges, shape (grid_length_bins + 1,)
+    self._reward_midpoints = None  # shape (grid_reward_bins,)
+    self._r_min = 1.0            # prior threshold (adaptive)
+    self._beta = 1.0             # prior sharpness (adaptive)
+    self._episodes_since_recompute = 0
+    self._total_episodes = 0
+
+    self._insert_counter = 0
+
+  # ------------------------------------------------------------------
+  # 2D grid management
+  # ------------------------------------------------------------------
+  def _sigmoid(self, x):
+    """Numerically stable sigmoid."""
+    return np.where(
+        x >= 0,
+        1.0 / (1.0 + np.exp(-x)),
+        np.exp(x) / (1.0 + np.exp(x)),
+    )
+
+  def _recompute_grid(self):
+    """Recompute quantile bin edges from current buffer."""
+    rewards = np.array(self._episode_rewards, dtype=np.float64)
+    lengths = np.array(self._episode_lengths, dtype=np.float64)
+    n = len(rewards)
+    if n < 10:
+      return  # not enough data to compute meaningful quantiles
+
+    # Reward quantile edges
+    r_quantiles = np.linspace(0, 1, self.grid_reward_bins + 1)
+    self._reward_edges = np.quantile(rewards, r_quantiles)
+    # Ensure strictly increasing edges by adding small perturbation
+    for i in range(1, len(self._reward_edges)):
+      if self._reward_edges[i] <= self._reward_edges[i - 1]:
+        self._reward_edges[i] = self._reward_edges[i - 1] + 1e-6
+
+    # Length quantile edges
+    l_quantiles = np.linspace(0, 1, self.grid_length_bins + 1)
+    self._length_edges = np.quantile(lengths, l_quantiles)
+    for i in range(1, len(self._length_edges)):
+      if self._length_edges[i] <= self._length_edges[i - 1]:
+        self._length_edges[i] = self._length_edges[i - 1] + 1e-6
+
+    # Compute bin midpoints for reward axis
+    self._reward_midpoints = 0.5 * (
+        self._reward_edges[:-1] + self._reward_edges[1:])
+
+    # Adaptive prior parameters
+    self._r_min = float(np.quantile(rewards, self.grid_prior_percentile))
+    r_50 = float(np.quantile(rewards, 0.50))
+    self._beta = max(0.1, (r_50 - self._r_min) / 4.0)
+
+    # Rebuild grid counts from scratch
+    self._grid_counts = np.zeros(
+        (self.grid_length_bins, self.grid_reward_bins), dtype=np.float64)
+    self._key_to_bin.clear()
+
+    for i, key in enumerate(self.keys):
+      if i < len(self._episode_rewards):
+        r = self._episode_rewards[i]
+        l = self._episode_lengths[i]
+        lb = self._get_length_bin(l)
+        rb = self._get_reward_bin(r)
+        self._key_to_bin[key] = (lb, rb)
+        self._grid_counts[lb, rb] += 1
+
+    # Recompute novel pool scores for all items
+    self._rebuild_novel_pool()
+
+  def _get_reward_bin(self, reward):
+    """Map reward to bin index."""
+    if self._reward_edges is None:
+      return 0
+    idx = int(np.searchsorted(self._reward_edges[1:], reward, side='right'))
+    return min(idx, self.grid_reward_bins - 1)
+
+  def _get_length_bin(self, length):
+    """Map length to bin index."""
+    if self._length_edges is None:
+      return 0
+    idx = int(np.searchsorted(self._length_edges[1:], length, side='right'))
+    return min(idx, self.grid_length_bins - 1)
+
+  def _compute_novelty_score(self, reward_bin):
+    """Compute Bayesian novelty score for a given grid cell.
+
+    score = sigmoid((R_midpoint - R_min) / beta) * R_midpoint / (n_b + eps)
+    """
+    if self._reward_midpoints is None:
+      return 0.0
+    r_mid = self._reward_midpoints[reward_bin]
+    prior = float(self._sigmoid(
+        np.float64((r_mid - self._r_min) / self._beta))) * r_mid
+    return prior
+
+  def _compute_novelty_score_for_cell(self, length_bin, reward_bin):
+    """Full novelty score for a specific cell: prior / (count + eps)."""
+    prior = self._compute_novelty_score(reward_bin)
+    count = self._grid_counts[length_bin, reward_bin]
+    if prior <= 0:
+      return 0.0
+    return prior / (count + self.grid_eps)
+
+  def _rebuild_novel_pool(self):
+    """Rebuild the entire novel pool from current grid state."""
+    self.novel_keys.clear()
+    self.novel_scores.clear()
+    for key, (lb, rb) in self._key_to_bin.items():
+      if key not in self.indices:
+        continue
+      score = self._compute_novelty_score_for_cell(lb, rb)
+      if score > 0:
+        self.novel_keys.append(key)
+        self.novel_scores.append(score)
+
+  # ------------------------------------------------------------------
+  # Public API: update per-episode statistics
+  # ------------------------------------------------------------------
+  def update_episode_stats(self, key, episode_length, reward):
+    """Feed per-episode metadata to update novelty and learnability pools.
+
+    Parameters
+    ----------
+    key : int
+        Item key returned by the replay buffer's ``_insert``.
+    episode_length : int
+        Number of timesteps in this episode.
+    reward : float
+        Cumulative episodic reward.
+    """
+    with self.lock:
+      if key not in self.indices:
+        return  # item was already evicted
+
+      episode_length = int(episode_length)
+      reward = float(reward)
+
+      # Store per-episode metadata (parallel to self.keys)
+      key_idx = self.indices[key]
+      # Extend lists if needed (items may have been added before metadata arrives)
+      while len(self._episode_rewards) <= key_idx:
+        self._episode_rewards.append(0.0)
+        self._episode_lengths.append(0)
+      self._episode_rewards[key_idx] = reward
+      self._episode_lengths[key_idx] = episode_length
+
+      # --- Update reward EMA ---
+      if not self.reward_ema_initialised:
+        self.reward_ema = reward
+        self.reward_ema_initialised = True
+      else:
+        self.reward_ema = (self.reward_ema_decay * self.reward_ema
+                           + (1.0 - self.reward_ema_decay) * reward)
+
+      # --- Update episode counter and trigger grid recompute ---
+      self._total_episodes += 1
+      self._episodes_since_recompute += 1
+
+      if self._episodes_since_recompute >= self.grid_recompute_every:
+        self._recompute_grid()
+        self._episodes_since_recompute = 0
+      else:
+        # Incremental update: assign to current grid and update count
+        if self._reward_edges is not None:
+          lb = self._get_length_bin(episode_length)
+          rb = self._get_reward_bin(reward)
+          self._key_to_bin[key] = (lb, rb)
+          self._grid_counts[lb, rb] += 1
+
+          # Compute novelty score for this item
+          score = self._compute_novelty_score_for_cell(lb, rb)
+          if score > 0:
+            self.novel_keys.append(key)
+            self.novel_scores.append(score)
+
+      # --- Compute learnability score ---
+      advantage = reward - self.reward_ema
+      learnability_score = max(0.0, advantage)
+      if learnability_score > 0:
+        self.learn_keys.append(key)
+        self.learn_scores.append(learnability_score)
+
+  # ------------------------------------------------------------------
+  # Selector interface (called by Replay)
+  # ------------------------------------------------------------------
+  def __len__(self):
+    return len(self.keys)
+
+  def __call__(self):
+    """Sample an item key according to the non-privileged NLR strategy."""
+    with self.lock:
+      if len(self.keys) == 0:
+        raise IndexError('NLR selector is empty')
+
+      # Choose which pool to sample from
+      r = self.rng.random()
+      if r < self.novel_frac and len(self.novel_keys) > 0:
+        return self._sample_novel()
+      elif r < self.novel_frac + self.learnable_frac and len(self.learn_keys) > 0:
+        return self._sample_learnable()
+      else:
+        return self._sample_recent()
+
+  def __setitem__(self, key, stepids):
+    """Register a new item (called by Replay._insert)."""
+    with self.lock:
+      self.indices[key] = len(self.keys)
+      self.keys.append(key)
+      self._insert_counter += 1
+      self.insertion_order[key] = self._insert_counter
+
+  def __delitem__(self, key):
+    """Remove an evicted item from all pools."""
+    with self.lock:
+      if key not in self.indices:
+        return
+      assert 2 <= len(self), len(self)
+
+      idx = self.indices.pop(key)
+
+      # Update grid counts
+      if key in self._key_to_bin:
+        lb, rb = self._key_to_bin.pop(key)
+        self._grid_counts[lb, rb] = max(0, self._grid_counts[lb, rb] - 1)
+
+      # Remove from main list (swap-and-pop)
+      last = self.keys.pop()
+      if idx != len(self.keys):
+        self.keys[idx] = last
+        self.indices[last] = idx
+        # Also swap parallel metadata arrays
+        if idx < len(self._episode_rewards) and len(self.keys) < len(self._episode_rewards):
+          last_meta_idx = len(self.keys)  # was at end before pop
+          if last_meta_idx < len(self._episode_rewards):
+            self._episode_rewards[idx] = self._episode_rewards[last_meta_idx]
+            self._episode_lengths[idx] = self._episode_lengths[last_meta_idx]
+          self._episode_rewards.pop()
+          self._episode_lengths.pop()
+        elif idx < len(self._episode_rewards):
+          # Key was the last element, just pop
+          if len(self._episode_rewards) > len(self.keys):
+            self._episode_rewards.pop()
+            self._episode_lengths.pop()
+      else:
+        # Key was the last element
+        if len(self._episode_rewards) > len(self.keys):
+          self._episode_rewards.pop()
+          self._episode_lengths.pop()
+
+      # Remove from insertion_order
+      self.insertion_order.pop(key, None)
+
+      # Remove from novel pool
+      self._remove_from_pool(key, self.novel_keys, self.novel_scores)
+
+      # Remove from learnable pool
+      self._remove_from_pool(key, self.learn_keys, self.learn_scores)
+
+  # ------------------------------------------------------------------
+  # Internal sampling methods
+  # ------------------------------------------------------------------
+  def _sample_novel(self):
+    """Sample from the novel pool, weighted by novelty score."""
+    scores = np.array(self.novel_scores, dtype=np.float64)
+    scores = scores ** (1.0 / self.novelty_temp)
+    total = scores.sum()
+    if total <= 0:
+      return self._sample_recent()
+    probs = scores / total
+    idx = self.rng.choice(len(self.novel_keys), p=probs)
+    return self.novel_keys[idx]
+
+  def _sample_learnable(self):
+    """Sample from the learnable pool, weighted by advantage."""
+    scores = np.array(self.learn_scores, dtype=np.float64)
+    scores = scores ** (1.0 / self.learnability_temp)
+    total = scores.sum()
+    if total <= 0:
+      return self._sample_recent()
+    probs = scores / total
+    idx = self.rng.choice(len(self.learn_keys), p=probs)
+    return self.learn_keys[idx]
+
+  def _sample_recent(self):
+    """Sample from recent items with triangular weighting."""
+    n = len(self.keys)
+    if n == 0:
+      raise IndexError('NLR selector is empty (recent)')
+    window = min(n, self.recent_window)
+    weights = np.linspace(1.0, 0.0, window, endpoint=False)
+    total = weights.sum()
+    if total <= 0:
+      idx = self.rng.integers(max(0, n - window), n).item()
+      return self.keys[idx]
+    probs = weights / total
+    start = n - window
+    local_idx = self.rng.choice(window, p=probs)
+    return self.keys[start + local_idx]
+
+  def _remove_from_pool(self, key, pool_keys, pool_scores):
+    """Remove a key from a (keys, scores) pool."""
+    try:
+      idx = pool_keys.index(key)
+      pool_keys.pop(idx)
+      pool_scores.pop(idx)
+    except ValueError:
+      pass
+
+  def get_grid_stats(self):
+    """Return grid statistics for logging."""
+    with self.lock:
+      return {
+          'grid_counts': self._grid_counts.copy(),
+          'reward_edges': self._reward_edges.copy() if self._reward_edges is not None else None,
+          'length_edges': self._length_edges.copy() if self._length_edges is not None else None,
+          'r_min': self._r_min,
+          'beta': self._beta,
+          'novel_pool_size': len(self.novel_keys),
+          'learn_pool_size': len(self.learn_keys),
+          'total_episodes': self._total_episodes,
+      }
+
+
 class NoveltyLearnabilityUniform(NoveltyLearnabilityRecency):
-  """Novelty-Learnability-Uniform (NLU) replay selector.
+  """Non-privileged NLU replay selector.
 
-  Identical to NLR except the third pool samples **uniformly** from the
-  entire buffer instead of using triangular recency-weighted sampling.
-  This allows ablation experiments to isolate the effect of recency bias
-  in the third pool.
+  Identical to non-privileged NLR except the third pool samples
+  **uniformly** from the entire buffer instead of triangular
+  recency-weighted sampling.
 
-  Pool split (default): 35% novel, 35% learnable, 30% uniform.
+  No privileged information is used.
   """
 
   def _sample_recent(self):

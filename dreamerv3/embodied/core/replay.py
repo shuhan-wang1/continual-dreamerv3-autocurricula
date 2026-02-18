@@ -439,10 +439,10 @@ class Replay:
     return numitems
 
   def update_nlr_episode(self, achievements, reward, item_keys=None):
-    """Notify the NLR selector about episode-level metadata.
+    """Notify the privileged NLR/NLU selector about episode-level metadata.
 
-    Call this at the end of every episode when NLR sampling is active.
-    If ``item_keys`` is None, uses the most recently inserted item.
+    Call this at the end of every episode when privileged NLR/NLU sampling
+    is active.  If ``item_keys`` is None, uses the most recently inserted item.
 
     Parameters
     ----------
@@ -454,8 +454,10 @@ class Replay:
         Item keys from this episode to tag.  If None, uses last inserted.
     """
     from . import selectors as sel_module
-    if not isinstance(self.sampler, sel_module.NoveltyLearnabilityRecency):
-      return  # Not using NLR — no-op
+    if not isinstance(self.sampler, (
+        sel_module.PrivilegedNoveltyLearnabilityRecency,
+        sel_module.PrivilegedNoveltyLearnabilityUniform)):
+      return  # Not using privileged NLR — no-op
     if item_keys is None:
       if self.last_inserted_itemid is not None:
         item_keys = [self.last_inserted_itemid]
@@ -463,6 +465,35 @@ class Replay:
         return
     for key in item_keys:
       self.sampler.update_episode_stats(key, achievements, reward)
+
+  def update_nlr_episode_nonpriv(self, episode_length, reward, item_keys=None):
+    """Notify the non-privileged NLR/NLU selector about episode-level metadata.
+
+    Call this at the end of every episode when non-privileged NLR/NLU
+    sampling is active.  Uses only episode length and scalar reward
+    (no privileged achievement information).
+
+    Parameters
+    ----------
+    episode_length : int
+        Number of timesteps in this episode.
+    reward : float
+        Cumulative episodic reward.
+    item_keys : list[int] or None
+        Item keys from this episode to tag.  If None, uses last inserted.
+    """
+    from . import selectors as sel_module
+    if not isinstance(self.sampler, (
+        sel_module.NoveltyLearnabilityRecency,
+        sel_module.NoveltyLearnabilityUniform)):
+      return  # Not using non-privileged NLR — no-op
+    if item_keys is None:
+      if self.last_inserted_itemid is not None:
+        item_keys = [self.last_inserted_itemid]
+      else:
+        return
+    for key in item_keys:
+      self.sampler.update_episode_stats(key, episode_length, reward)
 
   def _notempty(self, reason=False):
     if reason:
