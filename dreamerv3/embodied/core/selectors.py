@@ -583,23 +583,12 @@ class NoveltyLearnabilityRecency:
     return self.learn_keys[idx]
 
   def _sample_recent(self):
-    """Sample from recent items with triangular weighting."""
+    """Sample uniformly from the entire buffer."""
     n = len(self.keys)
     if n == 0:
       raise IndexError('NLR selector is empty')
-    window = min(n, self.recent_window)
-    # Triangular distribution: most recent items get highest weight
-    weights = np.linspace(1.0, 0.0, window, endpoint=False)
-    total = weights.sum()
-    if total <= 0:
-      # Uniform fallback
-      idx = self.rng.integers(max(0, n - window), n).item()
-      return self.keys[idx]
-    probs = weights / total
-    # Sample within the recent window (end of self.keys)
-    start = n - window
-    local_idx = self.rng.choice(window, p=probs)
-    return self.keys[start + local_idx]
+    idx = self.rng.integers(0, n).item()
+    return self.keys[idx]
 
   def _remove_from_pool(self, key, pool_keys, pool_scores):
     """Remove a key from a (keys, scores) pool."""
