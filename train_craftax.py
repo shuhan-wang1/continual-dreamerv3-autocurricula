@@ -1175,6 +1175,38 @@ def make_agent(config, env, args=None):
     return Agent(obs_space, act_space, agent_config)
 
 
+def _save_nlr_args(args, logdir):
+    """Save NLR/NLU sampling flags and hyperparameters alongside config.yaml.
+
+    These args live only on the argparse namespace and are not captured by
+    elements.Config, so we write them to a separate nlr_args.yaml file for
+    full reproducibility.
+    """
+    nlr_keys = [
+        'nlr_privileged_sampling',
+        'nlu_privileged_sampling',
+        'nlr_sampling',
+        'nlu_sampling',
+        'nlr_novel_frac',
+        'nlr_learnable_frac',
+        'nlr_recent_frac',
+        'nlr_recent_window',
+        'nlr_reward_ema_decay',
+        'nlr_novelty_temp',
+        'nlr_learnability_temp',
+        'nlr_novelty_eps',
+        'nlr_grid_reward_bins',
+        'nlr_grid_length_bins',
+        'nlr_grid_recompute_every',
+        'nlr_grid_prior_percentile',
+        'nlr_grid_eps',
+    ]
+    nlr_cfg = {k: getattr(args, k, None) for k in nlr_keys}
+    out_path = os.path.join(str(logdir), 'nlr_args.yaml')
+    with open(out_path, 'w') as f:
+        yaml.YAML().dump(nlr_cfg, f)
+
+
 def make_selector(args, capacity, seed=0):
     """Create a replay selector based on sampling strategy args.
 
@@ -1511,6 +1543,7 @@ def train_single(make_env, config, args, env_name=None):
 
     logdir.mkdir()
     config.save(logdir / 'config.yaml')
+    _save_nlr_args(args, logdir)
     print('Logdir:', logdir)
 
     num_envs = config.run.envs
@@ -1828,6 +1861,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
 
     logdir.mkdir()
     config.save(logdir / 'config.yaml')
+    _save_nlr_args(args, logdir)
     print('Logdir:', logdir)
 
     num_envs = config.run.envs
