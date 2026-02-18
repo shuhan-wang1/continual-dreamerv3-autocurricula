@@ -360,8 +360,8 @@ class NoveltyLearnabilityRecency:
       exceeds the running mean reward (advantage-based, GRPO-style).  These
       contain the strongest learning signal for improvement.
     - **Recent pool** (default 30%): Triangular recency-weighted sampling
-      over a sliding window of the most recent items, acting as an
-      exploration hedge to surface not-yet-categorised value.
+      over a sliding window of the most recent items, keeping training
+      anchored to on-policy data and surfacing not-yet-categorised value.
 
   Trajectories can appear in multiple pools (duplication allowed) so that
   items which are *both* novel and learnable are naturally over-sampled.
@@ -583,12 +583,23 @@ class NoveltyLearnabilityRecency:
     return self.learn_keys[idx]
 
   def _sample_recent(self):
-    """Sample uniformly from the entire buffer."""
+    """Sample from recent items with triangular weighting."""
     n = len(self.keys)
     if n == 0:
       raise IndexError('NLR selector is empty')
-    idx = self.rng.integers(0, n).item()
-    return self.keys[idx]
+    window = min(n, self.recent_window)
+    # Triangular distribution: most recent items get highest weight
+    weights = np.linspace(1.0, 0.0, window, endpoint=False)
+    total = weights.sum()
+    if total <= 0:
+      # Uniform fallback
+      idx = self.rng.integers(max(0, n - window), n).item()
+      return self.keys[idx]
+    probs = weights / total
+    # Sample within the recent window (end of self.keys)
+    start = n - window
+    local_idx = self.rng.choice(window, p=probs)
+    return self.keys[start + local_idx]
 
   def _remove_from_pool(self, key, pool_keys, pool_scores):
     """Remove a key from a (keys, scores) pool."""
@@ -598,6 +609,26 @@ class NoveltyLearnabilityRecency:
       pool_scores.pop(idx)
     except ValueError:
       pass  # key not in this pool
+
+
+class NoveltyLearnabilityUniform(NoveltyLearnabilityRecency):
+  """Novelty-Learnability-Uniform (NLU) replay selector.
+
+  Identical to NLR except the third pool samples **uniformly** from the
+  entire buffer instead of using triangular recency-weighted sampling.
+  This allows ablation experiments to isolate the effect of recency bias
+  in the third pool.
+
+  Pool split (default): 35% novel, 35% learnable, 30% uniform.
+  """
+
+  def _sample_recent(self):
+    """Sample uniformly from the entire buffer (overrides NLR triangular)."""
+    n = len(self.keys)
+    if n == 0:
+      raise IndexError('NLU selector is empty')
+    idx = self.rng.integers(0, n).item()
+    return self.keys[idx]
 
 
 class Mixture:

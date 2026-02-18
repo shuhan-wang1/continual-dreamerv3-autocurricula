@@ -224,7 +224,12 @@ def parse_craftax_args(args=None):
     parser.add_argument('--nlr_sampling', default=False, action='store_true',
                         help='Enable NLR replay sampling (overrides recent_frac/50:50 strategy). '
                              'Splits buffer into novel (low success-rate achievements), '
-                             'learnable (above-baseline reward), and recent (exploration) pools.')
+                             'learnable (above-baseline reward), and recent (triangular recency) pools.')
+    # Novelty-Learnability-Uniform (NLU) replay sampling (ablation variant)
+    parser.add_argument('--nlu_sampling', default=False, action='store_true',
+                        help='Enable NLU replay sampling (like NLR but the third pool is uniform '
+                             'over the entire buffer instead of triangular recency). '
+                             'Use for ablation to test recency bias vs uniform sampling.')
     parser.add_argument('--nlr_novel_frac', type=float, default=0.35,
                         help='NLR: fraction of samples from the novelty pool (default 0.35).')
     parser.add_argument('--nlr_learnable_frac', type=float, default=0.35,

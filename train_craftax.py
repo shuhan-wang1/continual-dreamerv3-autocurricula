@@ -1189,10 +1189,16 @@ def make_selector(args, capacity, seed=0):
     from embodied.core import selectors
 
     # ------------------------------------------------------------------
-    # NLR sampling (Novelty-Learnability-Recency) — overrides 50:50
+    # NLR / NLU sampling — overrides 50:50
     # ------------------------------------------------------------------
-    if getattr(args, 'nlr_sampling', False):
-        nlr_selector = selectors.NoveltyLearnabilityRecency(
+    use_nlr = getattr(args, 'nlr_sampling', False)
+    use_nlu = getattr(args, 'nlu_sampling', False)
+    if use_nlr and use_nlu:
+        raise ValueError('--nlr_sampling and --nlu_sampling are mutually exclusive.')
+
+    if use_nlr or use_nlu:
+        # Shared kwargs — both use the same pool fractions / scoring params
+        shared_kwargs = dict(
             novel_frac=getattr(args, 'nlr_novel_frac', 0.35),
             learnable_frac=getattr(args, 'nlr_learnable_frac', 0.35),
             recent_frac=getattr(args, 'nlr_recent_frac', 0.30),
@@ -1204,11 +1210,19 @@ def make_selector(args, capacity, seed=0):
             learnability_temp=getattr(args, 'nlr_learnability_temp', 1.0),
             seed=seed,
         )
-        print(f'[NLR] Novelty-Learnability-Recency sampling enabled: '
+        if use_nlu:
+            selector = selectors.NoveltyLearnabilityUniform(**shared_kwargs)
+            tag = 'NLU'
+            third_pool = 'uniform'
+        else:
+            selector = selectors.NoveltyLearnabilityRecency(**shared_kwargs)
+            tag = 'NLR'
+            third_pool = 'recent (triangular)'
+        print(f'[{tag}] Novelty-Learnability-{third_pool} sampling enabled: '
               f'novel={args.nlr_novel_frac:.0%}, '
               f'learnable={args.nlr_learnable_frac:.0%}, '
-              f'recent={args.nlr_recent_frac:.0%}')
-        return nlr_selector
+              f'third_pool({third_pool})={args.nlr_recent_frac:.0%}')
+        return selector
 
     # Check if using 50:50 sampling (Continual-Dreamer strategy)
     # This is the recommended setup for continual learning with 8+ tasks.
@@ -1512,8 +1526,8 @@ def train_single(make_env, config, args, env_name=None):
     episodes = collections.defaultdict(elements.Agg)
     episode_achievements = {}  # Track achievements per worker
 
-    # NLR: track replay item keys per worker episode
-    nlr_active = getattr(args, 'nlr_sampling', False)
+    # NLR/NLU: track replay item keys per worker episode
+    nlr_active = getattr(args, 'nlr_sampling', False) or getattr(args, 'nlu_sampling', False)
     episode_item_keys = {}          # worker -> list of item keys inserted this episode
     _prev_inserted_id = [None]      # mutable ref to detect new insertions
 
@@ -1932,8 +1946,8 @@ def cl_train_loop(make_envs, config, args, env_names=None):
             episode_achievements = {}  # Track achievements per worker
             current_task = task_id  # Capture for closure
 
-            # NLR: track replay item keys per worker episode
-            cl_nlr_active = getattr(args, 'nlr_sampling', False)
+            # NLR/NLU: track replay item keys per worker episode
+            cl_nlr_active = getattr(args, 'nlr_sampling', False) or getattr(args, 'nlu_sampling', False)
             cl_episode_item_keys = {}
             cl_prev_inserted_id = [None]
 
