@@ -1,0 +1,1587 @@
+================================================================================
+STATISTICAL ANALYSIS REPORT
+Methods: cl=DreamerV3-CL, original=DreamerV3-Original, nlr_sampling_privilage=DreamerV3-Nlr-Sampling-Privilage, nlr_sampling_verified=DreamerV3-Nlr-Sampling-Verified, nlu_sampling_privilage=DreamerV3-Nlu-Sampling-Privilage, nlu_sampling_verified=DreamerV3-Nlu-Sampling-Verified
+Seeds: [1, 4, 42]  |  Significance level: 0.05
+================================================================================
+
+--------------------------------------------------------------------------------
+  Fig 01: Episode Return & Length
+--------------------------------------------------------------------------------
+  Episode Return:
+    Checkpoint   DreamerV3-CL                  DreamerV3-Original            DreamerV3-Nlr-Sampling-Privilage  DreamerV3-Nlr-Sampling-Verified  DreamerV3-Nlu-Sampling-Privilage  DreamerV3-Nlu-Sampling-Verified
+    ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    25%           2.5165 +/- 0.2028             2.6868 +/- 0.0872             2.5194 +/- 0.1534             2.3759 +/- 0.3748             2.2587 +/- 0.0674             2.5906 +/- 0.0651           
+    50%           3.4482 +/- 0.3611             4.0607 +/- 0.2021             3.3875 +/- 0.2866             3.2622 +/- 0.3965             3.4118 +/- 0.0129             3.2655 +/- 0.2061           
+    75%           3.6765 +/- 0.0758             4.1489 +/- 0.2060             3.5868 +/- 0.2613             3.6748 +/- 0.1140             3.7316 +/- 0.1777             3.7126 +/- 0.2195           
+    100%          3.8709 +/- 0.2460             4.1729 +/- 0.2600             3.8690 +/- 0.4262             3.6303 +/- 0.0511             4.0193 +/- 0.2158             4.0019 +/- 0.4270           
+    Pairwise Welch t-tests at final point:
+      DreamerV3-CL vs DreamerV3-Original: p=0.2989 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.9959 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.2993 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.5569 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.7306 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.4471 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.0930 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.5563 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.6588 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.5121 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.6868 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.7709 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.1187 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.3433 (n.s.)
+      DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.9623 (n.s.)
+      Cohen's d (DreamerV3-CL vs DreamerV3-Original): -1.1932
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): +0.0056
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): +1.3542
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): -0.6412
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): -0.3758
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): +0.8610
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): +2.8957
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): +0.6431
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): +0.4838
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): +0.7863
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): -0.4450
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): -0.3116
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): -2.4807
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): -1.2218
+      Cohen's d (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): +0.0514
+
+  Episode Return -- Area Under Curve (AUC):
+    DreamerV3-CL: 1482772.7769 +/- 51053.9505  [min=1415541.8782, max=1539186.5482]
+    DreamerV3-Original: 1652628.0464 +/- 46530.5509  [min=1601311.4169, max=1713959.7533]
+    DreamerV3-Nlr-Sampling-Privilage: 1471619.4943 +/- 53862.9921  [min=1404558.1486, max=1536437.7815]
+    DreamerV3-Nlr-Sampling-Verified: 1479844.9782 +/- 112221.3815  [min=1350820.2048, max=1624388.0689]
+    DreamerV3-Nlu-Sampling-Privilage: 1474508.6176 +/- 40477.5235  [min=1421403.0563, max=1519568.0018]
+    DreamerV3-Nlu-Sampling-Verified: 1446614.1085 +/- 81326.0826  [min=1384005.4496, max=1561470.9032]
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Original): p=0.0258 (*)
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): p=0.8421 (n.s.)
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): p=0.9755 (n.s.)
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): p=0.8668 (n.s.)
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): p=0.6275 (n.s.)
+    AUC Welch t-test (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): p=0.0237 (*)
+    AUC Welch t-test (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): p=0.1491 (n.s.)
+    AUC Welch t-test (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): p=0.0156 (*)
+    AUC Welch t-test (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): p=0.0489 (*)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): p=0.9317 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): p=0.9548 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.7379 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): p=0.9542 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): p=0.7532 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.6941 (n.s.)
+
+  Episode Length:
+    Checkpoint   DreamerV3-CL                  DreamerV3-Original            DreamerV3-Nlr-Sampling-Privilage  DreamerV3-Nlr-Sampling-Verified  DreamerV3-Nlu-Sampling-Privilage  DreamerV3-Nlu-Sampling-Verified
+    ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    25%           255.4226 +/- 2.8121           257.3714 +/- 4.0145           260.7974 +/- 18.8189          266.0000 +/- 2.6075           269.0324 +/- 6.7306           261.4875 +/- 14.4493        
+    50%           285.6048 +/- 6.2567           280.8319 +/- 24.5989          281.7294 +/- 23.8995          273.4520 +/- 6.3144           287.4653 +/- 12.8290          283.5829 +/- 14.4051        
+    75%           286.3952 +/- 23.7898          278.4863 +/- 14.4321          287.2221 +/- 13.8679          297.8385 +/- 6.8712           287.5714 +/- 15.6071          280.8369 +/- 21.6739        
+    100%          278.1863 +/- 14.9451          289.2778 +/- 20.6720          284.0526 +/- 19.8146          265.8074 +/- 25.8905          280.5248 +/- 16.1276          286.4562 +/- 41.0799        
+    Pairwise Welch t-tests at final point:
+      DreamerV3-CL vs DreamerV3-Original: p=0.5749 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.7562 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.5969 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.8878 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.8094 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.8091 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.3757 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.6628 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.9364 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.4758 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.8551 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.9455 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.5393 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.5856 (n.s.)
+      DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.8631 (n.s.)
+      Cohen's d (DreamerV3-CL vs DreamerV3-Original): -0.6149
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): -0.3343
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): +0.5856
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): -0.1504
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): -0.2675
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): +0.2581
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): +1.0019
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): +0.4721
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): +0.0868
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): +0.7914
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): +0.1953
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): -0.0745
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): -0.6823
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): -0.6014
+      Cohen's d (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): -0.1901
+
+  Episode Length -- Area Under Curve (AUC):
+    DreamerV3-CL: 137278193.4343 +/- 1588706.1669  [min=135741714.6652, max=139466082.6598]
+    DreamerV3-Original: 135018945.6326 +/- 1470076.0377  [min=133585290.5122, max=137039675.0609]
+    DreamerV3-Nlr-Sampling-Privilage: 137391055.5558 +/- 1783937.5330  [min=135540371.5640, max=139801280.1243]
+    DreamerV3-Nlr-Sampling-Verified: 136903960.2207 +/- 1150728.1480  [min=135676332.8317, max=138442955.6007]
+    DreamerV3-Nlu-Sampling-Privilage: 137153078.1013 +/- 1335912.7621  [min=135905283.6229, max=139005491.1388]
+    DreamerV3-Nlu-Sampling-Verified: 137561831.1355 +/- 1847568.4070  [min=134972525.2942, max=139159609.3979]
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Original): p=0.2144 (n.s.)
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): p=0.9500 (n.s.)
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): p=0.8019 (n.s.)
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): p=0.9363 (n.s.)
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): p=0.8774 (n.s.)
+    AUC Welch t-test (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): p=0.2228 (n.s.)
+    AUC Welch t-test (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): p=0.2304 (n.s.)
+    AUC Welch t-test (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): p=0.2039 (n.s.)
+    AUC Welch t-test (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): p=0.2059 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): p=0.7644 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): p=0.8878 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.9296 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): p=0.8516 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): p=0.6951 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.8135 (n.s.)
+
+  Per-seed final episode return (last 50 episodes, smoothed):
+    DreamerV3-CL seed=1: 3.9600 +/- 1.0585
+    DreamerV3-CL seed=4: 4.1800 +/- 1.0925
+    DreamerV3-CL seed=42: 3.9800 +/- 0.8635
+    DreamerV3-Original seed=1: 4.1400 +/- 1.0575
+    DreamerV3-Original seed=4: 4.4600 +/- 0.9749
+    DreamerV3-Original seed=42: 3.8800 +/- 1.3006
+    DreamerV3-Nlr-Sampling-Privilage seed=1: 3.6200 +/- 1.4034
+    DreamerV3-Nlr-Sampling-Privilage seed=4: 4.2000 +/- 1.0050
+    DreamerV3-Nlr-Sampling-Privilage seed=42: 4.0600 +/- 1.1825
+    DreamerV3-Nlr-Sampling-Verified seed=1: 3.8400 +/- 1.2460
+    DreamerV3-Nlr-Sampling-Verified seed=4: 4.0400 +/- 1.6421
+    DreamerV3-Nlr-Sampling-Verified seed=42: 4.0000 +/- 1.2042
+    DreamerV3-Nlu-Sampling-Privilage seed=1: 4.1200 +/- 1.1574
+    DreamerV3-Nlu-Sampling-Privilage seed=4: 4.1600 +/- 1.1386
+    DreamerV3-Nlu-Sampling-Privilage seed=42: 3.8400 +/- 1.1280
+    DreamerV3-Nlu-Sampling-Verified seed=1: 3.4400 +/- 1.1065
+    DreamerV3-Nlu-Sampling-Verified seed=4: 4.2600 +/- 1.2387
+    DreamerV3-Nlu-Sampling-Verified seed=42: 4.2600 +/- 1.2862
+
+--------------------------------------------------------------------------------
+  Fig 02: Online Return & Success Rate
+--------------------------------------------------------------------------------
+  Online Mean Return (window=100):
+    Checkpoint   DreamerV3-CL                  DreamerV3-Original            DreamerV3-Nlr-Sampling-Privilage  DreamerV3-Nlr-Sampling-Verified  DreamerV3-Nlu-Sampling-Privilage  DreamerV3-Nlu-Sampling-Verified
+    ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    25%           2.4700 +/- 0.1551             2.7806 +/- 0.1705             2.3200 +/- 0.1603             1.9093 +/- 0.1548             2.1749 +/- 0.0421             2.3314 +/- 0.2085           
+    50%           3.4817 +/- 0.1165             3.9886 +/- 0.1201             3.3650 +/- 0.2588             3.3000 +/- 0.4004             3.3622 +/- 0.0449             3.2217 +/- 0.1220           
+    75%           3.6850 +/- 0.2597             4.3339 +/- 0.0643             3.5800 +/- 0.2360             3.5621 +/- 0.2544             3.7572 +/- 0.1463             3.5567 +/- 0.2426           
+    100%          3.8333 +/- 0.0826             4.0967 +/- 0.2582             3.9900 +/- 0.2617             3.9567 +/- 0.0685             3.9433 +/- 0.1352             3.9300 +/- 0.3182           
+    Pairwise Welch t-tests at final point:
+      DreamerV3-CL vs DreamerV3-Original: p=0.2836 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.4918 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.1818 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.3924 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.7136 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.7026 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.5275 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.5106 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.5972 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.8760 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.8371 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.8472 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.9090 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.9175 (n.s.)
+      DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.9603 (n.s.)
+      Cohen's d (DreamerV3-CL vs DreamerV3-Original): -1.3735
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): -0.8075
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): -1.6257
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): -0.9817
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): -0.4158
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): +0.4103
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): +0.7411
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): +0.7439
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): +0.5751
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): +0.1743
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): +0.2241
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): +0.2060
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): +0.1244
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): +0.1159
+      Cohen's d (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): +0.0545
+
+  Online Mean Return (window=100) -- Area Under Curve (AUC):
+    DreamerV3-CL: 1442656.6375 +/- 50749.8486  [min=1376830.2717, max=1500338.5078]
+    DreamerV3-Original: 1603541.8754 +/- 41557.8794  [min=1556463.9523, max=1657549.4745]
+    DreamerV3-Nlr-Sampling-Privilage: 1432616.4445 +/- 51094.5410  [min=1368588.8811, max=1493635.9416]
+    DreamerV3-Nlr-Sampling-Verified: 1439033.5213 +/- 112760.0127  [min=1308364.5301, max=1583528.8769]
+    DreamerV3-Nlu-Sampling-Privilage: 1430789.1515 +/- 43394.4871  [min=1372885.3335, max=1477347.3992]
+    DreamerV3-Nlu-Sampling-Verified: 1404010.0076 +/- 78625.1936  [min=1347698.6794, max=1515199.7451]
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Original): p=0.0272 (*)
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): p=0.8533 (n.s.)
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): p=0.9697 (n.s.)
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): p=0.8142 (n.s.)
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): p=0.5955 (n.s.)
+    AUC Welch t-test (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): p=0.0230 (*)
+    AUC Welch t-test (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): p=0.1650 (n.s.)
+    AUC Welch t-test (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): p=0.0153 (*)
+    AUC Welch t-test (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): p=0.0495 (*)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): p=0.9465 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): p=0.9711 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.6918 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): p=0.9301 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): p=0.7389 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.7007 (n.s.)
+
+  Online Success Rate (window=100):
+    Checkpoint   DreamerV3-CL                  DreamerV3-Original            DreamerV3-Nlr-Sampling-Privilage  DreamerV3-Nlr-Sampling-Verified  DreamerV3-Nlu-Sampling-Privilage  DreamerV3-Nlu-Sampling-Verified
+    ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    25%           0.9667 +/- 0.0170             0.9800 +/- 0.0216             0.9633 +/- 0.0170             0.9333 +/- 0.0205             0.9575 +/- 0.0127             0.9667 +/- 0.0125           
+    50%           0.9867 +/- 0.0125             0.9926 +/- 0.0053             0.9967 +/- 0.0047             0.9833 +/- 0.0047             0.9900 +/- 0.0082             0.9867 +/- 0.0125           
+    75%           0.9914 +/- 0.0122             0.9967 +/- 0.0047             0.9967 +/- 0.0047             1.0000 +/- 0.0000             1.0000 +/- 0.0000             0.9933 +/- 0.0094           
+    100%          0.9867 +/- 0.0125             0.9967 +/- 0.0047             0.9833 +/- 0.0170             0.9867 +/- 0.0094             0.9967 +/- 0.0047             0.9900 +/- 0.0082           
+    Pairwise Welch t-tests at final point:
+      DreamerV3-CL vs DreamerV3-Original: p=0.3785 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.8350 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=1.0000 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.3785 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.7700 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.3841 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.2739 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=1.0000 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.3868 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.8234 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.3841 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.6528 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.2739 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.7250 (n.s.)
+      DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.3868 (n.s.)
+      Cohen's d (DreamerV3-CL vs DreamerV3-Original): -1.0607
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): +0.2236
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): +0.0000
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): -1.0607
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): -0.3162
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): +1.0690
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): +1.3416
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): +0.0000
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): +1.0000
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): -0.2425
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): -1.0690
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): -0.5000
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): -1.3416
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): -0.3780
+      Cohen's d (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): +1.0000
+
+  Online Success Rate (window=100) -- Area Under Curve (AUC):
+    DreamerV3-CL: 454018.1531 +/- 4081.5296  [min=450532.2383, max=459745.4078]
+    DreamerV3-Original: 448464.1932 +/- 8731.6720  [min=441792.1616, max=460798.8834]
+    DreamerV3-Nlr-Sampling-Privilage: 452018.8964 +/- 2986.3728  [min=447936.4668, max=454997.1064]
+    DreamerV3-Nlr-Sampling-Verified: 454748.5009 +/- 7204.4308  [min=444570.5605, max=460241.0556]
+    DreamerV3-Nlu-Sampling-Privilage: 451808.7695 +/- 2936.2186  [min=447934.4024, max=455039.7957]
+    DreamerV3-Nlu-Sampling-Verified: 450085.8095 +/- 255.3745  [min=449750.4272, max=450369.5317]
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Original): p=0.4780 (n.s.)
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): p=0.6085 (n.s.)
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): p=0.9082 (n.s.)
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): p=0.5712 (n.s.)
+    AUC Welch t-test (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): p=0.3060 (n.s.)
+    AUC Welch t-test (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): p=0.6313 (n.s.)
+    AUC Welch t-test (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): p=0.4778 (n.s.)
+    AUC Welch t-test (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): p=0.6503 (n.s.)
+    AUC Welch t-test (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): p=0.8174 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): p=0.6585 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): p=0.9468 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.4568 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): p=0.6347 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): p=0.4567 (n.s.)
+    AUC Welch t-test (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.4942 (n.s.)
+
+  Steps to reach success rate thresholds:
+    DreamerV3-CL -> 50%: 3499 +/- 1022 steps (3/3 seeds reached)
+    DreamerV3-Original -> 50%: 3845 +/- 1721 steps (3/3 seeds reached)
+    DreamerV3-Nlr-Sampling-Privilage -> 50%: 3886 +/- 1324 steps (3/3 seeds reached)
+    DreamerV3-Nlr-Sampling-Verified -> 50%: 1456 +/- 167 steps (3/3 seeds reached)
+    DreamerV3-Nlu-Sampling-Privilage -> 50%: 2123 +/- 750 steps (3/3 seeds reached)
+    DreamerV3-Nlu-Sampling-Verified -> 50%: 7911 +/- 8057 steps (3/3 seeds reached)
+    DreamerV3-CL -> 80%: 25147 +/- 32055 steps (3/3 seeds reached)
+    DreamerV3-Original -> 80%: 56796 +/- 42181 steps (3/3 seeds reached)
+    DreamerV3-Nlr-Sampling-Privilage -> 80%: 37768 +/- 49199 steps (3/3 seeds reached)
+    DreamerV3-Nlr-Sampling-Verified -> 80%: 1456 +/- 167 steps (3/3 seeds reached)
+    DreamerV3-Nlu-Sampling-Privilage -> 80%: 32408 +/- 43575 steps (3/3 seeds reached)
+    DreamerV3-Nlu-Sampling-Verified -> 80%: 70721 +/- 48896 steps (3/3 seeds reached)
+    DreamerV3-CL -> 90%: 38801 +/- 51364 steps (3/3 seeds reached)
+    DreamerV3-Original -> 90%: 65670 +/- 46776 steps (3/3 seeds reached)
+    DreamerV3-Nlr-Sampling-Privilage -> 90%: 40840 +/- 53543 steps (3/3 seeds reached)
+    DreamerV3-Nlr-Sampling-Verified -> 90%: 1456 +/- 167 steps (3/3 seeds reached)
+    DreamerV3-Nlu-Sampling-Privilage -> 90%: 33432 +/- 45023 steps (3/3 seeds reached)
+    DreamerV3-Nlu-Sampling-Verified -> 90%: 77889 +/- 54005 steps (3/3 seeds reached)
+    DreamerV3-CL -> 95%: 41873 +/- 55708 steps (3/3 seeds reached)
+    DreamerV3-Original -> 95%: 76252 +/- 52720 steps (3/3 seeds reached)
+    DreamerV3-Nlr-Sampling-Privilage -> 95%: 42888 +/- 56439 steps (3/3 seeds reached)
+    DreamerV3-Nlr-Sampling-Verified -> 95%: 1456 +/- 167 steps (3/3 seeds reached)
+    DreamerV3-Nlu-Sampling-Privilage -> 95%: 37869 +/- 51298 steps (3/3 seeds reached)
+    DreamerV3-Nlu-Sampling-Verified -> 95%: 79596 +/- 55229 steps (3/3 seeds reached)
+
+--------------------------------------------------------------------------------
+  Fig 03: World Model & Actor-Critic Losses
+--------------------------------------------------------------------------------
+  Observation Loss:
+    Checkpoint   DreamerV3-CL                  DreamerV3-Original            DreamerV3-Nlr-Sampling-Privilage  DreamerV3-Nlr-Sampling-Verified  DreamerV3-Nlu-Sampling-Privilage  DreamerV3-Nlu-Sampling-Verified
+    ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    25%           0.8810 +/- 0.0096             0.8681 +/- 0.0152             0.8734 +/- 0.0291             0.8737 +/- 0.0021             0.8957 +/- 0.0229             0.8993 +/- 0.0072           
+    50%           0.7702 +/- 0.0153             0.7917 +/- 0.0145             0.8144 +/- 0.0205             0.7919 +/- 0.0106             0.8263 +/- 0.0172             0.7804 +/- 0.0121           
+    75%           0.7786 +/- 0.0215             0.7859 +/- 0.0259             0.7772 +/- 0.0127             0.7716 +/- 0.0125             0.7753 +/- 0.0180             0.7677 +/- 0.0142           
+    100%          0.7594 +/- 0.0293             0.7888 +/- 0.0344             0.7862 +/- 0.0183             0.7674 +/- 0.0069             0.7613 +/- 0.0277             0.7836 +/- 0.0171           
+    Pairwise Welch t-tests at final point:
+      DreamerV3-CL vs DreamerV3-Original: p=0.4117 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.3461 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.7396 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.9521 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.3839 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.9305 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.4747 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.4303 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.8608 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.2828 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.3571 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.8908 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.7855 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.3157 (n.s.)
+      DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.3977 (n.s.)
+      Cohen's d (DreamerV3-CL vs DreamerV3-Original): -0.9181
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): -1.0944
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): -0.3763
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): -0.0639
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): -1.0057
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): +0.0946
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): +0.8599
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): +0.8808
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): +0.1913
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): +1.3552
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): +1.0607
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): +0.1462
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): +0.3063
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): -1.2354
+      Cohen's d (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): -0.9684
+
+  Reward Loss:
+    Checkpoint   DreamerV3-CL                  DreamerV3-Original            DreamerV3-Nlr-Sampling-Privilage  DreamerV3-Nlr-Sampling-Verified  DreamerV3-Nlu-Sampling-Privilage  DreamerV3-Nlu-Sampling-Verified
+    ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    25%           0.1660 +/- 0.0201             0.1578 +/- 0.0103             0.1606 +/- 0.0076             0.1506 +/- 0.0109             0.1475 +/- 0.0077             0.1614 +/- 0.0063           
+    50%           0.1727 +/- 0.0130             0.1731 +/- 0.0124             0.1689 +/- 0.0079             0.1811 +/- 0.0085             0.1775 +/- 0.0096             0.1726 +/- 0.0179           
+    75%           0.1731 +/- 0.0134             0.1702 +/- 0.0035             0.1488 +/- 0.0170             0.1627 +/- 0.0078             0.1687 +/- 0.0127             0.1752 +/- 0.0126           
+    100%          0.1820 +/- 0.0099             0.1620 +/- 0.0077             0.1749 +/- 0.0076             0.1821 +/- 0.0090             0.1690 +/- 0.0142             0.1793 +/- 0.0269           
+    Pairwise Welch t-tests at final point:
+      DreamerV3-CL vs DreamerV3-Original: p=0.0906 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.4656 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.9924 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.3511 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.9028 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.1681 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.0754 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.5843 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.4628 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.4340 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.6369 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.8416 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.3392 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.8987 (n.s.)
+      DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.6629 (n.s.)
+      Cohen's d (DreamerV3-CL vs DreamerV3-Original): +2.2586
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): +0.8111
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): -0.0102
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): +1.0712
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): +0.1348
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): -1.6807
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): -2.4033
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): -0.6091
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): -0.8741
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): -0.8712
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): +0.5223
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): -0.2231
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): +1.1113
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): +0.1410
+      Cohen's d (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): -0.4813
+
+  Continue Loss:
+    Checkpoint   DreamerV3-CL                  DreamerV3-Original            DreamerV3-Nlr-Sampling-Privilage  DreamerV3-Nlr-Sampling-Verified  DreamerV3-Nlu-Sampling-Privilage  DreamerV3-Nlu-Sampling-Verified
+    ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    25%           0.0286 +/- 0.0003             0.0246 +/- 0.0012             0.0293 +/- 0.0021             0.0282 +/- 0.0010             0.0284 +/- 0.0014             0.0291 +/- 0.0016           
+    50%           0.0261 +/- 0.0005             0.0236 +/- 0.0005             0.0257 +/- 0.0006             0.0253 +/- 0.0004             0.0264 +/- 0.0020             0.0251 +/- 0.0012           
+    75%           0.0263 +/- 0.0011             0.0241 +/- 0.0006             0.0255 +/- 0.0004             0.0255 +/- 0.0016             0.0239 +/- 0.0014             0.0255 +/- 0.0014           
+    100%          0.0244 +/- 0.0005             0.0241 +/- 0.0008             0.0256 +/- 0.0016             0.0253 +/- 0.0014             0.0242 +/- 0.0007             0.0261 +/- 0.0014           
+    Pairwise Welch t-tests at final point:
+      DreamerV3-CL vs DreamerV3-Original: p=0.7108 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.4204 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.4965 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.7581 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.2235 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.3435 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.3995 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.9249 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.1776 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.8489 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.3597 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.7659 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.4186 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.6024 (n.s.)
+      DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.1861 (n.s.)
+      Cohen's d (DreamerV3-CL vs DreamerV3-Original): +0.4035
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): -0.9656
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): -0.7901
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): +0.3315
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): -1.5911
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): -1.1219
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): -0.9685
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): -0.1005
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): -1.7039
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): +0.2034
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): +1.0979
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): -0.3194
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): +0.9400
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): -0.5649
+      Cohen's d (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): -1.7093
+
+  Dynamics Loss:
+    Checkpoint   DreamerV3-CL                  DreamerV3-Original            DreamerV3-Nlr-Sampling-Privilage  DreamerV3-Nlr-Sampling-Verified  DreamerV3-Nlu-Sampling-Privilage  DreamerV3-Nlu-Sampling-Verified
+    ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    25%           1.6900 +/- 0.0356             1.7813 +/- 0.0452             1.6574 +/- 0.0347             1.6295 +/- 0.0227             1.6776 +/- 0.0644             1.6536 +/- 0.0371           
+    50%           2.0245 +/- 0.0528             2.2376 +/- 0.0349             2.0648 +/- 0.0760             2.0373 +/- 0.0671             2.0583 +/- 0.0544             2.0803 +/- 0.0569           
+    75%           2.0014 +/- 0.0117             2.3205 +/- 0.0436             2.0665 +/- 0.0448             2.0779 +/- 0.0218             2.1485 +/- 0.0914             2.1483 +/- 0.0525           
+    100%          2.1854 +/- 0.1010             2.4718 +/- 0.0836             2.1234 +/- 0.0849             2.1240 +/- 0.0666             2.2182 +/- 0.1045             2.2211 +/- 0.0427           
+    Pairwise Welch t-tests at final point:
+      DreamerV3-CL vs DreamerV3-Original: p=0.0383 (*)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.5434 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.5184 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.7656 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.6799 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.0144 (*)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.0113 (*)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.0581 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.0330 (*)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.9938 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.3778 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.2431 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.3529 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.1702 (n.s.)
+      DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.9736 (n.s.)
+      Cohen's d (DreamerV3-CL vs DreamerV3-Original): -3.0887
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): +0.6651
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): +0.7176
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): -0.3191
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): -0.4603
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): +4.1358
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): +4.5994
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): +2.6792
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): +3.7749
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): -0.0083
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): -0.9961
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): -1.4547
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): -1.0747
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): -1.7346
+      Cohen's d (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): -0.0363
+
+  Representation Loss:
+    Checkpoint   DreamerV3-CL                  DreamerV3-Original            DreamerV3-Nlr-Sampling-Privilage  DreamerV3-Nlr-Sampling-Verified  DreamerV3-Nlu-Sampling-Privilage  DreamerV3-Nlu-Sampling-Verified
+    ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    25%           1.6900 +/- 0.0356             1.7813 +/- 0.0452             1.6574 +/- 0.0347             1.6295 +/- 0.0227             1.6776 +/- 0.0644             1.6536 +/- 0.0371           
+    50%           2.0245 +/- 0.0528             2.2376 +/- 0.0349             2.0648 +/- 0.0760             2.0373 +/- 0.0671             2.0583 +/- 0.0544             2.0803 +/- 0.0569           
+    75%           2.0014 +/- 0.0117             2.3205 +/- 0.0436             2.0665 +/- 0.0448             2.0779 +/- 0.0218             2.1485 +/- 0.0914             2.1483 +/- 0.0525           
+    100%          2.1854 +/- 0.1010             2.4718 +/- 0.0836             2.1234 +/- 0.0849             2.1240 +/- 0.0666             2.2182 +/- 0.1045             2.2211 +/- 0.0427           
+    Pairwise Welch t-tests at final point:
+      DreamerV3-CL vs DreamerV3-Original: p=0.0383 (*)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.5434 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.5184 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.7656 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.6799 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.0144 (*)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.0113 (*)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.0581 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.0330 (*)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.9938 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.3778 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.2431 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.3529 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.1702 (n.s.)
+      DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.9736 (n.s.)
+      Cohen's d (DreamerV3-CL vs DreamerV3-Original): -3.0887
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): +0.6651
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): +0.7176
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): -0.3191
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): -0.4603
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): +4.1358
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): +4.5994
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): +2.6792
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): +3.7749
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): -0.0083
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): -0.9961
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): -1.4547
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): -1.0747
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): -1.7346
+      Cohen's d (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): -0.0363
+
+  Policy Loss:
+    Checkpoint   DreamerV3-CL                  DreamerV3-Original            DreamerV3-Nlr-Sampling-Privilage  DreamerV3-Nlr-Sampling-Verified  DreamerV3-Nlu-Sampling-Privilage  DreamerV3-Nlu-Sampling-Verified
+    ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    25%           0.0206 +/- 0.0093             0.0168 +/- 0.0049             0.0109 +/- 0.0048             0.0132 +/- 0.0069             0.0147 +/- 0.0058             0.0157 +/- 0.0075           
+    50%           0.0121 +/- 0.0048             0.0117 +/- 0.0029             0.0070 +/- 0.0015             0.0087 +/- 0.0005             0.0074 +/- 0.0049             0.0076 +/- 0.0017           
+    75%           0.0081 +/- 0.0002             0.0102 +/- 0.0032             0.0201 +/- 0.0079             0.0128 +/- 0.0005             0.0085 +/- 0.0021             0.0168 +/- 0.0035           
+    100%          0.0133 +/- 0.0021             0.0193 +/- 0.0079             0.0026 +/- 0.0026             0.0127 +/- 0.0031             0.0079 +/- 0.0026             0.0053 +/- 0.0024           
+    Pairwise Welch t-tests at final point:
+      DreamerV3-CL vs DreamerV3-Original: p=0.3959 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.0124 (*)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.8380 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.0882 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.0255 (*)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.0841 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.3632 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.1700 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.1190 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.0268 (*)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.1136 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.3529 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.1759 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.0621 (n.s.)
+      DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.3586 (n.s.)
+      Cohen's d (DreamerV3-CL vs DreamerV3-Original): -1.0407
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): +4.4939
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): +0.2203
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): +2.2798
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): +3.5232
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): +2.8288
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): +1.0970
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): +1.9326
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): +2.3917
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): -3.4691
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): -2.0194
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): -1.0511
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): +1.6539
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): +2.6251
+      Cohen's d (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): +1.0369
+
+  Value Loss:
+    Checkpoint   DreamerV3-CL                  DreamerV3-Original            DreamerV3-Nlr-Sampling-Privilage  DreamerV3-Nlr-Sampling-Verified  DreamerV3-Nlu-Sampling-Privilage  DreamerV3-Nlu-Sampling-Verified
+    ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    25%           1.4477 +/- 0.0180             1.5334 +/- 0.1590             1.3635 +/- 0.0646             1.3169 +/- 0.0787             1.3672 +/- 0.1264             1.3697 +/- 0.1053           
+    50%           1.6526 +/- 0.0996             1.7203 +/- 0.0853             1.5769 +/- 0.1261             1.6151 +/- 0.0812             1.6295 +/- 0.0943             1.6788 +/- 0.1326           
+    75%           1.6278 +/- 0.0379             1.7692 +/- 0.0889             1.7714 +/- 0.1280             1.7322 +/- 0.0593             1.6592 +/- 0.0437             1.7019 +/- 0.0688           
+    100%          1.7043 +/- 0.0251             1.9603 +/- 0.0797             1.5958 +/- 0.1532             1.7204 +/- 0.0537             1.6882 +/- 0.0877             1.5921 +/- 0.2363           
+    Pairwise Welch t-tests at final point:
+      DreamerV3-CL vs DreamerV3-Original: p=0.0355 (*)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.4225 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.7280 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.8234 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.5717 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.0581 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.0301 (*)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.0319 (*)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.1482 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.3716 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.5098 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.9863 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.6853 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.5257 (n.s.)
+      DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.6333 (n.s.)
+      Cohen's d (DreamerV3-CL vs DreamerV3-Original): -4.3305
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): +0.9886
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): -0.3840
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): +0.2494
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): +0.6677
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): +2.9846
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): +3.5281
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): +3.2460
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): +2.0877
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): -1.0856
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): -0.7405
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): +0.0184
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): +0.4426
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): +0.7487
+      Cohen's d (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): +0.5392
+
+
+  Convergence speed (step where loss first drops below 2x final value):
+    Observation Loss / DreamerV3-CL: 13819 +/- 2688 steps
+    Observation Loss / DreamerV3-Original: 14501 +/- 3165 steps
+    Observation Loss / DreamerV3-Nlr-Sampling-Privilage: 14160 +/- 2896 steps
+    Observation Loss / DreamerV3-Nlr-Sampling-Verified: 15184 +/- 3644 steps
+    Observation Loss / DreamerV3-Nlu-Sampling-Privilage: 14501 +/- 3165 steps
+    Observation Loss / DreamerV3-Nlu-Sampling-Verified: 13819 +/- 2688 steps
+    Reward Loss / DreamerV3-CL: 16208 +/- 4344 steps
+    Reward Loss / DreamerV3-Original: 16208 +/- 4344 steps
+    Reward Loss / DreamerV3-Nlr-Sampling-Privilage: 16208 +/- 4344 steps
+    Reward Loss / DreamerV3-Nlr-Sampling-Verified: 16208 +/- 4344 steps
+    Reward Loss / DreamerV3-Nlu-Sampling-Privilage: 16208 +/- 4344 steps
+    Reward Loss / DreamerV3-Nlu-Sampling-Verified: 16208 +/- 4344 steps
+    Continue Loss / DreamerV3-CL: 12112 +/- 1448 steps
+    Continue Loss / DreamerV3-Original: 11771 +/- 1277 steps
+    Continue Loss / DreamerV3-Nlr-Sampling-Privilage: 11771 +/- 1277 steps
+    Continue Loss / DreamerV3-Nlr-Sampling-Verified: 11771 +/- 1277 steps
+    Continue Loss / DreamerV3-Nlu-Sampling-Privilage: 11771 +/- 1277 steps
+    Continue Loss / DreamerV3-Nlu-Sampling-Verified: 11771 +/- 1277 steps
+    Dynamics Loss / DreamerV3-CL: 11429 +/- 965 steps
+    Dynamics Loss / DreamerV3-Original: 11429 +/- 965 steps
+    Dynamics Loss / DreamerV3-Nlr-Sampling-Privilage: 11429 +/- 965 steps
+    Dynamics Loss / DreamerV3-Nlr-Sampling-Verified: 11429 +/- 965 steps
+    Dynamics Loss / DreamerV3-Nlu-Sampling-Privilage: 11429 +/- 965 steps
+    Dynamics Loss / DreamerV3-Nlu-Sampling-Verified: 11429 +/- 965 steps
+    Representation Loss / DreamerV3-CL: 11429 +/- 965 steps
+    Representation Loss / DreamerV3-Original: 11429 +/- 965 steps
+    Representation Loss / DreamerV3-Nlr-Sampling-Privilage: 11429 +/- 965 steps
+    Representation Loss / DreamerV3-Nlr-Sampling-Verified: 11429 +/- 965 steps
+    Representation Loss / DreamerV3-Nlu-Sampling-Privilage: 11429 +/- 965 steps
+    Representation Loss / DreamerV3-Nlu-Sampling-Verified: 11429 +/- 965 steps
+
+--------------------------------------------------------------------------------
+  Fig 04: Temporal Difference Error
+--------------------------------------------------------------------------------
+  Mean TD Error (raw values from last 100 online entries):
+    DreamerV3-CL: 0.0000 +/- 0.0000  [min=0.0000, max=0.0000]
+    DreamerV3-Original: 0.0000 +/- 0.0000  [min=0.0000, max=0.0000]
+    DreamerV3-Nlr-Sampling-Privilage: 0.0171 +/- 0.0030  [min=0.0131, max=0.0202]
+    DreamerV3-Nlr-Sampling-Verified: 0.0180 +/- 0.0033  [min=0.0146, max=0.0225]
+    DreamerV3-Nlu-Sampling-Privilage: 0.0179 +/- 0.0004  [min=0.0173, max=0.0183]
+    DreamerV3-Nlu-Sampling-Verified: 0.0167 +/- 0.0029  [min=0.0128, max=0.0195]
+  Max TD Error (raw values from last 100 online entries):
+    DreamerV3-CL: 0.0000 +/- 0.0000  [min=0.0000, max=0.0000]
+    DreamerV3-Original: 0.0000 +/- 0.0000  [min=0.0000, max=0.0000]
+    DreamerV3-Nlr-Sampling-Privilage: 0.0829 +/- 0.0085  [min=0.0761, max=0.0949]
+    DreamerV3-Nlr-Sampling-Verified: 0.0850 +/- 0.0135  [min=0.0722, max=0.1037]
+    DreamerV3-Nlu-Sampling-Privilage: 0.0855 +/- 0.0143  [min=0.0722, max=0.1053]
+    DreamerV3-Nlu-Sampling-Verified: 0.0748 +/- 0.0032  [min=0.0709, max=0.0787]
+
+--------------------------------------------------------------------------------
+  Fig 05: Exploration & P2E Metrics
+--------------------------------------------------------------------------------
+  Imagined Value:
+    DreamerV3-CL: final=0.9806 +/- 0.3430, peak_mean=1.0439 at step ~457576
+    DreamerV3-Original: final=1.9115 +/- 0.4618, peak_mean=2.1717 at step ~352446
+    DreamerV3-Nlr-Sampling-Privilage: final=0.6636 +/- 0.3604, peak_mean=1.0493 at step ~437083
+    DreamerV3-Nlr-Sampling-Verified: final=0.7979 +/- 0.1888, peak_mean=0.9187 at step ~389268
+    DreamerV3-Nlu-Sampling-Privilage: final=0.7310 +/- 0.2752, peak_mean=1.0660 at step ~484392
+    DreamerV3-Nlu-Sampling-Verified: final=0.5223 +/- 0.1267, peak_mean=0.9089 at step ~380685
+    Welch t (DreamerV3-CL vs DreamerV3-Original): p=0.0896 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): p=0.4187 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): p=0.5550 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): p=0.4691 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): p=0.1910 (n.s.)
+    Welch t (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): p=0.0425 (*)
+    Welch t (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): p=0.0604 (n.s.)
+    Welch t (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): p=0.0475 (*)
+    Welch t (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): p=0.0429 (*)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): p=0.6723 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): p=0.8446 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.6437 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): p=0.7924 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): p=0.1718 (n.s.)
+    Welch t (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.4061 (n.s.)
+  Actual Value:
+    DreamerV3-CL: final=0.3491 +/- 0.0731, peak_mean=0.5313 at step ~130187
+    DreamerV3-Original: final=0.4033 +/- 0.0648, peak_mean=0.6643 at step ~107542
+    DreamerV3-Nlr-Sampling-Privilage: final=0.2320 +/- 0.0678, peak_mean=0.5273 at step ~143848
+    DreamerV3-Nlr-Sampling-Verified: final=0.2843 +/- 0.0451, peak_mean=0.4856 at step ~173611
+    DreamerV3-Nlu-Sampling-Privilage: final=0.2727 +/- 0.0894, peak_mean=0.4763 at step ~147467
+    DreamerV3-Nlu-Sampling-Verified: final=0.2308 +/- 0.0413, peak_mean=0.4762 at step ~174732
+    Welch t (DreamerV3-CL vs DreamerV3-Original): p=0.4766 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): p=0.1724 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): p=0.3573 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): p=0.4042 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): p=0.1357 (n.s.)
+    Welch t (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): p=0.0612 (n.s.)
+    Welch t (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): p=0.1082 (n.s.)
+    Welch t (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): p=0.1764 (n.s.)
+    Welch t (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): p=0.0423 (*)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): p=0.4218 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): p=0.6370 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.9848 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): p=0.8798 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): p=0.2842 (n.s.)
+    Welch t (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.5929 (n.s.)
+  Dream Accuracy:
+    DreamerV3-CL: final=-0.8829 +/- 1.0033, peak_mean=0.4687 at step ~187760
+    DreamerV3-Original: final=-2.7944 +/- 0.9540, peak_mean=0.5948 at step ~14546
+    DreamerV3-Nlr-Sampling-Privilage: final=-0.8019 +/- 1.0383, peak_mean=0.2037 at step ~14552
+    DreamerV3-Nlr-Sampling-Verified: final=-0.8753 +/- 0.5431, peak_mean=0.2027 at step ~14552
+    DreamerV3-Nlu-Sampling-Privilage: final=-0.5420 +/- 0.2101, peak_mean=0.3378 at step ~232185
+    DreamerV3-Nlu-Sampling-Verified: final=-0.4545 +/- 0.9111, peak_mean=0.2164 at step ~14546
+    Welch t (DreamerV3-CL vs DreamerV3-Original): p=0.1228 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): p=0.9405 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): p=0.9930 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): p=0.6811 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): p=0.6782 (n.s.)
+    Welch t (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): p=0.1168 (n.s.)
+    Welch t (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): p=0.0853 (n.s.)
+    Welch t (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): p=0.0729 (n.s.)
+    Welch t (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): p=0.0663 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): p=0.9350 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): p=0.7596 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.7404 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): p=0.4862 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): p=0.6111 (n.s.)
+    Welch t (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.9058 (n.s.)
+  Intrinsic/Extrinsic Ratio:
+    DreamerV3-CL: final=0.0223 +/- 0.0012, peak_mean=301.0592 at step ~13088
+    DreamerV3-Nlr-Sampling-Privilage: final=0.1680 +/- 0.1789, peak_mean=303.5730 at step ~13088
+    DreamerV3-Nlr-Sampling-Verified: final=0.0341 +/- 0.0013, peak_mean=374.8838 at step ~13088
+    DreamerV3-Nlu-Sampling-Privilage: final=0.0418 +/- 0.0131, peak_mean=229.4677 at step ~13086
+    DreamerV3-Nlu-Sampling-Verified: final=0.0849 +/- 0.0611, peak_mean=303.3625 at step ~13086
+    Welch t (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): p=0.3683 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): p=0.0008 (***)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): p=0.1686 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): p=0.2842 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): p=0.4006 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): p=0.4234 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.5869 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): p=0.4938 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): p=0.3605 (n.s.)
+    Welch t (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.4243 (n.s.)
+  Ensemble Disagreement:
+    DreamerV3-CL: final=-4261.9992 +/- 43.3434, peak_mean=2971.4036 at step ~12112
+    DreamerV3-Nlr-Sampling-Privilage: final=-4330.2958 +/- 124.9082, peak_mean=2971.2784 at step ~12112
+    DreamerV3-Nlr-Sampling-Verified: final=-4213.9435 +/- 40.7929, peak_mean=2971.5109 at step ~12112
+    DreamerV3-Nlu-Sampling-Privilage: final=-4327.1401 +/- 49.9368, peak_mean=2951.8698 at step ~12112
+    DreamerV3-Nlu-Sampling-Verified: final=-4326.9819 +/- 45.7568, peak_mean=2951.6812 at step ~12112
+    Welch t (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): p=0.5280 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): p=0.3175 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): p=0.2373 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): p=0.2188 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): p=0.3178 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): p=0.9759 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.9745 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): p=0.0705 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): p=0.0603 (n.s.)
+    Welch t (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.9975 (n.s.)
+  Intrinsic Reward:
+    DreamerV3-CL: final=0.0004 +/- 0.0000, peak_mean=0.0863 at step ~13088
+    DreamerV3-Nlr-Sampling-Privilage: final=0.0004 +/- 0.0000, peak_mean=0.0863 at step ~13088
+    DreamerV3-Nlr-Sampling-Verified: final=0.0004 +/- 0.0000, peak_mean=0.0863 at step ~13088
+    DreamerV3-Nlu-Sampling-Privilage: final=0.0004 +/- 0.0000, peak_mean=0.0863 at step ~13086
+    DreamerV3-Nlu-Sampling-Verified: final=0.0004 +/- 0.0000, peak_mean=0.0863 at step ~13086
+    Welch t (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): p=0.3228 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): p=0.8140 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): p=0.4329 (n.s.)
+    Welch t (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): p=0.0116 (*)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): p=0.5344 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): p=0.9388 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.5649 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): p=0.5680 (n.s.)
+    Welch t (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): p=0.2582 (n.s.)
+    Welch t (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.7514 (n.s.)
+
+  Value Overestimation (imagined / actual at final point):
+    DreamerV3-CL: ratio = 2.7953 +/- 0.8835
+    DreamerV3-Original: ratio = 4.7296 +/- 0.9438
+    DreamerV3-Nlr-Sampling-Privilage: ratio = 2.6503 +/- 0.7619
+    DreamerV3-Nlr-Sampling-Verified: ratio = 2.8070 +/- 0.4855
+    DreamerV3-Nlu-Sampling-Privilage: ratio = 2.6374 +/- 0.2897
+    DreamerV3-Nlu-Sampling-Verified: ratio = 2.3372 +/- 0.7307
+
+--------------------------------------------------------------------------------
+  Fig 06: Forgetting & Frontier Rate
+--------------------------------------------------------------------------------
+  Aggregate Forgetting:
+    Checkpoint   DreamerV3-CL                  DreamerV3-Original            DreamerV3-Nlr-Sampling-Privilage  DreamerV3-Nlr-Sampling-Verified  DreamerV3-Nlu-Sampling-Privilage  DreamerV3-Nlu-Sampling-Verified
+    ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    25%           0.0366 +/- 0.0130             0.0242 +/- 0.0022             0.0196 +/- 0.0080             0.0252 +/- 0.0059             0.0177 +/- 0.0065             0.0115 +/- 0.0027           
+    50%           0.0268 +/- 0.0068             0.0211 +/- 0.0040             0.0137 +/- 0.0044             0.0114 +/- 0.0031             0.0107 +/- 0.0038             0.0134 +/- 0.0033           
+    75%           0.0310 +/- 0.0055             0.0194 +/- 0.0034             0.0149 +/- 0.0086             0.0136 +/- 0.0016             0.0111 +/- 0.0033             0.0126 +/- 0.0024           
+    100%          0.0318 +/- 0.0050             0.0348 +/- 0.0098             0.0126 +/- 0.0050             0.0119 +/- 0.0020             0.0126 +/- 0.0016             0.0109 +/- 0.0023           
+    Pairwise Welch t-tests at final point:
+      DreamerV3-CL vs DreamerV3-Original: p=0.7321 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.0183 (*)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.0195 (*)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.0244 (*)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.0151 (*)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.0660 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.0758 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.0823 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.0683 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.8673 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.9924 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.7019 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.6993 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.6819 (n.s.)
+      DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.4493 (n.s.)
+      Cohen's d (DreamerV3-CL vs DreamerV3-Original): -0.3760
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): +3.8499
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): +5.2289
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): +5.1605
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): +5.3315
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): +2.8514
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): +3.2331
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): +3.1512
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): +3.3403
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): +0.1841
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): -0.0106
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): +0.4236
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): -0.4166
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): +0.4422
+      Cohen's d (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): +0.8508
+
+  Frontier Achievement Rate:
+    Checkpoint   DreamerV3-CL                  DreamerV3-Original            DreamerV3-Nlr-Sampling-Privilage  DreamerV3-Nlr-Sampling-Verified  DreamerV3-Nlu-Sampling-Privilage  DreamerV3-Nlu-Sampling-Verified
+    ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    25%           0.0943 +/- 0.0174             0.0992 +/- 0.0049             0.0000 +/- 0.0000             0.0000 +/- 0.0000             0.0000 +/- 0.0000             0.0000 +/- 0.0000           
+    50%           0.1126 +/- 0.0020             0.1066 +/- 0.0013             0.0000 +/- 0.0000             0.0000 +/- 0.0000             0.0000 +/- 0.0000             0.0000 +/- 0.0000           
+    75%           0.1173 +/- 0.0035             0.1087 +/- 0.0016             0.0000 +/- 0.0000             0.0000 +/- 0.0000             0.0000 +/- 0.0000             0.0000 +/- 0.0000           
+    100%          0.1120 +/- 0.0025             0.1029 +/- 0.0054             0.0000 +/- 0.0000             0.0000 +/- 0.0000             0.0000 +/- 0.0000             0.0000 +/- 0.0000           
+    Pairwise Welch t-tests at final point:
+      DreamerV3-CL vs DreamerV3-Original: p=0.1281 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.0002 (***)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.0002 (***)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.0002 (***)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.0002 (***)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.0014 (**)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.0014 (**)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.0014 (**)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.0014 (**)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: N/A
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: N/A
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: N/A
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: N/A
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: N/A
+      DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: N/A
+      Cohen's d (DreamerV3-CL vs DreamerV3-Original): +2.1396
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): +63.4562
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): +63.4562
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): +63.4562
+      Cohen's d (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): +63.4562
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): +26.7616
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): +26.7616
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): +26.7616
+      Cohen's d (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): +26.7616
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): +0.0000
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): +0.0000
+      Cohen's d (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): +0.0000
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): +0.0000
+      Cohen's d (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): +0.0000
+      Cohen's d (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): +0.0000
+
+  Peak aggregate forgetting (max over training):
+    DreamerV3-CL: peak = 0.0637 +/- 0.0107, at step ~60401 +/- 24569
+    DreamerV3-Original: peak = 0.0787 +/- 0.0253, at step ~203820 +/- 180542
+    DreamerV3-Nlr-Sampling-Privilage: peak = 0.0252 +/- 0.0100, at step ~131689 +/- 43797
+    DreamerV3-Nlr-Sampling-Verified: peak = 0.0301 +/- 0.0037, at step ~103270 +/- 20140
+    DreamerV3-Nlu-Sampling-Privilage: peak = 0.0297 +/- 0.0089, at step ~195484 +/- 178412
+    DreamerV3-Nlu-Sampling-Verified: peak = 0.0219 +/- 0.0019, at step ~75690 +/- 14102
+    Peak forgetting (DreamerV3-CL vs DreamerV3-Original): p=0.5046 (n.s.)
+    Peak forgetting (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage): p=0.0208 (*)
+    Peak forgetting (DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified): p=0.0361 (*)
+    Peak forgetting (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage): p=0.0274 (*)
+    Peak forgetting (DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified): p=0.0282 (*)
+    Peak forgetting (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage): p=0.0811 (n.s.)
+    Peak forgetting (DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified): p=0.1105 (n.s.)
+    Peak forgetting (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage): p=0.0990 (n.s.)
+    Peak forgetting (DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified): p=0.0859 (n.s.)
+    Peak forgetting (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified): p=0.5710 (n.s.)
+    Peak forgetting (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage): p=0.6604 (n.s.)
+    Peak forgetting (DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.6855 (n.s.)
+    Peak forgetting (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage): p=0.9581 (n.s.)
+    Peak forgetting (DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified): p=0.0670 (n.s.)
+    Peak forgetting (DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified): p=0.3388 (n.s.)
+
+--------------------------------------------------------------------------------
+  Fig 07: Per-Achievement Rates
+--------------------------------------------------------------------------------
+  Per-achievement rates (mean +/- std) and pairwise significance:
+    Achievement              DreamerV3-CL         DreamerV3-Original   DreamerV3-Nlr-Sampling-Privilage DreamerV3-Nlr-Sampling-Verified DreamerV3-Nlu-Sampling-Privilage DreamerV3-Nlu-Sampling-Verified
+    ------------------------------------------------------------------------------------------------------------------------------------------------------------
+    collect_wood             0.8900 +/- 0.0779    0.8900 +/- 0.0327    0.8867 +/- 0.0236    0.8700 +/- 0.0000    0.9000 +/- 0.0163    0.8867 +/- 0.0419   
+    place_table              0.2333 +/- 0.1621    0.6967 +/- 0.0818    0.3467 +/- 0.1893    0.4600 +/- 0.1283    0.4567 +/- 0.1396    0.3933 +/- 0.2575   
+    eat_cow                  0.1233 +/- 0.0340    0.0733 +/- 0.0094    0.1533 +/- 0.0519    0.1467 +/- 0.0309    0.1267 +/- 0.0368    0.1500 +/- 0.0216   
+    collect_sapling          0.9867 +/- 0.0094    0.9633 +/- 0.0249    0.9700 +/- 0.0163    0.9567 +/- 0.0170    0.9800 +/- 0.0082    0.9667 +/- 0.0170   
+    collect_drink            0.5300 +/- 0.0572    0.5767 +/- 0.0544    0.5300 +/- 0.0566    0.5267 +/- 0.0492    0.5200 +/- 0.0698    0.4400 +/- 0.0082   
+    make_wood_pickaxe        0.0000 +/- 0.0000    0.0133 +/- 0.0047    0.0067 +/- 0.0047    0.0167 +/- 0.0125    0.0033 +/- 0.0047    0.0000 +/- 0.0000   
+    make_wood_sword          0.0000 +/- 0.0000    0.0067 +/- 0.0047    0.0067 +/- 0.0094    0.0100 +/- 0.0082    0.0167 +/- 0.0125    0.0333 +/- 0.0471   
+    place_plant              0.9333 +/- 0.0499    0.8433 +/- 0.0368    0.9500 +/- 0.0327    0.8233 +/- 0.1452    0.7900 +/- 0.1476    0.9100 +/- 0.0787   
+    defeat_zombie            0.0267 +/- 0.0125    0.0067 +/- 0.0047    0.0133 +/- 0.0047    0.0300 +/- 0.0141    0.0367 +/- 0.0287    0.0367 +/- 0.0170   
+    collect_stone            0.0000 +/- 0.0000    0.0033 +/- 0.0047    0.0033 +/- 0.0047    0.0100 +/- 0.0082    0.0033 +/- 0.0047    0.0000 +/- 0.0000   
+    place_stone              0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0033 +/- 0.0047    0.0000 +/- 0.0000    0.0000 +/- 0.0000   
+    eat_plant                0.0100 +/- 0.0082    0.0000 +/- 0.0000    0.0100 +/- 0.0082    0.0033 +/- 0.0047    0.0033 +/- 0.0047    0.0033 +/- 0.0047   
+    defeat_skeleton          0.0133 +/- 0.0094    0.0033 +/- 0.0047    0.0100 +/- 0.0000    0.0100 +/- 0.0000    0.0067 +/- 0.0047    0.0067 +/- 0.0094   
+    make_stone_pickaxe       0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000   
+    make_stone_sword         0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000   
+    wake_up                  0.9600 +/- 0.0082    0.9167 +/- 0.0471    0.9567 +/- 0.0205    0.9700 +/- 0.0216    0.9900 +/- 0.0082    0.9567 +/- 0.0125   
+    place_furnace            0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000   
+    collect_coal             0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000   
+    collect_iron             0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000   
+    collect_diamond          0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000   
+    make_iron_pickaxe        0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000   
+    make_iron_sword          0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000   
+
+  Achievements with rate > 1%:
+    DreamerV3-CL: 8.6667 +/- 0.4714
+    DreamerV3-Original: 7.3333 +/- 0.4714
+    DreamerV3-Nlr-Sampling-Privilage: 8.0000 +/- 0.8165
+    DreamerV3-Nlr-Sampling-Verified: 9.0000 +/- 1.6330
+    DreamerV3-Nlu-Sampling-Privilage: 8.3333 +/- 0.4714
+    DreamerV3-Nlu-Sampling-Verified: 8.6667 +/- 0.4714
+    DreamerV3-CL vs DreamerV3-Original: p=0.0474 (*)
+    DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.3868 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.8042 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.5185 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=1.0000 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.3868 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.2832 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.1012 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.0474 (*)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.4961 (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.6495 (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.3868 (n.s.)
+    DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.6278 (n.s.)
+    DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.8042 (n.s.)
+    DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.5185 (n.s.)
+
+  Achievements with rate > 5%:
+    DreamerV3-CL: 7.0000 +/- 0.0000
+    DreamerV3-Original: 7.0000 +/- 0.0000
+    DreamerV3-Nlr-Sampling-Privilage: 7.0000 +/- 0.0000
+    DreamerV3-Nlr-Sampling-Verified: 7.0000 +/- 0.0000
+    DreamerV3-Nlu-Sampling-Privilage: 7.3333 +/- 0.4714
+    DreamerV3-Nlu-Sampling-Verified: 7.6667 +/- 0.9428
+    DreamerV3-CL vs DreamerV3-Original: p=nan (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=nan (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=nan (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.4226 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.4226 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=nan (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=nan (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.4226 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.4226 (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=nan (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.4226 (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.4226 (n.s.)
+    DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.4226 (n.s.)
+    DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.4226 (n.s.)
+    DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.6856 (n.s.)
+
+  Achievements with rate > 10%:
+    DreamerV3-CL: 6.3333 +/- 0.4714
+    DreamerV3-Original: 6.0000 +/- 0.0000
+    DreamerV3-Nlr-Sampling-Privilage: 6.3333 +/- 0.4714
+    DreamerV3-Nlr-Sampling-Verified: 7.0000 +/- 0.0000
+    DreamerV3-Nlu-Sampling-Privilage: 6.6667 +/- 0.4714
+    DreamerV3-Nlu-Sampling-Verified: 7.0000 +/- 0.8165
+    DreamerV3-CL vs DreamerV3-Original: p=0.4226 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=1.0000 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.1835 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.5185 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.3868 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.4226 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.0000 (***)
+    DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.1835 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.2254 (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.1835 (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.5185 (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.3868 (n.s.)
+    DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.4226 (n.s.)
+    DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=1.0000 (n.s.)
+    DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.6495 (n.s.)
+
+  Achievements with rate > 50%:
+    DreamerV3-CL: 4.6667 +/- 0.4714
+    DreamerV3-Original: 6.0000 +/- 0.0000
+    DreamerV3-Nlr-Sampling-Privilage: 4.3333 +/- 0.4714
+    DreamerV3-Nlr-Sampling-Verified: 5.0000 +/- 0.8165
+    DreamerV3-Nlu-Sampling-Privilage: 5.3333 +/- 0.4714
+    DreamerV3-Nlu-Sampling-Verified: 4.3333 +/- 0.4714
+    DreamerV3-CL vs DreamerV3-Original: p=0.0572 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.5185 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.6495 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.2302 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.5185 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.0377 (*)
+    DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.2254 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.1835 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.0377 (*)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.3868 (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.1012 (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=1.0000 (n.s.)
+    DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.6495 (n.s.)
+    DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.3868 (n.s.)
+    DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.1012 (n.s.)
+
+--------------------------------------------------------------------------------
+  Fig 08: Per-Achievement Forgetting
+--------------------------------------------------------------------------------
+  Per-achievement forgetting (mean +/- std) and pairwise significance:
+    Achievement              DreamerV3-CL         DreamerV3-Original   DreamerV3-Nlr-Sampling-Privilage DreamerV3-Nlr-Sampling-Verified DreamerV3-Nlu-Sampling-Privilage DreamerV3-Nlu-Sampling-Verified
+    ------------------------------------------------------------------------------------------------------------------------------------------------------------
+    collect_wood             0.0667 +/- 0.0544    0.0800 +/- 0.0374    0.0800 +/- 0.0408    0.1200 +/- 0.0141    0.0800 +/- 0.0432    0.0867 +/- 0.0602   
+    place_table              0.1667 +/- 0.0602    0.1133 +/- 0.0573    0.2567 +/- 0.2037    0.1000 +/- 0.0535    0.0867 +/- 0.0785    0.0600 +/- 0.0849   
+    eat_cow                  0.1700 +/- 0.0424    0.1300 +/- 0.0141    0.1033 +/- 0.0544    0.1333 +/- 0.0340    0.1200 +/- 0.0245    0.1600 +/- 0.0216   
+    collect_sapling          0.0133 +/- 0.0094    0.0300 +/- 0.0163    0.0300 +/- 0.0163    0.0433 +/- 0.0170    0.0200 +/- 0.0082    0.0333 +/- 0.0170   
+    collect_drink            0.0167 +/- 0.0170    0.0500 +/- 0.0283    0.0933 +/- 0.0624    0.0767 +/- 0.0205    0.0767 +/- 0.0525    0.1233 +/- 0.0419   
+    make_wood_pickaxe        0.0188 +/- 0.0067    0.0133 +/- 0.0047    0.0167 +/- 0.0125    0.0167 +/- 0.0170    0.0400 +/- 0.0216    0.0142 +/- 0.0060   
+    make_wood_sword          0.0271 +/- 0.0091    0.0233 +/- 0.0170    0.0514 +/- 0.0208    0.0142 +/- 0.0042    0.0533 +/- 0.0309    0.0233 +/- 0.0047   
+    place_plant              0.0500 +/- 0.0455    0.1433 +/- 0.0419    0.0367 +/- 0.0377    0.1400 +/- 0.1003    0.1700 +/- 0.1152    0.0267 +/- 0.0309   
+    defeat_zombie            0.0967 +/- 0.0309    0.0667 +/- 0.0262    0.0900 +/- 0.0082    0.1000 +/- 0.0216    0.0933 +/- 0.0544    0.0933 +/- 0.0262   
+    collect_stone            0.0000 +/- 0.0000    0.0100 +/- 0.0082    0.0033 +/- 0.0047    0.0033 +/- 0.0047    0.0167 +/- 0.0047    0.0000 +/- 0.0000   
+    place_stone              0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0033 +/- 0.0047    0.0000 +/- 0.0000    0.0100 +/- 0.0082    0.0000 +/- 0.0000   
+    eat_plant                0.0033 +/- 0.0047    0.0033 +/- 0.0047    0.0000 +/- 0.0000    0.0067 +/- 0.0047    0.0100 +/- 0.0082    0.0100 +/- 0.0082   
+    defeat_skeleton          0.0333 +/- 0.0189    0.0200 +/- 0.0000    0.0333 +/- 0.0125    0.0500 +/- 0.0000    0.0267 +/- 0.0047    0.0467 +/- 0.0047   
+    make_stone_pickaxe       0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000   
+    make_stone_sword         0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000   
+    wake_up                  0.0400 +/- 0.0082    0.0833 +/- 0.0471    0.0433 +/- 0.0205    0.0300 +/- 0.0216    0.0100 +/- 0.0082    0.0433 +/- 0.0125   
+    place_furnace            0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0100 +/- 0.0000    0.0000 +/- 0.0000   
+    collect_coal             0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000   
+    collect_iron             0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000   
+    collect_diamond          0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000   
+    make_iron_pickaxe        0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000   
+    make_iron_sword          0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000    0.0000 +/- 0.0000   
+
+  Mean forgetting across all achievements:
+    DreamerV3-CL: 0.0319 +/- 0.0048  [min=0.0273, max=0.0385]
+    DreamerV3-Original: 0.0348 +/- 0.0098  [min=0.0227, max=0.0468]
+    DreamerV3-Nlr-Sampling-Privilage: 0.0382 +/- 0.0141  [min=0.0238, max=0.0573]
+    DreamerV3-Nlr-Sampling-Verified: 0.0379 +/- 0.0068  [min=0.0292, max=0.0459]
+    DreamerV3-Nlu-Sampling-Privilage: 0.0374 +/- 0.0047  [min=0.0314, max=0.0427]
+    DreamerV3-Nlu-Sampling-Verified: 0.0328 +/- 0.0074  [min=0.0251, max=0.0427]
+    DreamerV3-CL vs DreamerV3-Original: p=0.7322 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.5986 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.3739 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.3105 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.9006 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.7949 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.7373 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.7610 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.8235 (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.9785 (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.9435 (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.6587 (n.s.)
+    DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.9371 (n.s.)
+    DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.5089 (n.s.)
+    DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.4996 (n.s.)
+  Top-3 most forgotten (DreamerV3-CL): eat_cow (0.1700), place_table (0.1667), defeat_zombie (0.0967)
+  Top-3 most forgotten (DreamerV3-Original): place_plant (0.1433), eat_cow (0.1300), place_table (0.1133)
+  Top-3 most forgotten (DreamerV3-Nlr-Sampling-Privilage): place_table (0.2567), eat_cow (0.1033), collect_drink (0.0933)
+  Top-3 most forgotten (DreamerV3-Nlr-Sampling-Verified): place_plant (0.1400), eat_cow (0.1333), collect_wood (0.1200)
+  Top-3 most forgotten (DreamerV3-Nlu-Sampling-Privilage): place_plant (0.1700), eat_cow (0.1200), defeat_zombie (0.0933)
+  Top-3 most forgotten (DreamerV3-Nlu-Sampling-Verified): eat_cow (0.1600), collect_drink (0.1233), defeat_zombie (0.0933)
+
+--------------------------------------------------------------------------------
+  Fig 09: Score Distribution
+--------------------------------------------------------------------------------
+  DreamerV3-CL score distribution (mean +/- std across seeds):
+    0-1: 1.0000 +/- 0.0000
+    1-2: 0.0000 +/- 0.0000
+    2-3: 0.0000 +/- 0.0000
+    3-4: 0.0000 +/- 0.0000
+    4-5: 0.0000 +/- 0.0000
+    5+: 0.0000 +/- 0.0000
+  DreamerV3-Original score distribution (mean +/- std across seeds):
+    0-1: 1.0000 +/- 0.0000
+    1-2: 0.0000 +/- 0.0000
+    2-3: 0.0000 +/- 0.0000
+    3-4: 0.0000 +/- 0.0000
+    4-5: 0.0000 +/- 0.0000
+    5+: 0.0000 +/- 0.0000
+  DreamerV3-Nlr-Sampling-Privilage score distribution (mean +/- std across seeds):
+    0-1: 1.0000 +/- 0.0000
+    1-2: 0.0000 +/- 0.0000
+    2-3: 0.0000 +/- 0.0000
+    3-4: 0.0000 +/- 0.0000
+    4-5: 0.0000 +/- 0.0000
+    5+: 0.0000 +/- 0.0000
+  DreamerV3-Nlr-Sampling-Verified score distribution (mean +/- std across seeds):
+    0-1: 1.0000 +/- 0.0000
+    1-2: 0.0000 +/- 0.0000
+    2-3: 0.0000 +/- 0.0000
+    3-4: 0.0000 +/- 0.0000
+    4-5: 0.0000 +/- 0.0000
+    5+: 0.0000 +/- 0.0000
+  DreamerV3-Nlu-Sampling-Privilage score distribution (mean +/- std across seeds):
+    0-1: 1.0000 +/- 0.0000
+    1-2: 0.0000 +/- 0.0000
+    2-3: 0.0000 +/- 0.0000
+    3-4: 0.0000 +/- 0.0000
+    4-5: 0.0000 +/- 0.0000
+    5+: 0.0000 +/- 0.0000
+  DreamerV3-Nlu-Sampling-Verified score distribution (mean +/- std across seeds):
+    0-1: 1.0000 +/- 0.0000
+    1-2: 0.0000 +/- 0.0000
+    2-3: 0.0000 +/- 0.0000
+    3-4: 0.0000 +/- 0.0000
+    4-5: 0.0000 +/- 0.0000
+    5+: 0.0000 +/- 0.0000
+
+  KL divergence (DreamerV3-CL || DreamerV3-Original): 0.000000
+
+  KL divergence (DreamerV3-CL || DreamerV3-Nlr-Sampling-Privilage): 0.000000
+
+  KL divergence (DreamerV3-CL || DreamerV3-Nlr-Sampling-Verified): 0.000000
+
+  KL divergence (DreamerV3-CL || DreamerV3-Nlu-Sampling-Privilage): 0.000000
+
+  KL divergence (DreamerV3-CL || DreamerV3-Nlu-Sampling-Verified): 0.000000
+
+  KL divergence (DreamerV3-Original || DreamerV3-Nlr-Sampling-Privilage): 0.000000
+
+  KL divergence (DreamerV3-Original || DreamerV3-Nlr-Sampling-Verified): 0.000000
+
+  KL divergence (DreamerV3-Original || DreamerV3-Nlu-Sampling-Privilage): 0.000000
+
+  KL divergence (DreamerV3-Original || DreamerV3-Nlu-Sampling-Verified): 0.000000
+
+  KL divergence (DreamerV3-Nlr-Sampling-Privilage || DreamerV3-Nlr-Sampling-Verified): 0.000000
+
+  KL divergence (DreamerV3-Nlr-Sampling-Privilage || DreamerV3-Nlu-Sampling-Privilage): 0.000000
+
+  KL divergence (DreamerV3-Nlr-Sampling-Privilage || DreamerV3-Nlu-Sampling-Verified): 0.000000
+
+  KL divergence (DreamerV3-Nlr-Sampling-Verified || DreamerV3-Nlu-Sampling-Privilage): 0.000000
+
+  KL divergence (DreamerV3-Nlr-Sampling-Verified || DreamerV3-Nlu-Sampling-Verified): 0.000000
+
+  KL divergence (DreamerV3-Nlu-Sampling-Privilage || DreamerV3-Nlu-Sampling-Verified): 0.000000
+
+  NOTE: score_distribution is computed from the last episode's window,
+  not a running average. Interpret with caution.
+
+--------------------------------------------------------------------------------
+  Fig 10: Achievement Heatmap Over Training
+--------------------------------------------------------------------------------
+  DreamerV3-CL -- Step where achievement first exceeds threshold (mean across seeds):
+    Achievement              > 10%              > 50%              Final rate     
+    -----------------------------------------------------------------
+    collect_wood             4703               79376              0.8900
+    place_table              231709             never              0.2333
+    eat_cow                  86346              never              0.1233
+    collect_sapling          2712               73402              0.9867
+    collect_drink            12668              448758             0.5300
+    make_wood_pickaxe        never              never              0.0000
+    make_wood_sword          never              never              0.0000
+    place_plant              2712               132145             0.9333
+    defeat_zombie            never              never              0.0267
+    collect_stone            never              never              0.0000
+    place_stone              never              never              0.0000
+    eat_plant                never              never              0.0100
+    defeat_skeleton          never              never              0.0133
+    make_stone_pickaxe       never              never              0.0000
+    make_stone_sword         never              never              0.0000
+    wake_up                  2712               2712               0.9600
+    place_furnace            never              never              0.0000
+    collect_coal             never              never              0.0000
+    collect_iron             never              never              0.0000
+    collect_diamond          never              never              0.0000
+    make_iron_pickaxe        never              never              0.0000
+    make_iron_sword          never              never              0.0000
+  DreamerV3-Original -- Step where achievement first exceeds threshold (mean across seeds):
+    Achievement              > 10%              > 50%              Final rate     
+    -----------------------------------------------------------------
+    collect_wood             3770               102320             0.8900
+    place_table              105307             182952             0.6967
+    eat_cow                  86393              never              0.0800
+    collect_sapling          1779               72456              0.9633
+    collect_drink            4765               359148             0.5700
+    make_wood_pickaxe        never              never              0.0133
+    make_wood_sword          never              never              0.0067
+    place_plant              1779               95352              0.8300
+    defeat_zombie            never              never              0.0067
+    collect_stone            never              never              0.0033
+    place_stone              never              never              0.0000
+    eat_plant                never              never              0.0000
+    defeat_skeleton          never              never              0.0033
+    make_stone_pickaxe       never              never              0.0000
+    make_stone_sword         never              never              0.0000
+    wake_up                  1779               2774               0.9133
+    place_furnace            never              never              0.0000
+    collect_coal             never              never              0.0000
+    collect_iron             never              never              0.0000
+    collect_diamond          never              never              0.0000
+    make_iron_pickaxe        never              never              0.0000
+    make_iron_sword          never              never              0.0000
+  DreamerV3-Nlr-Sampling-Privilage -- Step where achievement first exceeds threshold (mean across seeds):
+    Achievement              > 10%              > 50%              Final rate     
+    -----------------------------------------------------------------
+    collect_wood             3389               3389               0.8867
+    place_table              3389               never              0.3467
+    eat_cow                  96852              never              0.1533
+    collect_sapling          5378               76966              0.9700
+    collect_drink            4383               450816             0.5300
+    make_wood_pickaxe        never              never              0.0067
+    make_wood_sword          never              never              0.0067
+    place_plant              5378               128669             0.9500
+    defeat_zombie            never              never              0.0133
+    collect_stone            never              never              0.0033
+    place_stone              never              never              0.0000
+    eat_plant                never              never              0.0100
+    defeat_skeleton          never              never              0.0100
+    make_stone_pickaxe       never              never              0.0000
+    make_stone_sword         never              never              0.0000
+    wake_up                  3389               3389               0.9567
+    place_furnace            never              never              0.0000
+    collect_coal             never              never              0.0000
+    collect_iron             never              never              0.0000
+    collect_diamond          never              never              0.0000
+    make_iron_pickaxe        never              never              0.0000
+    make_iron_sword          never              never              0.0000
+  DreamerV3-Nlr-Sampling-Verified -- Step where achievement first exceeds threshold (mean across seeds):
+    Achievement              > 10%              > 50%              Final rate     
+    -----------------------------------------------------------------
+    collect_wood             1587               63456              0.8700
+    place_table              58467              never              0.4600
+    eat_cow                  84412              never              0.1467
+    collect_sapling          1587               1587               0.9567
+    collect_drink            47490              282993             0.5267
+    make_wood_pickaxe        never              never              0.0167
+    make_wood_sword          never              never              0.0100
+    place_plant              1587               1587               0.8233
+    defeat_zombie            never              never              0.0300
+    collect_stone            never              never              0.0100
+    place_stone              never              never              0.0033
+    eat_plant                never              never              0.0033
+    defeat_skeleton          never              never              0.0100
+    make_stone_pickaxe       never              never              0.0000
+    make_stone_sword         never              never              0.0000
+    wake_up                  1587               1587               0.9700
+    place_furnace            never              never              0.0000
+    collect_coal             never              never              0.0000
+    collect_iron             never              never              0.0000
+    collect_diamond          never              never              0.0000
+    make_iron_pickaxe        never              never              0.0000
+    make_iron_sword          never              never              0.0000
+  DreamerV3-Nlu-Sampling-Privilage -- Step where achievement first exceeds threshold (mean across seeds):
+    Achievement              > 10%              > 50%              Final rate     
+    -----------------------------------------------------------------
+    collect_wood             1699               1699               0.9000
+    place_table              197836             never              0.4533
+    eat_cow                  96283              never              0.1267
+    collect_sapling          1699               1699               0.9800
+    collect_drink            46502              451718             0.5167
+    make_wood_pickaxe        never              never              0.0033
+    make_wood_sword          never              never              0.0167
+    place_plant              1699               155024             0.7900
+    defeat_zombie            never              never              0.0367
+    collect_stone            never              never              0.0033
+    place_stone              never              never              0.0000
+    eat_plant                never              never              0.0033
+    defeat_skeleton          never              never              0.0067
+    make_stone_pickaxe       never              never              0.0000
+    make_stone_sword         never              never              0.0000
+    wake_up                  1699               3690               0.9867
+    place_furnace            never              never              0.0000
+    collect_coal             never              never              0.0000
+    collect_iron             never              never              0.0000
+    collect_diamond          never              never              0.0000
+    make_iron_pickaxe        never              never              0.0000
+    make_iron_sword          never              never              0.0000
+  DreamerV3-Nlu-Sampling-Verified -- Step where achievement first exceeds threshold (mean across seeds):
+    Achievement              > 10%              > 50%              Final rate     
+    -----------------------------------------------------------------
+    collect_wood             2350               111724             0.8867
+    place_table              176355             never              0.3900
+    eat_cow                  82889              never              0.1500
+    collect_sapling          3344               80901              0.9667
+    collect_drink            50077              never              0.4433
+    make_wood_pickaxe        never              never              0.0000
+    make_wood_sword          never              never              0.0367
+    place_plant              3344               133599             0.9100
+    defeat_zombie            143542             never              0.0367
+    collect_stone            never              never              0.0000
+    place_stone              never              never              0.0000
+    eat_plant                never              never              0.0033
+    defeat_skeleton          never              never              0.0067
+    make_stone_pickaxe       never              never              0.0000
+    make_stone_sword         never              never              0.0000
+    wake_up                  2350               2350               0.9567
+    place_furnace            never              never              0.0000
+    collect_coal             never              never              0.0000
+    collect_iron             never              never              0.0000
+    collect_diamond          never              never              0.0000
+    make_iron_pickaxe        never              never              0.0000
+    make_iron_sword          never              never              0.0000
+
+--------------------------------------------------------------------------------
+  Fig 11: Summary Table
+--------------------------------------------------------------------------------
+  Summary statistics from metrics_summary.json:
+    Metric                         DreamerV3-CL                 DreamerV3-Original           DreamerV3-Nlr-Sampling-Privilage DreamerV3-Nlr-Sampling-Verified DreamerV3-Nlu-Sampling-Privilage DreamerV3-Nlu-Sampling-Verified
+    ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    Mean Return                    3.8333 +/- 0.0826            4.1133 +/- 0.2584            3.9900 +/- 0.2617            3.9567 +/- 0.0685            3.9500 +/- 0.1314            3.9267 +/- 0.3172           
+      DreamerV3-CL vs DreamerV3-Original: p=0.2615 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.4918 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.1818 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.3580 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.7220 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.6600 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.4849 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.4843 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.5553 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.8760 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.8593 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.8386 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.9533 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.9070 (n.s.)
+      DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.9302 (n.s.)
+    Success Rate                   0.9867 +/- 0.0125            0.9967 +/- 0.0047            0.9833 +/- 0.0170            0.9867 +/- 0.0094            0.9967 +/- 0.0047            0.9900 +/- 0.0082           
+      DreamerV3-CL vs DreamerV3-Original: p=0.3785 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.8350 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=1.0000 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.3785 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.7700 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.3841 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.2739 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=1.0000 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.3868 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.8234 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.3841 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.6528 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.2739 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.7250 (n.s.)
+      DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.3868 (n.s.)
+    Lifetime Mean (task 0)         2.9666 +/- 0.1045            3.3086 +/- 0.0863            2.9345 +/- 0.0999            2.9484 +/- 0.2215            2.9416 +/- 0.0781            2.8941 +/- 0.1672           
+      DreamerV3-CL vs DreamerV3-Original: p=0.0248 (*)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.7695 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.9234 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.8012 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.6353 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.0167 (*)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.1355 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.0114 (*)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.0527 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.9411 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.9409 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.7865 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.9705 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.7965 (n.s.)
+      DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.7409 (n.s.)
+    Aggregate Forgetting (task 0)  0.0325 +/- 0.0043            0.0348 +/- 0.0098            0.0126 +/- 0.0046            0.0126 +/- 0.0022            0.0123 +/- 0.0015            0.0108 +/- 0.0024           
+      DreamerV3-CL vs DreamerV3-Original: p=0.7823 (n.s.)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.0108 (*)
+      DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.0095 (**)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.0132 (*)
+      DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.0068 (**)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.0672 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.0784 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.0803 (n.s.)
+      DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.0667 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.9884 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.9430 (n.s.)
+      DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.6473 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.9180 (n.s.)
+      DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.4855 (n.s.)
+      DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.4873 (n.s.)
+
+  Per-seed raw values:
+    Mean Return:
+      DreamerV3-CL seed=1: 3.7699999883770943
+      DreamerV3-CL seed=4: 3.9499999883770944
+      DreamerV3-CL seed=42: 3.779999986886978
+      DreamerV3-Original seed=1: 4.039999990388751
+      DreamerV3-Original seed=4: 4.459999987185001
+      DreamerV3-Original seed=42: 3.8399999878555535
+      DreamerV3-Nlr-Sampling-Privilage seed=1: 3.659999987855554
+      DreamerV3-Nlr-Sampling-Privilage seed=4: 4.009999987930059
+      DreamerV3-Nlr-Sampling-Privilage seed=42: 4.299999988526106
+      DreamerV3-Nlr-Sampling-Verified seed=1: 3.8599999898672106
+      DreamerV3-Nlr-Sampling-Verified seed=4: 4.009999988749623
+      DreamerV3-Nlr-Sampling-Verified seed=42: 3.999999988079071
+      DreamerV3-Nlu-Sampling-Privilage seed=1: 4.099999990314245
+      DreamerV3-Nlu-Sampling-Privilage seed=4: 3.7799999884516002
+      DreamerV3-Nlu-Sampling-Privilage seed=42: 3.969999988898635
+      DreamerV3-Nlu-Sampling-Verified seed=1: 3.4999999875575303
+      DreamerV3-Nlu-Sampling-Verified seed=4: 4.259999990090728
+      DreamerV3-Nlu-Sampling-Verified seed=42: 4.019999987855553
+    Success Rate:
+      DreamerV3-CL seed=1: 0.99
+      DreamerV3-CL seed=4: 0.97
+      DreamerV3-CL seed=42: 1.0
+      DreamerV3-Original seed=1: 1.0
+      DreamerV3-Original seed=4: 1.0
+      DreamerV3-Original seed=42: 0.99
+      DreamerV3-Nlr-Sampling-Privilage seed=1: 0.96
+      DreamerV3-Nlr-Sampling-Privilage seed=4: 1.0
+      DreamerV3-Nlr-Sampling-Privilage seed=42: 0.99
+      DreamerV3-Nlr-Sampling-Verified seed=1: 0.98
+      DreamerV3-Nlr-Sampling-Verified seed=4: 0.98
+      DreamerV3-Nlr-Sampling-Verified seed=42: 1.0
+      DreamerV3-Nlu-Sampling-Privilage seed=1: 0.99
+      DreamerV3-Nlu-Sampling-Privilage seed=4: 1.0
+      DreamerV3-Nlu-Sampling-Privilage seed=42: 1.0
+      DreamerV3-Nlu-Sampling-Verified seed=1: 0.98
+      DreamerV3-Nlu-Sampling-Verified seed=4: 0.99
+      DreamerV3-Nlu-Sampling-Verified seed=42: 1.0
+    Lifetime Mean (task 0):
+      DreamerV3-CL seed=1: 2.826523876399669
+      DreamerV3-CL seed=4: 2.9958448638463615
+      DreamerV3-CL seed=42: 3.077375553973963
+      DreamerV3-Original seed=1: 3.2888828813708026
+      DreamerV3-Original seed=4: 3.4227953295342735
+      DreamerV3-Original seed=42: 3.21420763917878
+      DreamerV3-Nlr-Sampling-Privilage seed=1: 2.8067334329146574
+      DreamerV3-Nlr-Sampling-Privilage seed=4: 2.9462809800896435
+      DreamerV3-Nlr-Sampling-Privilage seed=42: 3.0505681706761774
+      DreamerV3-Nlr-Sampling-Verified seed=1: 2.6941468685017904
+      DreamerV3-Nlr-Sampling-Verified seed=4: 3.233893545739958
+      DreamerV3-Nlr-Sampling-Verified seed=42: 2.9171866330134133
+      DreamerV3-Nlu-Sampling-Privilage seed=1: 3.0330381731491887
+      DreamerV3-Nlu-Sampling-Privilage seed=4: 2.842166013913275
+      DreamerV3-Nlu-Sampling-Privilage seed=42: 2.94969151960503
+      DreamerV3-Nlu-Sampling-Verified seed=1: 2.7640449319369673
+      DreamerV3-Nlu-Sampling-Verified seed=4: 3.1300710654319017
+      DreamerV3-Nlu-Sampling-Verified seed=42: 2.7880630514475406
+    Aggregate Forgetting (task 0):
+      DreamerV3-CL seed=1: 0.0290909092026678
+      DreamerV3-CL seed=4: 0.038526922041042286
+      DreamerV3-CL seed=42: 0.02999999907545068
+      DreamerV3-Original seed=1: 0.035000002180988136
+      DreamerV3-Original seed=4: 0.022727272388609974
+      DreamerV3-Original seed=42: 0.04681818034838547
+      DreamerV3-Nlr-Sampling-Privilage seed=1: 0.01106609701554277
+      DreamerV3-Nlr-Sampling-Privilage seed=4: 0.018805970034714955
+      DreamerV3-Nlr-Sampling-Privilage seed=42: 0.00795115241363867
+      DreamerV3-Nlr-Sampling-Verified seed=1: 0.015223880006528613
+      DreamerV3-Nlr-Sampling-Verified seed=4: 0.012686568298446598
+      DreamerV3-Nlr-Sampling-Verified seed=42: 0.009742198845566208
+      DreamerV3-Nlu-Sampling-Privilage seed=1: 0.012686567631230425
+      DreamerV3-Nlu-Sampling-Privilage seed=4: 0.014029849070444037
+      DreamerV3-Nlu-Sampling-Privilage seed=42: 0.01029850789971316
+      DreamerV3-Nlu-Sampling-Verified seed=1: 0.014029851266697271
+      DreamerV3-Nlu-Sampling-Verified seed=4: 0.008249661454291487
+      DreamerV3-Nlu-Sampling-Verified seed=42: 0.009999999276070452
+
+  Achievements unlocked DreamerV3-CL vs DreamerV3-Original: p=0.0474 (*)
+
+  Achievements unlocked DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.3868 (n.s.)
+
+  Achievements unlocked DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.8042 (n.s.)
+
+  Achievements unlocked DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.5185 (n.s.)
+
+  Achievements unlocked DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=1.0000 (n.s.)
+
+  Achievements unlocked DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.3868 (n.s.)
+
+  Achievements unlocked DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.2832 (n.s.)
+
+  Achievements unlocked DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.1012 (n.s.)
+
+  Achievements unlocked DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.0474 (*)
+
+  Achievements unlocked DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.4961 (n.s.)
+
+  Achievements unlocked DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.6495 (n.s.)
+
+  Achievements unlocked DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.3868 (n.s.)
+
+  Achievements unlocked DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.6278 (n.s.)
+
+  Achievements unlocked DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.8042 (n.s.)
+
+  Achievements unlocked DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.5185 (n.s.)
+
+--------------------------------------------------------------------------------
+  Fig 12: Top-8 Achievement Curves
+--------------------------------------------------------------------------------
+  Top-8 achievements by mean final rate (across all methods):
+    Rank   Achievement              DreamerV3-CL         DreamerV3-Original   DreamerV3-Nlr-Sampling-Privilage DreamerV3-Nlr-Sampling-Verified DreamerV3-Nlu-Sampling-Privilage DreamerV3-Nlu-Sampling-Verified
+    ------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    1      collect_sapling          0.9897 +/- 0.0082    0.9653 +/- 0.0271    0.9690 +/- 0.0176    0.9657 +/- 0.0161    0.9810 +/- 0.0054    0.9633 +/- 0.0200   
+    2      wake_up                  0.9630 +/- 0.0050    0.9143 +/- 0.0449    0.9608 +/- 0.0194    0.9733 +/- 0.0170    0.9847 +/- 0.0046    0.9577 +/- 0.0097   
+    3      collect_wood             0.8883 +/- 0.0846    0.8972 +/- 0.0340    0.8853 +/- 0.0242    0.8773 +/- 0.0116    0.8890 +/- 0.0156    0.8845 +/- 0.0376   
+    4      place_plant              0.9328 +/- 0.0453    0.8350 +/- 0.0480    0.9513 +/- 0.0310    0.8410 +/- 0.1338    0.7913 +/- 0.1521    0.9088 +/- 0.0768   
+    5      collect_drink            0.5157 +/- 0.0461    0.5713 +/- 0.0460    0.5370 +/- 0.0547    0.5327 +/- 0.0405    0.5150 +/- 0.0630    0.4365 +/- 0.0036   
+    6      place_table              0.2300 +/- 0.1577    0.6997 +/- 0.0929    0.3402 +/- 0.1866    0.4735 +/- 0.1320    0.4530 +/- 0.1336    0.3830 +/- 0.2516   
+    7      eat_cow                  0.1272 +/- 0.0343    0.0810 +/- 0.0144    0.1502 +/- 0.0560    0.1392 +/- 0.0239    0.1220 +/- 0.0374    0.1478 +/- 0.0171   
+    8      defeat_zombie            0.0317 +/- 0.0184    0.0057 +/- 0.0042    0.0183 +/- 0.0069    0.0283 +/- 0.0179    0.0385 +/- 0.0286    0.0353 +/- 0.0176   
+
+--------------------------------------------------------------------------------
+  Fig 13: Max Return & Depth
+--------------------------------------------------------------------------------
+  Per-Task Max Return Over Time:
+    DreamerV3-CL final: 6.7667 +/- 0.4714  [min=6.1000, max=7.1000]
+    DreamerV3-Original final: 6.7667 +/- 0.4714  [min=6.1000, max=7.1000]
+    DreamerV3-Nlr-Sampling-Privilage final: 7.4333 +/- 0.4714  [min=7.1000, max=8.1000]
+    DreamerV3-Nlr-Sampling-Verified final: 8.1000 +/- 0.0000  [min=8.1000, max=8.1000]
+    DreamerV3-Nlu-Sampling-Privilage final: 8.4333 +/- 0.4714  [min=8.1000, max=9.1000]
+    DreamerV3-Nlu-Sampling-Verified final: 7.4333 +/- 0.4714  [min=7.1000, max=8.1000]
+    DreamerV3-CL vs DreamerV3-Original: p=1.0000 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.2302 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.0572 (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.0241 (*)
+    DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.2302 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.2302 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.0572 (n.s.)
+    DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.0241 (*)
+    DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.2302 (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=0.1835 (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=0.1012 (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=1.0000 (n.s.)
+    DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=0.4226 (n.s.)
+    DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=0.1835 (n.s.)
+    DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=0.1012 (n.s.)
+  Per-Task Max Achievement Depth:
+    DreamerV3-CL final: 1.0000 +/- 0.0000  [min=1.0000, max=1.0000]
+    DreamerV3-Original final: 1.0000 +/- 0.0000  [min=1.0000, max=1.0000]
+    DreamerV3-Nlr-Sampling-Privilage final: -1.0000 +/- 0.0000  [min=-1.0000, max=-1.0000]
+    DreamerV3-Nlr-Sampling-Verified final: -1.0000 +/- 0.0000  [min=-1.0000, max=-1.0000]
+    DreamerV3-Nlu-Sampling-Privilage final: -1.0000 +/- 0.0000  [min=-1.0000, max=-1.0000]
+    DreamerV3-Nlu-Sampling-Verified final: -1.0000 +/- 0.0000  [min=-1.0000, max=-1.0000]
+    DreamerV3-CL vs DreamerV3-Original: p=nan (n.s.)
+    DreamerV3-CL vs DreamerV3-Nlr-Sampling-Privilage: p=0.0000 (***)
+    DreamerV3-CL vs DreamerV3-Nlr-Sampling-Verified: p=0.0000 (***)
+    DreamerV3-CL vs DreamerV3-Nlu-Sampling-Privilage: p=0.0000 (***)
+    DreamerV3-CL vs DreamerV3-Nlu-Sampling-Verified: p=0.0000 (***)
+    DreamerV3-Original vs DreamerV3-Nlr-Sampling-Privilage: p=0.0000 (***)
+    DreamerV3-Original vs DreamerV3-Nlr-Sampling-Verified: p=0.0000 (***)
+    DreamerV3-Original vs DreamerV3-Nlu-Sampling-Privilage: p=0.0000 (***)
+    DreamerV3-Original vs DreamerV3-Nlu-Sampling-Verified: p=0.0000 (***)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlr-Sampling-Verified: p=nan (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Privilage: p=nan (n.s.)
+    DreamerV3-Nlr-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=nan (n.s.)
+    DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Privilage: p=nan (n.s.)
+    DreamerV3-Nlr-Sampling-Verified vs DreamerV3-Nlu-Sampling-Verified: p=nan (n.s.)
+    DreamerV3-Nlu-Sampling-Privilage vs DreamerV3-Nlu-Sampling-Verified: p=nan (n.s.)
+
+  Steps to reach max return thresholds:
+    DreamerV3-CL -> max_return>=3.0: 5821 +/- 1919 (3/3 seeds)
+    DreamerV3-Original -> max_return>=3.0: 5226 +/- 1170 (3/3 seeds)
+    DreamerV3-Nlr-Sampling-Privilage -> max_return>=3.0: 4440 +/- 511 (3/3 seeds)
+    DreamerV3-Nlr-Sampling-Verified -> max_return>=3.0: 5116 +/- 811 (3/3 seeds)
+    DreamerV3-Nlu-Sampling-Privilage -> max_return>=3.0: 3823 +/- 702 (3/3 seeds)
+    DreamerV3-Nlu-Sampling-Verified -> max_return>=3.0: 4453 +/- 1159 (3/3 seeds)
+    DreamerV3-CL -> max_return>=5.0: 68042 +/- 43071 (3/3 seeds)
+    DreamerV3-Original -> max_return>=5.0: 102907 +/- 1277 (3/3 seeds)
+    DreamerV3-Nlr-Sampling-Privilage -> max_return>=5.0: 101200 +/- 29263 (3/3 seeds)
+    DreamerV3-Nlr-Sampling-Verified -> max_return>=5.0: 58533 +/- 483 (3/3 seeds)
+    DreamerV3-Nlu-Sampling-Privilage -> max_return>=5.0: 88229 +/- 45598 (3/3 seeds)
+    DreamerV3-Nlu-Sampling-Verified -> max_return>=5.0: 68773 +/- 11715 (3/3 seeds)
+    DreamerV3-CL -> max_return>=6.0: 193701 +/- 25447 (3/3 seeds)
+    DreamerV3-Original -> max_return>=6.0: 149328 +/- 43251 (3/3 seeds)
+    DreamerV3-Nlr-Sampling-Privilage -> max_return>=6.0: 212475 +/- 65868 (3/3 seeds)
+    DreamerV3-Nlr-Sampling-Verified -> max_return>=6.0: 141819 +/- 58481 (3/3 seeds)
+    DreamerV3-Nlu-Sampling-Privilage -> max_return>=6.0: 200869 +/- 12772 (3/3 seeds)
+    DreamerV3-Nlu-Sampling-Verified -> max_return>=6.0: 115195 +/- 43092 (3/3 seeds)
+    DreamerV3-CL -> max_return>=7.0: 227152 +/- 48128 (2/3 seeds)
+    DreamerV3-Original -> max_return>=7.0: 383824 +/- 45056 (2/3 seeds)
+    DreamerV3-Nlr-Sampling-Privilage -> max_return>=7.0: 320336 +/- 64866 (3/3 seeds)
+    DreamerV3-Nlr-Sampling-Verified -> max_return>=7.0: 281424 +/- 52641 (3/3 seeds)
+    DreamerV3-Nlu-Sampling-Privilage -> max_return>=7.0: 255483 +/- 28652 (3/3 seeds)
+    DreamerV3-Nlu-Sampling-Verified -> max_return>=7.0: 340133 +/- 85732 (3/3 seeds)
+
+--------------------------------------------------------------------------------
+  Fig 14: Individual Seed Trajectories
+--------------------------------------------------------------------------------
+  Per-seed final episode return (smoothed, last value):
+    Method                   Seed     Final Return     Num Episodes   Total Steps   
+    ----------------------------------------------------------------------------
+    DreamerV3-CL             1        3.7200           1851           499848        
+    DreamerV3-CL             4        4.2200           1805           500012        
+    DreamerV3-CL             42       3.6800           1768           499723        
+    DreamerV3-Original       1        4.1600           1853           500001        
+    DreamerV3-Original       4        4.4200           1803           499666        
+    DreamerV3-Original       42       3.8200           1830           499456        
+    DreamerV3-Nlr-Sampling-Privilage 1        3.3200           1797           499700        
+    DreamerV3-Nlr-Sampling-Privilage 4        4.3800           1815           499891        
+    DreamerV3-Nlr-Sampling-Privilage 42       3.9400           1760           499787        
+    DreamerV3-Nlr-Sampling-Verified 1        3.6600           1811           499955        
+    DreamerV3-Nlr-Sampling-Verified 4        3.5600           1785           499538        
+    DreamerV3-Nlr-Sampling-Verified 42       3.6400           1827           500027        
+    DreamerV3-Nlu-Sampling-Privilage 1        3.7800           1807           499509        
+    DreamerV3-Nlu-Sampling-Privilage 4        4.2600           1819           499998        
+    DreamerV3-Nlu-Sampling-Privilage 42       4.0200           1783           499900        
+    DreamerV3-Nlu-Sampling-Verified 1        3.4000           1780           499274        
+    DreamerV3-Nlu-Sampling-Verified 4        4.3800           1829           499658        
+    DreamerV3-Nlu-Sampling-Verified 42       4.2800           1776           500012        
+
+  Inter-seed variance (coefficient of variation at final point):
+    DreamerV3-CL: CV = 0.0634 (std/mean = 0.2457/3.8733)
+    DreamerV3-Original: CV = 0.0594 (std/mean = 0.2457/4.1333)
+    DreamerV3-Nlr-Sampling-Privilage: CV = 0.1121 (std/mean = 0.4348/3.8800)
+    DreamerV3-Nlr-Sampling-Verified: CV = 0.0119 (std/mean = 0.0432/3.6200)
+    DreamerV3-Nlu-Sampling-Privilage: CV = 0.0487 (std/mean = 0.1960/4.0200)
+    DreamerV3-Nlu-Sampling-Verified: CV = 0.1095 (std/mean = 0.4403/4.0200)
+
+  Seed ranking by final return:
+    DreamerV3-CL: seed=4 (4.220) > seed=1 (3.720) > seed=42 (3.680)
+    DreamerV3-Original: seed=4 (4.420) > seed=1 (4.160) > seed=42 (3.820)
+    DreamerV3-Nlr-Sampling-Privilage: seed=4 (4.380) > seed=42 (3.940) > seed=1 (3.320)
+    DreamerV3-Nlr-Sampling-Verified: seed=1 (3.660) > seed=42 (3.640) > seed=4 (3.560)
+    DreamerV3-Nlu-Sampling-Privilage: seed=4 (4.260) > seed=42 (4.020) > seed=1 (3.780)
+    DreamerV3-Nlu-Sampling-Verified: seed=4 (4.380) > seed=42 (4.280) > seed=1 (3.400)
+
+================================================================================
+END OF REPORT
+================================================================================
