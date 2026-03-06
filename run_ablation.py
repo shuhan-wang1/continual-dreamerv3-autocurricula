@@ -13,6 +13,21 @@ Experiment groups:
   C  Reward scale          (alpha_i / alpha_e sensitivity)
   D  Replay strategy       (NLR interaction with intrinsic / P2E)
 
+Output directory structure:
+  experiment_results/ablation/
+  ├── experiment_manifest.json        # run metadata & status for all experiments
+  ├── A1_baseline_seed1/
+  │   └── craftax_A1_baseline/        # DreamerV3 logdir
+  │       ├── config.yaml             # full training config snapshot
+  │       ├── metrics.jsonl           # DreamerV3 training metrics (loss, reward, etc.)
+  │       ├── online_metrics.jsonl    # per-episode CL metrics (achievements, forgetting)
+  │       ├── metrics_summary.json    # aggregated achievement stats
+  │       ├── nlr_args.yaml           # NLR/NLU config (if enabled)
+  │       └── ckpt/                   # model weights (kept after run)
+  ├── A1_baseline_seed4/
+  │   └── ...
+  └── ...
+
 Usage:
   python run_ablation.py                          # run all 39 experiments
   python run_ablation.py --dry_run                # print commands only
@@ -250,15 +265,23 @@ def build_command(exp_id, exp_cfg, seed, base_logdir, wandb_mode, extra_defaults
 
 
 def is_run_complete(logdir):
-    """Check if a run already completed (metrics.jsonl exists and is non-empty)."""
-    metrics_path = os.path.join(logdir, "metrics.jsonl")
-    if not os.path.exists(metrics_path):
+    """Check if a run already completed by looking for metrics in nested logdir."""
+    if not os.path.exists(logdir):
         return False
-    return os.path.getsize(metrics_path) > 100  # at least some data
+    # DreamerV3 writes into a nested dir: logdir/craftax_<tag>/
+    # Check both the direct logdir and nested subdirectories
+    for search_dir in [logdir] + [
+        os.path.join(logdir, d) for d in os.listdir(logdir)
+        if os.path.isdir(os.path.join(logdir, d))
+    ]:
+        metrics_path = os.path.join(search_dir, "metrics.jsonl")
+        if os.path.exists(metrics_path) and os.path.getsize(metrics_path) > 100:
+            return True
+    return False
 
 
 def cleanup_run(logdir):
-    """Remove replay buffer and checkpoint dirs to save disk. Keep logs."""
+    """Remove replay buffer after each run to save disk. Keep checkpoints and logs."""
     # The actual DreamerV3 logdir is nested: logdir/craftax_{tag}{seed}/
     # Check both the direct logdir and any nested subdirectories
     dirs_to_check = [logdir]
@@ -271,18 +294,17 @@ def cleanup_run(logdir):
 
     cleaned_bytes = 0
     for dirpath in dirs_to_check:
-        for subdir in ("replay", "ckpt"):
-            target = os.path.join(dirpath, subdir)
-            if os.path.exists(target):
-                # Estimate size before deletion
-                for root, dirs, files in os.walk(target):
-                    for f in files:
-                        fp = os.path.join(root, f)
-                        try:
-                            cleaned_bytes += os.path.getsize(fp)
-                        except OSError:
-                            pass
-                shutil.rmtree(target, ignore_errors=True)
+        # Only remove replay buffer; keep ckpt (model weights) and all logs
+        target = os.path.join(dirpath, "replay")
+        if os.path.exists(target):
+            for root, dirs, files in os.walk(target):
+                for f in files:
+                    fp = os.path.join(root, f)
+                    try:
+                        cleaned_bytes += os.path.getsize(fp)
+                    except OSError:
+                        pass
+            shutil.rmtree(target, ignore_errors=True)
 
     return cleaned_bytes
 
@@ -396,7 +418,7 @@ def main():
     parser.add_argument("--gpu", type=str, default=None,
                         help="GPU ID (sets CUDA_VISIBLE_DEVICES). E.g., --gpu 0")
     parser.add_argument("--no_cleanup", action="store_true",
-                        help="Don't delete replay/ckpt after each run.")
+                        help="Don't delete replay buffer after each run (keeps replay + ckpt).")
     parser.add_argument("--resume_failed", action="store_true",
                         help="Re-run experiments that failed (non-zero exit code).")
     args = parser.parse_args()
@@ -569,7 +591,7 @@ def main():
                 cleaned = cleanup_run(logdir)
                 total_cleaned += cleaned
                 if cleaned > 0:
-                    print(f"  Cleaned {format_bytes(cleaned)} (replay+ckpt)")
+                    print(f"  Cleaned {format_bytes(cleaned)} (replay buffer removed, ckpt kept)")
 
     # --- Final summary ---
     total_time = time.time() - start_time
@@ -587,17 +609,29 @@ def main():
     print(f"  Logs at:       {base_logdir.resolve()}")
     print(f"{'=' * 70}")
 
-    # List log locations
-    print(f"\n  Log files per run:")
+    # List saved artifacts per run
+    print(f"\n  Saved artifacts per run:")
     for run_key, run_info in manifest.get("runs", {}).items():
         if run_info.get("status") == "completed":
             logdir = run_info["logdir"]
-            # Find metrics.jsonl in logdir tree
+            artifacts = []
             for root, dirs, files in os.walk(logdir):
                 for f in files:
-                    if f == "metrics.jsonl":
-                        print(f"    {run_key}: {os.path.join(root, f)}")
-                        break
+                    if f in ("metrics.jsonl", "online_metrics.jsonl",
+                             "metrics_summary.json", "config.yaml", "nlr_args.yaml"):
+                        artifacts.append(f)
+                if "ckpt" in dirs:
+                    artifacts.append("ckpt/")
+            if artifacts:
+                print(f"    {run_key}: {', '.join(sorted(set(artifacts)))}")
+
+    print(f"\n  Directory layout:")
+    print(f"    {base_logdir.resolve()}/")
+    print(f"    ├── experiment_manifest.json")
+    print(f"    └── <exp_id>_seed<N>/craftax_<exp_id>/")
+    print(f"        ├── config.yaml, metrics.jsonl, online_metrics.jsonl")
+    print(f"        ├── metrics_summary.json, nlr_args.yaml")
+    print(f"        └── ckpt/  (model weights)")
 
     if failed > 0:
         print(f"\n  WARNING: {failed} runs failed. Re-run with --resume_failed to retry.")

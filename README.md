@@ -70,7 +70,17 @@ We introduce several new replay buffer sampling selectors designed for continual
 
 Key parameters: `--disag_models`, `--disag_target` (`feat` | `stoch` | `deter`), `--expl_intr_scale`, `--expl_extr_scale`.
 
-#### 3. Online Continual-Learning Metrics (`train_craftax.py` — `CraftaxMetrics`)
+#### 3. Spatial-Counting + Craft-Novelty Intrinsic Reward (`train_craftax.py`)
+
+Environment-level intrinsic rewards that shape the reward signal before it enters the world model:
+
+- **Spatial-counting** — `r_spatial = 1/sqrt(N_ep(phi(o_t)))` where `phi` hashes the map tile at the agent's position. Encourages visiting new map locations within each episode.
+- **Craft-novelty** — `r_craft = I[psi(o_t) not in H_inv]` where `psi` is the inventory configuration hash. Binary bonus for discovering new inventory states.
+- **Combined reward** — `r = alpha_i * (r_spatial + lambda * r_craft) + alpha_e * r_extrinsic`
+
+Key parameters: `--intrinsic_spatial`, `--alpha_i`, `--alpha_e`, `--craft_weight` (lambda).
+
+#### 4. Online Continual-Learning Metrics (`train_craftax.py` — `CraftaxMetrics`)
 
 A comprehensive metrics tracker records:
 - **Per-achievement success rates** — 67 binary achievements tracked per task per episode.
@@ -242,6 +252,82 @@ python train.py --env_type craftax --wandb_mode disabled
 ```
 
 JAX pre-allocates GPU memory at startup. The default allocation is 70% of VRAM (`XLA_PYTHON_CLIENT_MEM_FRACTION=0.70`). If you are running multiple processes, lower this value in `train_craftax.py`.
+
+---
+
+## Ablation Experiments
+
+A systematic ablation study is provided via `run_ablation.py`. It covers 13 experiment configurations across 4 groups, each run with 3 seeds (39 total runs).
+
+### Experiment Groups
+
+| Group | Focus | Experiments |
+|---|---|---|
+| **A** | Core comparison | A1 baseline, A2 P2E, A3 intrinsic, A4 P2E+intrinsic |
+| **B** | Craft-weight sensitivity | B1 spatial-only, B2 light (0.5), B3 heavy (2.0) |
+| **C** | Reward scale (alpha_i/alpha_e) | C1 low-intrinsic, C2 low-extrinsic, C3 balanced-low |
+| **D** | Replay strategy (NLR interaction) | D1 NLR+P2E, D2 NLR+intrinsic, D3 NLR+P2E+intrinsic |
+
+### Default Hyperparameters
+
+All experiments use: `--steps 1000000 --batch_size 16 --batch_length 64 --envs 16 --model_size 25m`
+
+### Running Experiments
+
+```sh
+# Run all 39 experiments (13 configs × 3 seeds)
+python run_ablation.py
+
+# Dry run — print commands without executing
+python run_ablation.py --dry_run
+
+# Run a specific group
+python run_ablation.py --only A
+
+# Run specific experiments
+python run_ablation.py --only A1_baseline,D3_nlr_p2e_intrinsic
+
+# Skip a group
+python run_ablation.py --skip C,D
+
+# Disable W&B logging
+python run_ablation.py --wandb_mode disabled
+
+# Select GPU
+python run_ablation.py --gpu 0
+
+# Keep replay buffer after each run (default: replay deleted, ckpt kept)
+python run_ablation.py --no_cleanup
+```
+
+### Output Directory Structure
+
+After running, results are organized as:
+
+```
+experiment_results/ablation/
+├── experiment_manifest.json          # run metadata & status for all experiments
+├── A1_baseline_seed1/
+│   └── craftax_A1_baseline/          # DreamerV3 logdir
+│       ├── config.yaml               # full training config snapshot
+│       ├── metrics.jsonl             # DreamerV3 training metrics (loss, reward, etc.)
+│       ├── online_metrics.jsonl      # per-episode CL metrics (achievements, forgetting)
+│       ├── metrics_summary.json      # aggregated achievement stats
+│       ├── nlr_args.yaml             # NLR/NLU config (if enabled)
+│       └── ckpt/                     # model weights (saved every 50k steps)
+├── A1_baseline_seed4/
+│   └── ...
+└── ...
+```
+
+**Saved artifacts per run:**
+- `config.yaml` — Full training config for reproducibility
+- `metrics.jsonl` — DreamerV3 training metrics (loss, reward, gradient norms, P2E disagreement, etc.) logged every 1k steps
+- `online_metrics.jsonl` — Per-episode continual learning metrics (67 achievement rates, forgetting, frontier rate, tier distribution)
+- `metrics_summary.json` — Aggregated achievement statistics
+- `ckpt/` — Model weights (saved every 50k steps, kept after run completes)
+
+The replay buffer is deleted after each successful run to save disk space. Use `--no_cleanup` to retain it.
 
 ---
 
