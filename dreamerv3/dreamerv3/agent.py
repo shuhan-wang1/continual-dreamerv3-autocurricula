@@ -73,6 +73,11 @@ class Agent(embodied.jax.Agent):
 
     # Plan2Explore (P2E) ensemble for intrinsic exploration reward
     self.p2e_enabled = getattr(config, 'plan2explore', False)
+    # When the env reward already contains intrinsic shaping (e.g. spatial-
+    # counting + craft-novelty), the world model predicts the shaped reward.
+    # In that case, don't re-scale it with expl_extr_scale to avoid double-
+    # counting the intrinsic component.
+    self._env_reward_shaped = getattr(config, 'env_reward_shaped', False)
     self.p2e_ensemble = []
     if self.p2e_enabled:
       self._disag_models = getattr(config, 'disag_models', 10)
@@ -250,10 +255,12 @@ class Agent(embodied.jax.Agent):
         disag_target = sg(nn.cast(repfeat['deter']))  # [B, T, deter]
       else:  # 'feat'
         disag_target = feat_tensor  # [B, T, deter + stoch*classes]
-      # Condition on (state, action) pairs for next-step prediction
+      # Condition on (state_t, action_t) pairs for next-step prediction.
+      # prevact[:, t] is the action taken at step t-1 to arrive at step t,
+      # so prevact[:, t+1] = action_t.  Use act_tensor[:, 1:] to align.
       act_tensor = self._act2tensor_fn(prevact)  # [B, T, act_dim]
       disag_inp = jnp.concatenate(
-          [feat_tensor[:, :-1], act_tensor[:, :-1]], axis=-1)  # [B, T-1, D+act_dim]
+          [feat_tensor[:, :-1], act_tensor[:, 1:]], axis=-1)  # [B, T-1, D+act_dim]
       disag_tgt = disag_target[:, 1:]    # [B, T-1, target_dim]
       disag_loss = jnp.zeros((B, T - 1))
       for head in self.p2e_ensemble:
@@ -292,21 +299,31 @@ class Agent(embodied.jax.Agent):
       for head in self.p2e_ensemble:
         dist = head(disag_inp_imag, 2)
         means.append(dist.pred())           # [B*K, H+1, target_dim]
-        head_variances.append(dist.stddev ** 2)
+        head_variances.append(dist.output.stddev ** 2)
       means = jnp.stack(means, axis=0)           # [num_models, B*K, H+1, target_dim]
       head_variances = jnp.stack(head_variances, axis=0)
-      # Full predictive variance = Var(means) + E(variances)
-      epistemic = means.var(axis=0)               # variance of means
-      aleatoric = head_variances.mean(axis=0)     # mean of variances
-      full_var = epistemic + aleatoric
-      intr_rew = full_var.mean(axis=-1)           # [B*K, H+1]
-      combined_rew = (self._expl_intr_scale * intr_rew +
-                      self._expl_extr_scale * extr_rew)
+      # Epistemic uncertainty = Std(means) — ensemble disagreement (P2E paper)
+      # Plan2Explore (Sekar et al., 2020) uses std, not variance.
+      epistemic = means.std(axis=0)               # std of means
+      aleatoric = head_variances.mean(axis=0)     # mean of variances (logged only)
+      intr_rew = epistemic.mean(axis=-1)          # [B*K, H+1]
+      # Stop gradient: ensemble should only be trained via disag_loss,
+      # not via the imagination policy/value loss.
+      if self._env_reward_shaped:
+        # Env reward already contains intrinsic shaping (e.g. spatial +
+        # craft rewards mixed via alpha_i/alpha_e).  The world model predicts
+        # this shaped reward, so pass it through at scale 1.0 to avoid
+        # double-scaling the intrinsic component.
+        combined_rew = (self._expl_intr_scale * jax.lax.stop_gradient(intr_rew)
+                        + extr_rew)
+      else:
+        combined_rew = (self._expl_intr_scale * jax.lax.stop_gradient(intr_rew)
+                        + self._expl_extr_scale * extr_rew)
       metrics['p2e/intr_rew'] = intr_rew.mean()
       metrics['p2e/extr_rew'] = extr_rew.mean()
       metrics['p2e/combined_rew'] = combined_rew.mean()
-      metrics['p2e/epistemic_var'] = epistemic.mean()
-      metrics['p2e/aleatoric_var'] = aleatoric.mean()
+      metrics['p2e/epistemic_std'] = epistemic.mean()
+      metrics['p2e/aleatoric_var'] = aleatoric.mean()  # this one IS variance
     else:
       combined_rew = extr_rew
 
@@ -367,7 +384,7 @@ class Agent(embodied.jax.Agent):
     # Train metrics
     _, (new_carry, entries, outs, mets) = self.loss(
         carry, obs, prevact, training=False)
-    mets.update(mets)
+    metrics.update(mets)
 
     # Grad norms
     if self.config.report_gradnorms:

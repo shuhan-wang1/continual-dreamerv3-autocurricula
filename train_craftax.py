@@ -613,7 +613,6 @@ class CraftaxWrapper(embodied.Env):
 
         # Achievement tracking for current episode
         self._episode_achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
-        self._cumulative_reward = 0.0
 
         # Use a base key and step counter for deterministic key generation
         # Pre-generate a batch of keys to avoid per-step host-to-device transfers
@@ -834,7 +833,6 @@ class CraftaxWrapper(embodied.Env):
             self._done = False
             # Reset episode achievement tracking
             self._episode_achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
-            self._cumulative_reward = 0.0
             # Reset episodic intrinsic reward state
             self._spatial_counts = {}
             self._inventory_seen = set()
@@ -864,8 +862,6 @@ class CraftaxWrapper(embodied.Env):
         self._done = bool(done)
         # Transfer reward scalar to CPU
         reward_val = float(reward)
-        self._cumulative_reward += reward_val
-
         # Compute intrinsic reward if enabled (requires raw obs on CPU)
         if self._intrinsic_spatial:
             raw_obs = np.asarray(self._extract_obs(self._obs)).flatten()
@@ -979,17 +975,6 @@ class VectorCraftaxEnv:
 
         # JIT the full step logic (reset + step + process) to avoid per-step syncs
         # We'll use a wrapper that handles auto-reset inside JAX.
-        @jax.jit
-        def _batched_step(states, actions, dones, rng_keys, env_params, projection):
-            """Step all envs; auto-reset any that are done."""
-            # First handle resets for envs that are done
-            new_obs_reset, new_states_reset = self._env.reset(rng_keys[0], env_params)
-            # Then step all envs
-            obs_step, new_states_step, rewards, new_dones, infos = self._env.step(
-                rng_keys[0], states, actions, env_params)
-            return obs_step, new_states_step, rewards, new_dones
-        # ^ The above approach doesn't vectorize well; we'll use a simpler design.
-
         # RNG key management
         self._base_key = jax.random.PRNGKey(seed)
         self._step_count = 0
@@ -1129,6 +1114,12 @@ class VectorCraftaxEnv:
             if is_firsts[i]:
                 self._spatial_counts[i] = {}
                 self._inventory_seen[i] = set()
+                # Reset steps get zero reward — don't pollute counts or replay
+                combined[i] = 0.0
+                r_spatials[i] = 0.0
+                r_crafts[i] = 0.0
+                r_intrs[i] = 0.0
+                continue
             if not self._intrinsic_spatial:
                 combined[i] = extr_rewards[i]
                 r_spatials[i] = 0.0
@@ -1191,6 +1182,9 @@ class VectorCraftaxEnv:
         is_last = np.asarray(dones_np, dtype=bool)
         rewards_out = np.asarray(rewards_np, dtype=np.float32)
 
+        # Save extrinsic reward before intrinsic mixing for clean evaluation
+        extr_rewards_np = rewards_out.copy()
+
         # Compute intrinsic rewards if enabled
         if self._intrinsic_spatial:
             raw_np = np.asarray(raw_obs_np, dtype=np.float32)
@@ -1204,6 +1198,8 @@ class VectorCraftaxEnv:
             'is_first': is_first,
             'is_last': is_last,
             'is_terminal': is_last.copy(),
+            # Extrinsic reward (before intrinsic mixing) for clean eval metrics
+            'log/extr_reward': extr_rewards_np,
         }
 
         # Add achievement tracking (prefixed with log/ to exclude from agent training)
@@ -1317,6 +1313,9 @@ def make_agent(config, env, args=None):
             'disag_target': getattr(args, 'disag_target', 'feat'),
             'expl_intr_scale': getattr(args, 'expl_intr_scale', 0.9),
             'expl_extr_scale': getattr(args, 'expl_extr_scale', 0.9),
+            # Tell agent whether env reward already has intrinsic shaping
+            # to avoid double-scaling in P2E imagination reward.
+            'env_reward_shaped': getattr(args, 'intrinsic_spatial', False),
         }
     agent_config = elements.Config(
         **config.agent,
@@ -1780,10 +1779,10 @@ def train_single(make_env, config, args, env_name=None):
     nlr_nonpriv = getattr(args, 'nlr_sampling', False) or getattr(args, 'nlu_sampling', False)
     nlr_active = nlr_privileged or nlr_nonpriv
     episode_item_keys = {}          # worker -> list of item keys inserted this episode
-    _prev_inserted_id = [None]      # mutable ref to detect new insertions
+    _prev_inserted_id = {}          # per-worker tracking to avoid cross-worker misattribution
 
     # Shared state for training metrics
-    training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0, 'latest_td_error': 0.0}
+    training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0, 'last_replay_log_step': 0, 'latest_td_error': 0.0}
 
     def logfn(tran, worker):
         episode = episodes[worker]
@@ -1794,7 +1793,9 @@ def train_single(make_env, config, args, env_name=None):
             episode_achievements[worker] = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
             episode_item_keys[worker] = []
 
-        episode.add('score', tran['reward'], agg='sum')
+        # Use extrinsic reward for score (not inflated by intrinsic rewards)
+        extr_rew = tran.get('log/extr_reward', tran['reward'])
+        episode.add('score', extr_rew, agg='sum')
         episode.add('length', 1, agg='sum')
 
         # Aggregate ALL log/* keys (DreamerV3 pattern: avg/max/sum per key)
@@ -1809,9 +1810,9 @@ def train_single(make_env, config, args, env_name=None):
         # NLR: track newly inserted item keys for this worker's episode
         if nlr_active and worker in episode_item_keys:
             cur_id = replay.last_inserted_itemid
-            if cur_id is not None and cur_id != _prev_inserted_id[0]:
+            if cur_id is not None and cur_id != _prev_inserted_id.get(worker):
                 episode_item_keys[worker].append(cur_id)
-                _prev_inserted_id[0] = cur_id
+                _prev_inserted_id[worker] = cur_id
 
         # Accumulate achievements throughout episode
         if 'log/achievements' in tran and worker in episode_achievements:
@@ -1946,7 +1947,8 @@ def train_single(make_env, config, args, env_name=None):
         if online is None:
             return
         current_step = int(step_val)
-        if current_step - training_metrics_state['last_log_step'] >= training_metrics_state['log_every']:
+        if current_step - training_metrics_state['last_replay_log_step'] >= training_metrics_state['log_every']:
+            training_metrics_state['last_replay_log_step'] = current_step
             stats = replay_buffer.stats()
             buffer_size = stats.get('total_steps', len(replay_buffer))
 
@@ -2186,7 +2188,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
         collect_steps = max(num_envs * 4, 64)
 
     # Shared state for training metrics logging
-    training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0, 'latest_td_error': 0.0}
+    training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0, 'last_replay_log_step': 0, 'latest_td_error': 0.0}
 
     def log_training_metrics_fn(mets, step_val, current_task_id):
         """Log training metrics periodically."""
@@ -2253,7 +2255,8 @@ def cl_train_loop(make_envs, config, args, env_names=None):
         if online is None:
             return
         current_step = int(step_val)
-        if current_step - training_metrics_state['last_log_step'] >= training_metrics_state['log_every']:
+        if current_step - training_metrics_state['last_replay_log_step'] >= training_metrics_state['log_every']:
+            training_metrics_state['last_replay_log_step'] = current_step
             stats = replay_buffer.stats()
             buffer_size = stats.get('total_steps', len(replay_buffer))
             depth_distribution = [0.0] * (NUM_ACHIEVEMENT_TIERS + 1)
@@ -2281,7 +2284,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
             cl_nlr_nonpriv = getattr(args, 'nlr_sampling', False) or getattr(args, 'nlu_sampling', False)
             cl_nlr_active = cl_nlr_privileged or cl_nlr_nonpriv
             cl_episode_item_keys = {}
-            cl_prev_inserted_id = [None]
+            cl_prev_inserted_id = {}  # per-worker tracking
 
             def logfn(tran, worker):
                 episode = episodes[worker]
@@ -2291,7 +2294,9 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                     episode_achievements[worker] = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
                     cl_episode_item_keys[worker] = []
 
-                episode.add('score', tran['reward'], agg='sum')
+                # Use extrinsic reward for score (not inflated by intrinsic rewards)
+                extr_rew = tran.get('log/extr_reward', tran['reward'])
+                episode.add('score', extr_rew, agg='sum')
                 episode.add('length', 1, agg='sum')
 
                 # Aggregate ALL log/* keys (DreamerV3 pattern: avg/max/sum per key)
@@ -2306,9 +2311,9 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                 # NLR: track newly inserted item keys for this worker's episode
                 if cl_nlr_active and worker in cl_episode_item_keys:
                     cur_id = replay.last_inserted_itemid
-                    if cur_id is not None and cur_id != cl_prev_inserted_id[0]:
+                    if cur_id is not None and cur_id != cl_prev_inserted_id.get(worker):
                         cl_episode_item_keys[worker].append(cur_id)
-                        cl_prev_inserted_id[0] = cur_id
+                        cl_prev_inserted_id[worker] = cur_id
 
                 # Accumulate achievements
                 if 'log/achievements' in tran and worker in episode_achievements:

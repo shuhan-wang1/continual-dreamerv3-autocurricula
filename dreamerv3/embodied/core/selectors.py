@@ -156,7 +156,7 @@ class Recency:
       p = prob
       for segment in path:
         p = p[segment]
-      index = rng.choice(len(segment), p=p)
+      index = rng.choice(len(p), p=p)
       path.append(index)
     index = sum(
         index * bfactor ** (len(tree) - level - 1)
@@ -289,12 +289,13 @@ class Recent:
     with self.lock:
       if key not in self.indices:
         return
-      assert 2 <= len(self), len(self)
-      index = self.indices.pop(key)
-      last = self.keys.pop()
-      if index != len(self.keys):
-        self.keys[index] = last
-        self.indices[last] = index
+      # Use O(n) removal to preserve insertion order (recency depends on it).
+      # Deletions are infrequent so this is acceptable.
+      self.keys.remove(key)
+      del self.indices[key]
+      # Rebuild position indices
+      for i, k in enumerate(self.keys):
+        self.indices[k] = i
 
 
 class RewardWeighted:
@@ -458,7 +459,8 @@ class PrivilegedNoveltyLearnabilityRecency:
       self.achievement_counts += 1  # every episode counts as an attempt
       self.achievement_successes += achievements.astype(np.float64)
 
-      # --- Update reward EMA ---
+      # --- Update reward EMA (save old value for learnability) ---
+      old_ema = self.reward_ema
       if not self.reward_ema_initialised:
         self.reward_ema = float(reward)
         self.reward_ema_initialised = True
@@ -483,8 +485,8 @@ class PrivilegedNoveltyLearnabilityRecency:
         novelty_score = 0.0
 
       # --- Compute learnability score ---
-      # Advantage = reward - baseline.  Only positive advantages qualify.
-      advantage = float(reward) - self.reward_ema
+      # Advantage = reward - baseline (using EMA BEFORE this episode's update).
+      advantage = float(reward) - old_ema
       learnability_score = max(0.0, advantage)
 
       # --- Store metadata for periodic recomputation ---
@@ -557,13 +559,21 @@ class PrivilegedNoveltyLearnabilityRecency:
       if len(self.keys) == 0:
         raise IndexError('Privileged NLR selector is empty')
 
-      # Choose which pool to sample from
+      # Choose which pool to sample from, with proportional redistribution
+      # when a pool is empty.
       self._total_samples += 1
-      r = self.rng.random()
-      if r < self.novel_frac and len(self.novel_pool) > 0:
+      novel_avail = self.novel_frac if len(self.novel_pool) > 0 else 0.0
+      learn_avail = self.learnable_frac if len(self.learn_pool) > 0 else 0.0
+      recent_avail = 1.0 - self.novel_frac - self.learnable_frac
+      total_avail = novel_avail + learn_avail + recent_avail
+      if total_avail <= 0:
+        total_avail = 1.0
+
+      r = self.rng.random() * total_avail
+      if r < novel_avail:
         self._sample_counts['novel'] += 1
         return self._sample_novel()
-      elif r < self.novel_frac + self.learnable_frac and len(self.learn_pool) > 0:
+      elif r < novel_avail + learn_avail:
         self._sample_counts['learnable'] += 1
         return self._sample_learnable()
       else:
@@ -767,9 +777,8 @@ class NoveltyLearnabilityRecency:
     self.grid_prior_percentile = grid_prior_percentile
     self.grid_eps = grid_eps
 
-    # Per-episode metadata for grid computation
-    self._episode_rewards = []   # reward for each key (parallel to self.keys)
-    self._episode_lengths = []   # length for each key (parallel to self.keys)
+    # Per-episode metadata for grid computation (dict-based, not positional)
+    self._key_lengths = {}       # key -> episode length
     self._key_to_bin = {}        # key -> (len_bin, rew_bin)
 
     # Grid state
@@ -798,11 +807,13 @@ class NoveltyLearnabilityRecency:
 
   def _recompute_grid(self):
     """Recompute quantile bin edges from current buffer."""
-    rewards = np.array(self._episode_rewards, dtype=np.float64)
-    lengths = np.array(self._episode_lengths, dtype=np.float64)
-    n = len(rewards)
-    if n < 10:
+    # Collect rewards and lengths from per-key dicts for keys that have metadata
+    keys_with_meta = [k for k in self.keys if k in self._key_rewards and k in self._key_lengths]
+    if len(keys_with_meta) < 10:
       return  # not enough data to compute meaningful quantiles
+
+    rewards = np.array([self._key_rewards[k] for k in keys_with_meta], dtype=np.float64)
+    lengths = np.array([self._key_lengths[k] for k in keys_with_meta], dtype=np.float64)
 
     # Reward quantile edges
     r_quantiles = np.linspace(0, 1, self.grid_reward_bins + 1)
@@ -828,19 +839,18 @@ class NoveltyLearnabilityRecency:
     r_50 = float(np.quantile(rewards, 0.50))
     self._beta = max(0.1, (r_50 - self._r_min) / 4.0)
 
-    # Rebuild grid counts from scratch
+    # Rebuild grid counts from scratch using dict-based metadata
     self._grid_counts = np.zeros(
         (self.grid_length_bins, self.grid_reward_bins), dtype=np.float64)
     self._key_to_bin.clear()
 
-    for i, key in enumerate(self.keys):
-      if i < len(self._episode_rewards):
-        r = self._episode_rewards[i]
-        l = self._episode_lengths[i]
-        lb = self._get_length_bin(l)
-        rb = self._get_reward_bin(r)
-        self._key_to_bin[key] = (lb, rb)
-        self._grid_counts[lb, rb] += 1
+    for key in keys_with_meta:
+      r = self._key_rewards[key]
+      l = self._key_lengths[key]
+      lb = self._get_length_bin(l)
+      rb = self._get_reward_bin(r)
+      self._key_to_bin[key] = (lb, rb)
+      self._grid_counts[lb, rb] += 1
 
     # Recompute all pool scores for all items
     self._rebuild_novel_pool()
@@ -930,16 +940,11 @@ class NoveltyLearnabilityRecency:
       episode_length = int(episode_length)
       reward = float(reward)
 
-      # Store per-episode metadata (parallel to self.keys)
-      key_idx = self.indices[key]
-      # Extend lists if needed (items may have been added before metadata arrives)
-      while len(self._episode_rewards) <= key_idx:
-        self._episode_rewards.append(0.0)
-        self._episode_lengths.append(0)
-      self._episode_rewards[key_idx] = reward
-      self._episode_lengths[key_idx] = episode_length
+      # Store per-episode metadata (dict-based, not positional)
+      # No parallel list indexing needed — avoids desync after swap-and-pop.
 
-      # --- Update reward EMA ---
+      # --- Update reward EMA (save old value for learnability) ---
+      old_ema = self.reward_ema
       if not self.reward_ema_initialised:
         self.reward_ema = reward
         self.reward_ema_initialised = True
@@ -953,8 +958,15 @@ class NoveltyLearnabilityRecency:
 
       # --- Store metadata for periodic recomputation ---
       self._key_rewards[key] = reward
+      self._key_lengths[key] = episode_length
 
-      if self._episodes_since_recompute >= self.grid_recompute_every:
+      # Bootstrap: initialize grid early once we have enough data,
+      # don't wait for the full recompute interval (default 500 episodes).
+      # Without this, the novel pool stays empty until the first recompute.
+      if self._reward_edges is None and self._total_episodes >= 10:
+        self._recompute_grid()
+        self._episodes_since_recompute = 0
+      elif self._episodes_since_recompute >= self.grid_recompute_every:
         self._recompute_grid()
         self._episodes_since_recompute = 0
       else:
@@ -971,7 +983,8 @@ class NoveltyLearnabilityRecency:
             self.novel_pool[key] = score
 
       # --- Compute learnability score ---
-      advantage = reward - self.reward_ema
+      # Use EMA BEFORE this episode's update to avoid systematic attenuation.
+      advantage = reward - old_ema
       learnability_score = max(0.0, advantage)
       if learnability_score > 0:
         self.learn_pool[key] = learnability_score
@@ -988,13 +1001,21 @@ class NoveltyLearnabilityRecency:
       if len(self.keys) == 0:
         raise IndexError('NLR selector is empty')
 
-      # Choose which pool to sample from
+      # Choose which pool to sample from, with proportional redistribution
+      # when a pool is empty.
       self._total_samples += 1
-      r = self.rng.random()
-      if r < self.novel_frac and len(self.novel_pool) > 0:
+      novel_avail = self.novel_frac if len(self.novel_pool) > 0 else 0.0
+      learn_avail = self.learnable_frac if len(self.learn_pool) > 0 else 0.0
+      recent_avail = 1.0 - self.novel_frac - self.learnable_frac
+      total_avail = novel_avail + learn_avail + recent_avail
+      if total_avail <= 0:
+        total_avail = 1.0
+
+      r = self.rng.random() * total_avail
+      if r < novel_avail:
         self._sample_counts['novel'] += 1
         return self._sample_novel()
-      elif r < self.novel_frac + self.learnable_frac and len(self.learn_pool) > 0:
+      elif r < novel_avail + learn_avail:
         self._sample_counts['learnable'] += 1
         return self._sample_learnable()
       else:
@@ -1023,27 +1044,11 @@ class NoveltyLearnabilityRecency:
         lb, rb = self._key_to_bin.pop(key)
         self._grid_counts[lb, rb] = max(0, self._grid_counts[lb, rb] - 1)
 
-      # Remove from main list (swap-and-pop)
+      # Remove from main list (swap-and-pop on keys only — no parallel arrays)
       last = self.keys.pop()
       if idx != len(self.keys):
         self.keys[idx] = last
         self.indices[last] = idx
-        # Also swap parallel metadata arrays
-        if idx < len(self._episode_rewards) and len(self.keys) < len(self._episode_rewards):
-          last_meta_idx = len(self.keys)  # was at end before pop
-          if last_meta_idx < len(self._episode_rewards):
-            self._episode_rewards[idx] = self._episode_rewards[last_meta_idx]
-            self._episode_lengths[idx] = self._episode_lengths[last_meta_idx]
-          self._episode_rewards.pop()
-          self._episode_lengths.pop()
-        elif idx < len(self._episode_rewards):
-          if len(self._episode_rewards) > len(self.keys):
-            self._episode_rewards.pop()
-            self._episode_lengths.pop()
-      else:
-        if len(self._episode_rewards) > len(self.keys):
-          self._episode_rewards.pop()
-          self._episode_lengths.pop()
 
       # Remove from insertion_order
       self.insertion_order.pop(key, None)
@@ -1052,8 +1057,9 @@ class NoveltyLearnabilityRecency:
       self.novel_pool.pop(key, None)
       self.learn_pool.pop(key, None)
 
-      # Remove stored metadata
+      # Remove stored metadata (dict-based, O(1))
       self._key_rewards.pop(key, None)
+      self._key_lengths.pop(key, None)
 
   # ------------------------------------------------------------------
   # Internal sampling methods
@@ -1248,8 +1254,12 @@ class SampleTree:
       uprobs = np.array([x.uprob for x in node.children])
       total = uprobs.sum()
       if not np.isfinite(total):
-        finite = np.isinf(uprobs)
-        probs = finite / finite.sum()
+        finite_mask = np.isfinite(uprobs) & (uprobs > 0)
+        if finite_mask.sum() > 0:
+          probs = np.where(finite_mask, uprobs, 0.0)
+          probs = probs / probs.sum()
+        else:
+          probs = np.ones(len(uprobs)) / len(uprobs)
       elif total == 0:
         probs = np.ones(len(uprobs)) / len(uprobs)
       else:
