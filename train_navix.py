@@ -392,7 +392,7 @@ def make_replay(config, directory, args=None):
     if args is not None:
         selector = make_selector(args, capacity, seed=config.seed)
         # Use reservoir eviction if flag is set
-        if getattr(args, 'reservoir_sampling', False):
+        if getattr(args, 'reservoir_eviction', getattr(args, 'reservoir_sampling', False)):
             eviction = 'reservoir'
 
     return embodied.replay.Replay(

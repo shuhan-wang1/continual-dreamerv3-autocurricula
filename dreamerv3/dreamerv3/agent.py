@@ -87,10 +87,21 @@ class Agent(embodied.jax.Agent):
         self._disag_target_dim = rssm_cfg.deter
       else:  # 'feat' = deter + stoch*classes
         self._disag_target_dim = rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes
-      # Input dimension = full feat tensor (deter + stoch*classes)
-      self._disag_inp_dim = rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes
-      # Create ensemble of MLP heads that predict the target
-      # Use 'normal_logstd' for probabilistic prediction (outputs mean + logstd)
+      # Compute action dimension for (state, action) conditioning
+      self._act2tensor_fn = nn.DictConcat(act_space, 1)
+      # DictConcat one-hots discrete actions; compute output dim
+      self._act_dim = 0
+      for k in sorted(act_space.keys()):
+        s = act_space[k]
+        if s.discrete:
+          classes = np.asarray(s.classes).flatten()
+          self._act_dim += int(classes[0]) * int(np.prod(s.shape)) if len(s.shape) > 0 else int(classes[0])
+        else:
+          self._act_dim += int(np.prod(s.shape))
+      feat_dim = rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes
+      # Input dimension = features + action (state-action conditioning)
+      self._disag_inp_dim = feat_dim + self._act_dim
+      # Create ensemble of MLP heads that predict the next-step target
       disag_out_space = elements.Space(
           np.float32, (self._disag_target_dim,))
       for i in range(self._disag_models):
@@ -102,7 +113,7 @@ class Agent(embodied.jax.Agent):
             name=f'disag_{i}')
         self.p2e_ensemble.append(head)
       print(f'Plan2Explore enabled: {self._disag_models} ensemble heads, '
-            f'target={self._disag_target}, '
+            f'target={self._disag_target}, act_dim={self._act_dim}, '
             f'intr_scale={self._expl_intr_scale}, '
             f'extr_scale={self._expl_extr_scale}')
 
@@ -229,9 +240,8 @@ class Agent(embodied.jax.Agent):
     shapes = {k: v.shape for k, v in losses.items()}
     assert all(x == (B, T) for x in shapes.values()), ((B, T), shapes)
 
-    # Plan2Explore: train ensemble on real features to predict next-step target
+    # Plan2Explore: train ensemble on (state, action) to predict next-step target
     if self.p2e_enabled:
-      # Build ensemble training targets from real observed features
       feat_tensor = sg(self.feat2tensor(repfeat))  # [B, T, D]
       if self._disag_target == 'stoch':
         disag_target = sg(repfeat['stoch'].reshape(
@@ -240,17 +250,16 @@ class Agent(embodied.jax.Agent):
         disag_target = sg(nn.cast(repfeat['deter']))  # [B, T, deter]
       else:  # 'feat'
         disag_target = feat_tensor  # [B, T, deter + stoch*classes]
-      # Ensemble loss: each head predicts next-step target from current features
-      # Use t to predict t+1 target (shifted by 1 step)
-      disag_inp = feat_tensor[:, :-1]    # [B, T-1, D]
+      # Condition on (state, action) pairs for next-step prediction
+      act_tensor = self._act2tensor_fn(prevact)  # [B, T, act_dim]
+      disag_inp = jnp.concatenate(
+          [feat_tensor[:, :-1], act_tensor[:, :-1]], axis=-1)  # [B, T-1, D+act_dim]
       disag_tgt = disag_target[:, 1:]    # [B, T-1, target_dim]
       disag_loss = jnp.zeros((B, T - 1))
       for head in self.p2e_ensemble:
         pred = head(disag_inp, 2)
-        # Use .loss() instead of .log_prob() - returns negative log prob
         disag_loss = disag_loss + pred.loss(disag_tgt)
       disag_loss = disag_loss / self._disag_models
-      # Pad to [B, T] to match other losses (pad last timestep with zeros)
       losses['disag'] = jnp.concatenate(
           [disag_loss, jnp.zeros((B, 1))], axis=1)
 
@@ -273,21 +282,31 @@ class Agent(embodied.jax.Agent):
     # Compute reward for imagination (with P2E intrinsic reward if enabled)
     extr_rew = self.rew(inp, 2).pred()
     if self.p2e_enabled:
-      # Compute ensemble disagreement on imagined features as intrinsic reward
-      # Each head predicts the target from imgfeat; disagreement = std across heads
-      preds = []
+      # Condition ensemble on (state, action) during imagination
+      imgact_tensor = self._act2tensor_fn(imgact)  # [B*K, H+1, act_dim]
+      disag_inp_imag = jnp.concatenate(
+          [sg(inp), imgact_tensor], axis=-1)  # [B*K, H+1, D+act_dim]
+      # Collect means and variances for full predictive variance
+      means = []
+      head_variances = []
       for head in self.p2e_ensemble:
-        pred = head(sg(inp), 2).pred()  # [B*K, H+1, target_dim]
-        preds.append(pred)
-      preds = jnp.stack(preds, axis=0)  # [num_models, B*K, H+1, target_dim]
-      # Intrinsic reward = mean variance across ensemble (epistemic uncertainty)
-      intr_rew = preds.var(axis=0).mean(axis=-1)  # [B*K, H+1]
-      # Combine: r_total = α_i * r_intr + α_e * r_extr
+        dist = head(disag_inp_imag, 2)
+        means.append(dist.pred())           # [B*K, H+1, target_dim]
+        head_variances.append(dist.stddev ** 2)
+      means = jnp.stack(means, axis=0)           # [num_models, B*K, H+1, target_dim]
+      head_variances = jnp.stack(head_variances, axis=0)
+      # Full predictive variance = Var(means) + E(variances)
+      epistemic = means.var(axis=0)               # variance of means
+      aleatoric = head_variances.mean(axis=0)     # mean of variances
+      full_var = epistemic + aleatoric
+      intr_rew = full_var.mean(axis=-1)           # [B*K, H+1]
       combined_rew = (self._expl_intr_scale * intr_rew +
                       self._expl_extr_scale * extr_rew)
       metrics['p2e/intr_rew'] = intr_rew.mean()
       metrics['p2e/extr_rew'] = extr_rew.mean()
       metrics['p2e/combined_rew'] = combined_rew.mean()
+      metrics['p2e/epistemic_var'] = epistemic.mean()
+      metrics['p2e/aleatoric_var'] = aleatoric.mean()
     else:
       combined_rew = extr_rew
 

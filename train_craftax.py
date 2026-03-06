@@ -353,6 +353,9 @@ class CraftaxMetrics:
         achievements: np.ndarray = None,
         achievement_depth: int = -1,
         td_error_mean: float = 0.0,
+        r_spatial: float = 0.0,
+        r_craft: float = 0.0,
+        r_intr: float = 0.0,
     ) -> dict:
         """Update metrics with episode results.
 
@@ -364,6 +367,9 @@ class CraftaxMetrics:
             achievements: Binary vector of achievements (NUM_CRAFTAX_ACHIEVEMENTS,).
             achievement_depth: Max achievement tier reached (-1 to 4).
             td_error_mean: Mean TD-error for this episode.
+            r_spatial: Episode-avg spatial-counting intrinsic reward.
+            r_craft: Episode-avg craft-novelty intrinsic reward.
+            r_intr: Episode-avg combined intrinsic reward.
         """
         task_id = int(task_id)
         score = float(score)
@@ -406,6 +412,11 @@ class CraftaxMetrics:
             # Per-episode achievement info
             'achievements': achievements.tolist() if achievements is not None else [],
             'achievement_depth': int(achievement_depth),
+
+            # Episode-level intrinsic reward metrics
+            'r_spatial': float(r_spatial),
+            'r_craft': float(r_craft),
+            'r_intr': float(r_intr),
 
             # Windowed per-task metrics
             'return_mean': self._windowed_mean_return(task_id),
@@ -1755,6 +1766,12 @@ def train_single(make_env, config, args, env_name=None):
     train_ratio = config.run.train_ratio
     should_train = elements.when.Ratio(train_ratio / batch_steps)
 
+    # Aggregators for training metrics → metrics.jsonl (mirrors DreamerV3 pattern)
+    train_agg = elements.Agg()
+    epstats = elements.Agg()
+    _last_log_step = [0]
+    _LOG_EVERY = 1000  # flush training metrics to metrics.jsonl every N steps
+
     episodes = collections.defaultdict(elements.Agg)
     episode_achievements = {}  # Track achievements per worker
 
@@ -1780,11 +1797,14 @@ def train_single(make_env, config, args, env_name=None):
         episode.add('score', tran['reward'], agg='sum')
         episode.add('length', 1, agg='sum')
 
-        # Intrinsic reward logging (spatial-counting + craft-novelty)
-        if 'log/r_spatial' in tran:
-            episode.add('r_spatial', float(tran['log/r_spatial']), agg='avg')
-            episode.add('r_craft', float(tran['log/r_craft']), agg='avg')
-            episode.add('r_intr', float(tran['log/r_intr']), agg='avg')
+        # Aggregate ALL log/* keys (DreamerV3 pattern: avg/max/sum per key)
+        for key, value in tran.items():
+            if key.startswith('log/'):
+                val = np.asarray(value)
+                if val.ndim == 0:
+                    episode.add(key + '/avg', val, agg='avg')
+                    episode.add(key + '/max', val, agg='max')
+                    episode.add(key + '/sum', val, agg='sum')
 
         # NLR: track newly inserted item keys for this worker's episode
         if nlr_active and worker in episode_item_keys:
@@ -1806,10 +1826,8 @@ def train_single(make_env, config, args, env_name=None):
             length = result.pop('length')
             logger.add({'score': score, 'length': length}, prefix='episode')
 
-            # Log intrinsic reward episode averages
-            for k in ('r_spatial', 'r_craft', 'r_intr'):
-                if k in result:
-                    logger.add({k: result.pop(k)}, prefix='episode')
+            # Remaining episode-level aggregations (log/* avg/max/sum) go to epstats
+            epstats.add(result)
 
             # NLR/NLU: feed episode metadata to replay selector
             if nlr_active:
@@ -1829,6 +1847,11 @@ def train_single(make_env, config, args, env_name=None):
                 if isinstance(achievement_depth, np.ndarray):
                     achievement_depth = int(achievement_depth.item())
 
+                # Extract episode-level intrinsic reward averages for online metrics
+                ep_r_spatial = result.get('log/r_spatial/avg', 0.0)
+                ep_r_craft = result.get('log/r_craft/avg', 0.0)
+                ep_r_intr = result.get('log/r_intr/avg', 0.0)
+
                 online.update(
                     task_id=0,
                     step=int(step.value),
@@ -1837,19 +1860,32 @@ def train_single(make_env, config, args, env_name=None):
                     achievements=achievements,
                     achievement_depth=int(achievement_depth),
                     td_error_mean=training_metrics_state['latest_td_error'],
+                    r_spatial=float(ep_r_spatial),
+                    r_craft=float(ep_r_craft),
+                    r_intr=float(ep_r_intr),
                 )
+            # Log episode metrics to wandb
+            try:
+                wb_ep = {'episode/score': float(score), 'episode/length': int(length)}
+                for k in ('log/r_spatial/avg', 'log/r_craft/avg', 'log/r_intr/avg'):
+                    if k in result:
+                        wb_ep[f'episode/{k}'] = float(result[k])
+                wandb.log(wb_ep, step=int(step.value))
+            except Exception:
+                pass
             logger.write()
 
     def log_training_metrics_fn(mets, step_val):
         """Log training metrics periodically."""
-        if online is None:
-            return
-
-        # Always update latest TD-error so it's available for per-episode logging
+        # Always update latest TD-error (needed for per-episode logging even without online)
         adv_val = mets.get('adv', None)
         if adv_val is not None:
             training_metrics_state['latest_td_error'] = float(adv_val)
 
+        if online is None:
+            return
+
+        # The rest only applies when online metrics are enabled
         current_step = int(step_val)
         if current_step - training_metrics_state['last_log_step'] >= training_metrics_state['log_every']:
             training_metrics_state['last_log_step'] = current_step
@@ -1996,9 +2032,34 @@ def train_single(make_env, config, args, env_name=None):
                 carry_train[0], outs, mets = agent.train(carry_train[0], batch)
                 if 'replay' in outs:
                     replay.update(outs['replay'])
-                # Log training and exploration metrics
+                # Accumulate training metrics for metrics.jsonl (DreamerV3 pattern)
+                train_agg.add(mets, prefix='train')
+                # Log training and exploration metrics to online_metrics.jsonl
                 log_training_metrics_fn(mets, step.value)
                 log_replay_diagnostics_fn(replay, step.value)
+
+        # Periodic training-metric flush to metrics.jsonl + wandb
+        _cur = int(step.value)
+        if _cur - _last_log_step[0] >= _LOG_EVERY and _cur > 0:
+            _last_log_step[0] = _cur
+            train_result = train_agg.result()
+            ep_result = epstats.result()
+            replay_result = replay.stats()
+            logger.add(train_result)
+            logger.add(ep_result, prefix='epstats')
+            logger.add(replay_result, prefix='replay')
+            logger.write()
+            # Mirror to wandb
+            try:
+                wb = {}
+                wb.update({k: float(v) for k, v in train_result.items() if np.isscalar(v) or (hasattr(v, 'ndim') and v.ndim == 0)})
+                wb.update({f'epstats/{k}': float(v) for k, v in ep_result.items() if np.isscalar(v) or (hasattr(v, 'ndim') and v.ndim == 0)})
+                wb.update({f'replay/{k}': float(v) for k, v in replay_result.items() if np.isscalar(v) or (hasattr(v, 'ndim') and v.ndim == 0)})
+                if wb:
+                    wandb.log(wb, step=int(step.value))
+            except Exception:
+                pass  # wandb logging is best-effort
+
         if step.value % 10000 < 10:
             cp.save()
         # Periodically clear JAX caches to prevent memory accumulation
@@ -2066,6 +2127,12 @@ def cl_train_loop(make_envs, config, args, env_names=None):
     train_ratio = config.run.train_ratio
     should_train = elements.when.Ratio(train_ratio / batch_steps)
 
+    # Aggregators for training metrics → metrics.jsonl (mirrors DreamerV3 pattern)
+    train_agg = elements.Agg()
+    epstats = elements.Agg()
+    _last_log_step_cl = [0]
+    _LOG_EVERY_CL = 1000  # flush training metrics to metrics.jsonl every N steps
+
     cp = elements.Checkpoint(logdir / 'ckpt')
     cp.step = total_step
     cp.agent = agent
@@ -2123,14 +2190,15 @@ def cl_train_loop(make_envs, config, args, env_names=None):
 
     def log_training_metrics_fn(mets, step_val, current_task_id):
         """Log training metrics periodically."""
-        if online is None:
-            return
-
-        # Always update latest TD-error so it's available for per-episode logging
+        # Always update latest TD-error (needed for per-episode logging even without online)
         adv_val = mets.get('adv', None)
         if adv_val is not None:
             training_metrics_state['latest_td_error'] = float(adv_val)
 
+        if online is None:
+            return
+
+        # The rest only applies when online metrics are enabled
         current_step = int(step_val)
         if current_step - training_metrics_state['last_log_step'] >= training_metrics_state['log_every']:
             training_metrics_state['last_log_step'] = current_step
@@ -2226,11 +2294,14 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                 episode.add('score', tran['reward'], agg='sum')
                 episode.add('length', 1, agg='sum')
 
-                # Intrinsic reward logging (spatial-counting + craft-novelty)
-                if 'log/r_spatial' in tran:
-                    episode.add('r_spatial', float(tran['log/r_spatial']), agg='avg')
-                    episode.add('r_craft', float(tran['log/r_craft']), agg='avg')
-                    episode.add('r_intr', float(tran['log/r_intr']), agg='avg')
+                # Aggregate ALL log/* keys (DreamerV3 pattern: avg/max/sum per key)
+                for key, value in tran.items():
+                    if key.startswith('log/'):
+                        val = np.asarray(value)
+                        if val.ndim == 0:
+                            episode.add(key + '/avg', val, agg='avg')
+                            episode.add(key + '/max', val, agg='max')
+                            episode.add(key + '/sum', val, agg='sum')
 
                 # NLR: track newly inserted item keys for this worker's episode
                 if cl_nlr_active and worker in cl_episode_item_keys:
@@ -2252,10 +2323,8 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                     length = result.pop('length')
                     logger.add({'score': score, 'length': length, 'task': current_task}, prefix='episode')
 
-                    # Log intrinsic reward episode averages
-                    for k in ('r_spatial', 'r_craft', 'r_intr'):
-                        if k in result:
-                            logger.add({k: result.pop(k)}, prefix='episode')
+                    # Remaining episode-level aggregations (log/* avg/max/sum) go to epstats
+                    epstats.add(result)
 
                     # NLR/NLU: feed episode metadata to replay selector
                     if cl_nlr_active:
@@ -2274,6 +2343,11 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                         if isinstance(achievement_depth, np.ndarray):
                             achievement_depth = int(achievement_depth.item())
 
+                        # Extract episode-level intrinsic reward averages for online metrics
+                        ep_r_spatial = result.get('log/r_spatial/avg', 0.0)
+                        ep_r_craft = result.get('log/r_craft/avg', 0.0)
+                        ep_r_intr = result.get('log/r_intr/avg', 0.0)
+
                         online.update(
                             task_id=current_task,
                             step=int(total_step.value),
@@ -2282,7 +2356,19 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                             achievements=achievements,
                             achievement_depth=int(achievement_depth),
                             td_error_mean=training_metrics_state['latest_td_error'],
+                            r_spatial=float(ep_r_spatial),
+                            r_craft=float(ep_r_craft),
+                            r_intr=float(ep_r_intr),
                         )
+                    # Log episode metrics to wandb
+                    try:
+                        wb_ep = {'episode/score': float(score), 'episode/length': int(length), 'episode/task': current_task}
+                        for k in ('log/r_spatial/avg', 'log/r_craft/avg', 'log/r_intr/avg'):
+                            if k in result:
+                                wb_ep[f'episode/{k}'] = float(result[k])
+                        wandb.log(wb_ep, step=int(total_step.value))
+                    except Exception:
+                        pass
                     logger.write()
 
             if use_vectorised:
@@ -2341,9 +2427,34 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                         carry_train[0], outs, mets = agent.train(carry_train[0], batch)
                         if 'replay' in outs:
                             replay.update(outs['replay'])
-                        # Log training and exploration metrics
+                        # Accumulate training metrics for metrics.jsonl (DreamerV3 pattern)
+                        train_agg.add(mets, prefix='train')
+                        # Log training and exploration metrics to online_metrics.jsonl
                         log_training_metrics_fn(mets, total_step.value, current_task)
                         log_replay_diagnostics_fn(replay, total_step.value)
+
+                # Periodic training-metric flush to metrics.jsonl + wandb
+                _cur_cl = int(total_step.value)
+                if _cur_cl - _last_log_step_cl[0] >= _LOG_EVERY_CL and _cur_cl > 0:
+                    _last_log_step_cl[0] = _cur_cl
+                    train_result = train_agg.result()
+                    ep_result = epstats.result()
+                    replay_result = replay.stats()
+                    logger.add(train_result)
+                    logger.add(ep_result, prefix='epstats')
+                    logger.add(replay_result, prefix='replay')
+                    logger.write()
+                    # Mirror to wandb
+                    try:
+                        wb = {'task': current_task}
+                        wb.update({k: float(v) for k, v in train_result.items() if np.isscalar(v) or (hasattr(v, 'ndim') and v.ndim == 0)})
+                        wb.update({f'epstats/{k}': float(v) for k, v in ep_result.items() if np.isscalar(v) or (hasattr(v, 'ndim') and v.ndim == 0)})
+                        wb.update({f'replay/{k}': float(v) for k, v in replay_result.items() if np.isscalar(v) or (hasattr(v, 'ndim') and v.ndim == 0)})
+                        if wb:
+                            wandb.log(wb, step=int(total_step.value))
+                    except Exception:
+                        pass  # wandb logging is best-effort
+
                 if step.value % 10000 < 10:
                     cp.save()
                 # Periodically clear JAX caches to prevent memory accumulation

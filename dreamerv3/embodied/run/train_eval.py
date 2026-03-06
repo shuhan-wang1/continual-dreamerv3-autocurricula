@@ -116,14 +116,21 @@ def train_eval(
   cp.agent = agent
   cp.replay_train = replay_train
   cp.replay_eval = replay_eval
-  # Never load checkpoint - always start fresh
-  # if args.from_checkpoint:
-  #   elements.checkpoint.load(args.from_checkpoint, dict(
-  #       agent=bind(agent.load, regex=args.from_checkpoint_regex)))
-  cp.save()
-  should_save(step)  # Register that we just saved.
 
-  print('Start training loop (fresh start, no checkpoint loaded)')
+  if getattr(args, 'fresh_start', True):
+    cp.save()
+    print('Start training loop (fresh start, no checkpoint loaded)')
+  else:
+    loaded = cp.load()
+    if loaded:
+      print(f'Resumed from checkpoint at step {step.value}')
+    else:
+      if hasattr(args, 'from_checkpoint') and args.from_checkpoint:
+        elements.checkpoint.load(args.from_checkpoint, dict(
+            agent=bind(agent.load, regex=args.from_checkpoint_regex)))
+      cp.save()
+      print('No checkpoint found, starting fresh')
+  should_save(step)
   train_policy = lambda *args: agent.policy(*args, mode='train')
   eval_policy = lambda *args: agent.policy(*args, mode='eval')
   driver_train.reset(agent.init_policy)

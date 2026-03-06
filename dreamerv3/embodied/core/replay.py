@@ -87,6 +87,9 @@ class Replay:
         'updates': m['updates'],
         'replay_ratio': ratio(self.length * m['samples'], m['inserts']),
     }
+    # Add pool utilization if sampler supports it
+    if hasattr(self.sampler, 'get_pool_utilization'):
+      stats.update(self.sampler.get_pool_utilization())
     for key in self.metrics:
       self.metrics[key] = 0
     return stats
