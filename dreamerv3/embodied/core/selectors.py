@@ -26,7 +26,7 @@ class Fifo:
       self.queue.remove(key)
 
 
-class Reservoir:
+class ReservoirSelector:
   """Reservoir sampling selector - random eviction instead of FIFO.
 
   Implements Algorithm 2 from https://arxiv.org/pdf/1902.10486.pdf
@@ -76,6 +76,9 @@ class Reservoir:
       if index != len(self.keys):
         self.keys[index] = last
         self.indices[last] = index
+
+# Backward compatibility alias
+Reservoir = ReservoirSelector
 
 
 class Uniform:
@@ -379,6 +382,7 @@ class PrivilegedNoveltyLearnabilityRecency:
       novelty_eps=0.01,
       novelty_temp=1.0,
       learnability_temp=1.0,
+      recompute_interval=500,
       seed=0,
   ):
     assert abs(novel_frac + learnable_frac + recent_frac - 1.0) < 1e-6, \
@@ -391,6 +395,7 @@ class PrivilegedNoveltyLearnabilityRecency:
     self.novelty_eps = novelty_eps
     self.novelty_temp = novelty_temp
     self.learnability_temp = learnability_temp
+    self.recompute_interval = recompute_interval
     self.rng = np.random.default_rng(seed)
     self.lock = threading.Lock()
 
@@ -399,13 +404,11 @@ class PrivilegedNoveltyLearnabilityRecency:
     self.indices = {}        # key -> position in self.keys
     self.insertion_order = {}  # key -> monotonic counter for recency
 
-    # ---- Novel pool ----
-    self.novel_keys = []     # keys eligible for novelty sampling
-    self.novel_scores = []   # unnormalised novelty priority per key
+    # ---- Novel pool (dict-based for O(1) lookup/removal) ----
+    self.novel_pool = {}     # key -> novelty_score
 
-    # ---- Learnable pool ----
-    self.learn_keys = []     # keys eligible for learnability sampling
-    self.learn_scores = []   # unnormalised learnability priority per key
+    # ---- Learnable pool (dict-based for O(1) lookup/removal) ----
+    self.learn_pool = {}     # key -> learnability_score
 
     # ---- Per-achievement success-rate tracking ----
     self.achievement_counts = np.zeros(num_achievements, dtype=np.float64)
@@ -415,6 +418,15 @@ class PrivilegedNoveltyLearnabilityRecency:
     self.reward_ema_decay = reward_ema_decay
     self.reward_ema = 0.0
     self.reward_ema_initialised = False
+
+    # ---- Per-key metadata for periodic score recomputation ----
+    self._key_achievements = {}  # key -> achievements array
+    self._key_rewards = {}       # key -> float reward
+    self._episodes_since_recompute = 0
+
+    # ---- Sample tracking for pool utilization logging ----
+    self._sample_counts = {'novel': 0, 'learnable': 0, 'recent': 0}
+    self._total_samples = 0
 
     self._insert_counter = 0
 
@@ -475,13 +487,55 @@ class PrivilegedNoveltyLearnabilityRecency:
       advantage = float(reward) - self.reward_ema
       learnability_score = max(0.0, advantage)
 
+      # --- Store metadata for periodic recomputation ---
+      self._key_achievements[key] = achievements.copy()
+      self._key_rewards[key] = float(reward)
+
       # --- Insert into pools ---
       if novelty_score > 0:
-        self.novel_keys.append(key)
-        self.novel_scores.append(novelty_score)
+        self.novel_pool[key] = novelty_score
       if learnability_score > 0:
-        self.learn_keys.append(key)
-        self.learn_scores.append(learnability_score)
+        self.learn_pool[key] = learnability_score
+
+      # --- Periodic score recomputation ---
+      self._episodes_since_recompute += 1
+      if self._episodes_since_recompute >= self.recompute_interval:
+        self._recompute_all_scores()
+        self._episodes_since_recompute = 0
+
+  def _recompute_all_scores(self):
+    """Recompute novelty and learnability scores for all pool items."""
+    success_rates = np.where(
+        self.achievement_counts > 0,
+        self.achievement_successes / self.achievement_counts,
+        0.0,
+    )
+    current_ema = self.reward_ema
+
+    # Rebuild novel pool
+    new_novel = {}
+    for key in list(self.indices.keys()):
+      if key not in self._key_achievements:
+        continue
+      achievements = self._key_achievements[key]
+      achieved_mask = achievements.astype(bool)
+      if achieved_mask.any():
+        inv_rates = 1.0 / (success_rates[achieved_mask] + self.novelty_eps)
+        score = float(np.mean(inv_rates))
+        if score > 0:
+          new_novel[key] = score
+    self.novel_pool = new_novel
+
+    # Rebuild learnable pool
+    new_learn = {}
+    for key in list(self.indices.keys()):
+      if key not in self._key_rewards:
+        continue
+      advantage = self._key_rewards[key] - current_ema
+      score = max(0.0, advantage)
+      if score > 0:
+        new_learn[key] = score
+    self.learn_pool = new_learn
 
   def get_achievement_success_rates(self):
     """Return current per-achievement success rates (for logging)."""
@@ -504,12 +558,16 @@ class PrivilegedNoveltyLearnabilityRecency:
         raise IndexError('Privileged NLR selector is empty')
 
       # Choose which pool to sample from
+      self._total_samples += 1
       r = self.rng.random()
-      if r < self.novel_frac and len(self.novel_keys) > 0:
+      if r < self.novel_frac and len(self.novel_pool) > 0:
+        self._sample_counts['novel'] += 1
         return self._sample_novel()
-      elif r < self.novel_frac + self.learnable_frac and len(self.learn_keys) > 0:
+      elif r < self.novel_frac + self.learnable_frac and len(self.learn_pool) > 0:
+        self._sample_counts['learnable'] += 1
         return self._sample_learnable()
       else:
+        self._sample_counts['recent'] += 1
         return self._sample_recent()
 
   def __setitem__(self, key, stepids):
@@ -537,39 +595,40 @@ class PrivilegedNoveltyLearnabilityRecency:
       # Remove from insertion_order
       self.insertion_order.pop(key, None)
 
-      # Remove from novel pool
-      self._remove_from_pool(key, self.novel_keys, self.novel_scores)
+      # Remove from novel and learnable pools (O(1))
+      self.novel_pool.pop(key, None)
+      self.learn_pool.pop(key, None)
 
-      # Remove from learnable pool
-      self._remove_from_pool(key, self.learn_keys, self.learn_scores)
+      # Remove stored metadata
+      self._key_achievements.pop(key, None)
+      self._key_rewards.pop(key, None)
 
   # ------------------------------------------------------------------
   # Internal sampling methods
   # ------------------------------------------------------------------
   def _sample_novel(self):
     """Sample from the novel pool, weighted by novelty score."""
-    scores = np.array(self.novel_scores, dtype=np.float64)
-    # Apply temperature scaling
+    keys = list(self.novel_pool.keys())
+    scores = np.array(list(self.novel_pool.values()), dtype=np.float64)
     scores = scores ** (1.0 / self.novelty_temp)
     total = scores.sum()
     if total <= 0:
-      # Fallback to recent if all scores are zero
       return self._sample_recent()
     probs = scores / total
-    idx = self.rng.choice(len(self.novel_keys), p=probs)
-    return self.novel_keys[idx]
+    idx = self.rng.choice(len(keys), p=probs)
+    return keys[idx]
 
   def _sample_learnable(self):
     """Sample from the learnable pool, weighted by advantage."""
-    scores = np.array(self.learn_scores, dtype=np.float64)
-    # Apply temperature scaling
+    keys = list(self.learn_pool.keys())
+    scores = np.array(list(self.learn_pool.values()), dtype=np.float64)
     scores = scores ** (1.0 / self.learnability_temp)
     total = scores.sum()
     if total <= 0:
       return self._sample_recent()
     probs = scores / total
-    idx = self.rng.choice(len(self.learn_keys), p=probs)
-    return self.learn_keys[idx]
+    idx = self.rng.choice(len(keys), p=probs)
+    return keys[idx]
 
   def _sample_recent(self):
     """Sample from recent items with triangular weighting."""
@@ -577,27 +636,29 @@ class PrivilegedNoveltyLearnabilityRecency:
     if n == 0:
       raise IndexError('Privileged NLR selector is empty (recent)')
     window = min(n, self.recent_window)
-    # Triangular distribution: most recent items get highest weight
     weights = np.linspace(1.0, 0.0, window, endpoint=False)
     total = weights.sum()
     if total <= 0:
-      # Uniform fallback
       idx = self.rng.integers(max(0, n - window), n).item()
       return self.keys[idx]
     probs = weights / total
-    # Sample within the recent window (end of self.keys)
     start = n - window
     local_idx = self.rng.choice(window, p=probs)
     return self.keys[start + local_idx]
 
-  def _remove_from_pool(self, key, pool_keys, pool_scores):
-    """Remove a key from a (keys, scores) pool."""
-    try:
-      idx = pool_keys.index(key)
-      pool_keys.pop(idx)
-      pool_scores.pop(idx)
-    except ValueError:
-      pass  # key not in this pool
+  def get_pool_utilization(self):
+    """Return actual pool sampling distribution (for logging)."""
+    with self.lock:
+      total = self._total_samples or 1
+      return {
+          'novel_actual_frac': self._sample_counts['novel'] / total,
+          'learnable_actual_frac': self._sample_counts['learnable'] / total,
+          'recent_actual_frac': self._sample_counts['recent'] / total,
+          'novel_pool_size': len(self.novel_pool),
+          'learnable_pool_size': len(self.learn_pool),
+          'total_pool_size': len(self.keys),
+          'total_samples': self._total_samples,
+      }
 
 
 class PrivilegedNoveltyLearnabilityUniform(PrivilegedNoveltyLearnabilityRecency):
@@ -640,7 +701,8 @@ class NoveltyLearnabilityRecency:
 
   where R_b is the bin midpoint reward, R_min is the 20th-percentile
   reward, beta is an adaptive sharpness parameter, and n_b is the
-  count of episodes in bin b.
+  count of episodes in bin b.  The R_b multiplier suppresses bins
+  with negative midpoint reward (garbage trajectories).
 
   Pools:
     - **Novel pool** (default 35%): Bayesian 2D grid rarity scoring.
@@ -680,13 +742,18 @@ class NoveltyLearnabilityRecency:
     self.indices = {}        # key -> position in self.keys
     self.insertion_order = {}  # key -> monotonic counter for recency
 
-    # ---- Novel pool ----
-    self.novel_keys = []     # keys eligible for novelty sampling
-    self.novel_scores = []   # unnormalised novelty priority per key
+    # ---- Novel pool (dict-based for O(1) lookup/removal) ----
+    self.novel_pool = {}     # key -> novelty_score
 
-    # ---- Learnable pool ----
-    self.learn_keys = []     # keys eligible for learnability sampling
-    self.learn_scores = []   # unnormalised learnability priority per key
+    # ---- Learnable pool (dict-based for O(1) lookup/removal) ----
+    self.learn_pool = {}     # key -> learnability_score
+
+    # ---- Per-key metadata for periodic score recomputation ----
+    self._key_rewards = {}   # key -> float reward
+
+    # ---- Sample tracking for pool utilization logging ----
+    self._sample_counts = {'novel': 0, 'learnable': 0, 'recent': 0}
+    self._total_samples = 0
 
     # ---- Reward baseline (EMA) ----
     self.reward_ema_decay = reward_ema_decay
@@ -775,8 +842,9 @@ class NoveltyLearnabilityRecency:
         self._key_to_bin[key] = (lb, rb)
         self._grid_counts[lb, rb] += 1
 
-    # Recompute novel pool scores for all items
+    # Recompute all pool scores for all items
     self._rebuild_novel_pool()
+    self._rebuild_learnable_pool()
 
   def _get_reward_bin(self, reward):
     """Map reward to bin index."""
@@ -793,36 +861,52 @@ class NoveltyLearnabilityRecency:
     return min(idx, self.grid_length_bins - 1)
 
   def _compute_novelty_score(self, reward_bin):
-    """Compute Bayesian novelty score for a given grid cell.
+    """Compute Bayesian novelty prior for a given grid cell.
 
-    score = sigmoid((R_midpoint - R_min) / beta) * R_midpoint / (n_b + eps)
+    score = sigmoid((R_midpoint - R_min) / beta) * R_midpoint
+    full  = score / (n_b + eps)
+
+    The sigmoid gates which bins are interesting (higher reward bins get
+    higher prior).  The R_midpoint multiplier (Eq.9) suppresses bins with
+    negative midpoint reward — those trajectories are garbage and should
+    not enter the novel pool.
     """
     if self._reward_midpoints is None:
       return 0.0
     r_mid = self._reward_midpoints[reward_bin]
     prior = float(self._sigmoid(
-        np.float64((r_mid - self._r_min) / self._beta))) * r_mid
-    return prior
+        np.float64((r_mid - self._r_min) / self._beta)))
+    return prior * r_mid
 
   def _compute_novelty_score_for_cell(self, length_bin, reward_bin):
-    """Full novelty score for a specific cell: prior / (count + eps)."""
-    prior = self._compute_novelty_score(reward_bin)
+    """Full novelty score for a specific cell: sigma(...) * R_b / (count + eps)."""
+    score = self._compute_novelty_score(reward_bin)
     count = self._grid_counts[length_bin, reward_bin]
-    if prior <= 0:
+    if score <= 0:
       return 0.0
-    return prior / (count + self.grid_eps)
+    return score / (count + self.grid_eps)
 
   def _rebuild_novel_pool(self):
     """Rebuild the entire novel pool from current grid state."""
-    self.novel_keys.clear()
-    self.novel_scores.clear()
+    self.novel_pool.clear()
     for key, (lb, rb) in self._key_to_bin.items():
       if key not in self.indices:
         continue
       score = self._compute_novelty_score_for_cell(lb, rb)
       if score > 0:
-        self.novel_keys.append(key)
-        self.novel_scores.append(score)
+        self.novel_pool[key] = score
+
+  def _rebuild_learnable_pool(self):
+    """Rebuild the entire learnable pool from current reward EMA."""
+    self.learn_pool.clear()
+    current_ema = self.reward_ema
+    for key in self.indices:
+      if key not in self._key_rewards:
+        continue
+      advantage = self._key_rewards[key] - current_ema
+      score = max(0.0, advantage)
+      if score > 0:
+        self.learn_pool[key] = score
 
   # ------------------------------------------------------------------
   # Public API: update per-episode statistics
@@ -867,6 +951,9 @@ class NoveltyLearnabilityRecency:
       self._total_episodes += 1
       self._episodes_since_recompute += 1
 
+      # --- Store metadata for periodic recomputation ---
+      self._key_rewards[key] = reward
+
       if self._episodes_since_recompute >= self.grid_recompute_every:
         self._recompute_grid()
         self._episodes_since_recompute = 0
@@ -881,15 +968,13 @@ class NoveltyLearnabilityRecency:
           # Compute novelty score for this item
           score = self._compute_novelty_score_for_cell(lb, rb)
           if score > 0:
-            self.novel_keys.append(key)
-            self.novel_scores.append(score)
+            self.novel_pool[key] = score
 
       # --- Compute learnability score ---
       advantage = reward - self.reward_ema
       learnability_score = max(0.0, advantage)
       if learnability_score > 0:
-        self.learn_keys.append(key)
-        self.learn_scores.append(learnability_score)
+        self.learn_pool[key] = learnability_score
 
   # ------------------------------------------------------------------
   # Selector interface (called by Replay)
@@ -904,12 +989,16 @@ class NoveltyLearnabilityRecency:
         raise IndexError('NLR selector is empty')
 
       # Choose which pool to sample from
+      self._total_samples += 1
       r = self.rng.random()
-      if r < self.novel_frac and len(self.novel_keys) > 0:
+      if r < self.novel_frac and len(self.novel_pool) > 0:
+        self._sample_counts['novel'] += 1
         return self._sample_novel()
-      elif r < self.novel_frac + self.learnable_frac and len(self.learn_keys) > 0:
+      elif r < self.novel_frac + self.learnable_frac and len(self.learn_pool) > 0:
+        self._sample_counts['learnable'] += 1
         return self._sample_learnable()
       else:
+        self._sample_counts['recent'] += 1
         return self._sample_recent()
 
   def __setitem__(self, key, stepids):
@@ -948,12 +1037,10 @@ class NoveltyLearnabilityRecency:
           self._episode_rewards.pop()
           self._episode_lengths.pop()
         elif idx < len(self._episode_rewards):
-          # Key was the last element, just pop
           if len(self._episode_rewards) > len(self.keys):
             self._episode_rewards.pop()
             self._episode_lengths.pop()
       else:
-        # Key was the last element
         if len(self._episode_rewards) > len(self.keys):
           self._episode_rewards.pop()
           self._episode_lengths.pop()
@@ -961,36 +1048,39 @@ class NoveltyLearnabilityRecency:
       # Remove from insertion_order
       self.insertion_order.pop(key, None)
 
-      # Remove from novel pool
-      self._remove_from_pool(key, self.novel_keys, self.novel_scores)
+      # Remove from novel and learnable pools (O(1))
+      self.novel_pool.pop(key, None)
+      self.learn_pool.pop(key, None)
 
-      # Remove from learnable pool
-      self._remove_from_pool(key, self.learn_keys, self.learn_scores)
+      # Remove stored metadata
+      self._key_rewards.pop(key, None)
 
   # ------------------------------------------------------------------
   # Internal sampling methods
   # ------------------------------------------------------------------
   def _sample_novel(self):
     """Sample from the novel pool, weighted by novelty score."""
-    scores = np.array(self.novel_scores, dtype=np.float64)
+    keys = list(self.novel_pool.keys())
+    scores = np.array(list(self.novel_pool.values()), dtype=np.float64)
     scores = scores ** (1.0 / self.novelty_temp)
     total = scores.sum()
     if total <= 0:
       return self._sample_recent()
     probs = scores / total
-    idx = self.rng.choice(len(self.novel_keys), p=probs)
-    return self.novel_keys[idx]
+    idx = self.rng.choice(len(keys), p=probs)
+    return keys[idx]
 
   def _sample_learnable(self):
     """Sample from the learnable pool, weighted by advantage."""
-    scores = np.array(self.learn_scores, dtype=np.float64)
+    keys = list(self.learn_pool.keys())
+    scores = np.array(list(self.learn_pool.values()), dtype=np.float64)
     scores = scores ** (1.0 / self.learnability_temp)
     total = scores.sum()
     if total <= 0:
       return self._sample_recent()
     probs = scores / total
-    idx = self.rng.choice(len(self.learn_keys), p=probs)
-    return self.learn_keys[idx]
+    idx = self.rng.choice(len(keys), p=probs)
+    return keys[idx]
 
   def _sample_recent(self):
     """Sample from recent items with triangular weighting."""
@@ -1008,14 +1098,19 @@ class NoveltyLearnabilityRecency:
     local_idx = self.rng.choice(window, p=probs)
     return self.keys[start + local_idx]
 
-  def _remove_from_pool(self, key, pool_keys, pool_scores):
-    """Remove a key from a (keys, scores) pool."""
-    try:
-      idx = pool_keys.index(key)
-      pool_keys.pop(idx)
-      pool_scores.pop(idx)
-    except ValueError:
-      pass
+  def get_pool_utilization(self):
+    """Return actual pool sampling distribution (for logging)."""
+    with self.lock:
+      total = self._total_samples or 1
+      return {
+          'novel_actual_frac': self._sample_counts['novel'] / total,
+          'learnable_actual_frac': self._sample_counts['learnable'] / total,
+          'recent_actual_frac': self._sample_counts['recent'] / total,
+          'novel_pool_size': len(self.novel_pool),
+          'learnable_pool_size': len(self.learn_pool),
+          'total_pool_size': len(self.keys),
+          'total_samples': self._total_samples,
+      }
 
   def get_grid_stats(self):
     """Return grid statistics for logging."""
@@ -1026,8 +1121,8 @@ class NoveltyLearnabilityRecency:
           'length_edges': self._length_edges.copy() if self._length_edges is not None else None,
           'r_min': self._r_min,
           'beta': self._beta,
-          'novel_pool_size': len(self.novel_keys),
-          'learn_pool_size': len(self.learn_keys),
+          'novel_pool_size': len(self.novel_pool),
+          'learn_pool_size': len(self.learn_pool),
           'total_episodes': self._total_episodes,
       }
 

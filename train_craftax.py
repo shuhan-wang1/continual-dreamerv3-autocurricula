@@ -135,6 +135,8 @@ class CraftaxMetrics:
         self._achievement_history = {i: deque(maxlen=window_size) for i in range(num_tasks)}
 
         # Peak achievement rates for forgetting calculation
+        # Memory: O(num_tasks * num_achievements) floats — bounded.
+        # All deques above use maxlen=window_size so are also bounded.
         self._peak_achievement_rates = {i: np.zeros(num_achievements) for i in range(num_tasks)}
 
         # Lifetime accumulators
@@ -564,6 +566,15 @@ if CRAFTAX_ACHIEVEMENTS_AVAILABLE:
             ACHIEVEMENT_TIERS[name] = 3  # default unknown to tier 3
 
 
+# ============== Craftax Observation Layout Constants ==============
+# Symbolic observation: 9×11 tiles × 83 channels = 8217 map dims + 51 inventory dims
+TILES_R, TILES_C, N_CH = 9, 11, 83
+MAP_SIZE = TILES_R * TILES_C * N_CH   # 8217
+INV_START = MAP_SIZE                   # 8217
+INV_SIZE = 51
+N_BLOCK_CH = 37  # channels 0-36 are one-hot block type
+
+
 # ============== Craftax Environment Wrapper ==============
 class CraftaxWrapper(embodied.Env):
     """Wrapper to convert Craftax JAX environments to embodied interface.
@@ -572,13 +583,22 @@ class CraftaxWrapper(embodied.Env):
     as possible and using JIT-compiled processing functions.
     """
 
-    def __init__(self, env_name='CraftaxSymbolic-v1', embedding_dim=256, use_embedding=True, seed=42, track_achievements=True):
+    def __init__(self, env_name='CraftaxSymbolic-v1', embedding_dim=256, use_embedding=True, seed=42, track_achievements=True,
+                 intrinsic_spatial=False, alpha_i=0.9, alpha_e=0.9, craft_weight=1.0):
         self._env_name = env_name
         self._embedding_dim = embedding_dim
         self._use_embedding = use_embedding
         self._seed = seed
         self._done = True
         self._track_achievements = track_achievements
+
+        # Spatial-counting + craft-novelty intrinsic reward (Eq.10-13)
+        self._intrinsic_spatial = intrinsic_spatial
+        self._alpha_i = alpha_i
+        self._alpha_e = alpha_e
+        self._craft_weight = craft_weight
+        self._spatial_counts = {}    # spatial hash → visit count (episodic)
+        self._inventory_seen = set() # set of inventory hashes (episodic)
 
         # Achievement tracking for current episode
         self._episode_achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
@@ -674,6 +694,10 @@ class CraftaxWrapper(embodied.Env):
         if self._track_achievements:
             spaces['log/achievements'] = elements.Space(np.int32, (NUM_CRAFTAX_ACHIEVEMENTS,), 0, 2)
             spaces['log/achievement_depth'] = elements.Space(np.int32)
+        if self._intrinsic_spatial:
+            spaces['log/r_spatial'] = elements.Space(np.float32)
+            spaces['log/r_craft'] = elements.Space(np.float32)
+            spaces['log/r_intr'] = elements.Space(np.float32)
         return spaces
 
     @property
@@ -739,6 +763,37 @@ class CraftaxWrapper(embodied.Env):
                     max_tier = max(max_tier, ACHIEVEMENT_TIERS[name])
         return max_tier
 
+    def _spatial_hash(self, flat_obs):
+        """Hash visual map: argmax of block-type channels per tile → bytes key."""
+        map_obs = flat_obs[:MAP_SIZE].reshape(TILES_R, TILES_C, N_CH)
+        block_ids = np.argmax(map_obs[:, :, :N_BLOCK_CH], axis=-1).astype(np.int8)
+        return block_ids.tobytes()
+
+    def _inventory_hash(self, flat_obs):
+        """Hash inventory vector (rounded to 1 decimal) → tuple key."""
+        inv = flat_obs[INV_START:INV_START + INV_SIZE]
+        return tuple(np.round(inv, 1))
+
+    def _compute_intrinsic_reward(self, flat_obs, extr_reward):
+        """Compute combined reward r_t = alpha_i * r_intr + alpha_e * r_extr (Eq.10-13).
+
+        Returns (combined_reward, r_spatial, r_craft, r_intr).
+        """
+        if not self._intrinsic_spatial:
+            return extr_reward, 0.0, 0.0, 0.0
+        # Spatial counting (Eq.10): r_spatial = 1 / sqrt(N(phi(v_vis)))
+        s_key = self._spatial_hash(flat_obs)
+        self._spatial_counts[s_key] = self._spatial_counts.get(s_key, 0) + 1
+        r_spatial = 1.0 / np.sqrt(self._spatial_counts[s_key])
+        # Craft novelty (Eq.11): r_craft = I[v_inv not in H_inv]
+        i_key = self._inventory_hash(flat_obs)
+        r_craft = 1.0 if i_key not in self._inventory_seen else 0.0
+        self._inventory_seen.add(i_key)
+        # Combined (Eq.12-13)
+        r_intr = r_spatial + self._craft_weight * r_craft
+        combined = self._alpha_i * r_intr + self._alpha_e * extr_reward
+        return combined, r_spatial, r_craft, r_intr
+
     def _to_numpy_result(self, obs_jax, reward, is_first, is_last, is_terminal, achievements=None):
         """Single batched transfer from GPU to CPU at the end of step."""
         # Process obs on GPU first
@@ -769,8 +824,19 @@ class CraftaxWrapper(embodied.Env):
             # Reset episode achievement tracking
             self._episode_achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
             self._cumulative_reward = 0.0
+            # Reset episodic intrinsic reward state
+            self._spatial_counts = {}
+            self._inventory_seen = set()
             achievements = self._extract_achievements_from_state(self._state) if self._track_achievements else None
-            return self._to_numpy_result(self._obs, 0.0, True, False, False, achievements)
+            result = self._to_numpy_result(self._obs, 0.0, True, False, False, achievements)
+            # Compute intrinsic reward components for first step (logging only)
+            if self._intrinsic_spatial:
+                raw_obs = np.asarray(self._extract_obs(self._obs)).flatten()
+                _, r_sp, r_cr, r_in = self._compute_intrinsic_reward(raw_obs, 0.0)
+                result['log/r_spatial'] = np.float32(r_sp)
+                result['log/r_craft'] = np.float32(r_cr)
+                result['log/r_intr'] = np.float32(r_in)
+            return result
 
         # Get action - avoid Python int() conversion, keep as jax-compatible
         act = action['action']
@@ -789,6 +855,11 @@ class CraftaxWrapper(embodied.Env):
         reward_val = float(reward)
         self._cumulative_reward += reward_val
 
+        # Compute intrinsic reward if enabled (requires raw obs on CPU)
+        if self._intrinsic_spatial:
+            raw_obs = np.asarray(self._extract_obs(self._obs)).flatten()
+            reward_val, r_sp, r_cr, r_in = self._compute_intrinsic_reward(raw_obs, reward_val)
+
         # Extract achievements from state
         achievements = None
         if self._track_achievements:
@@ -796,9 +867,15 @@ class CraftaxWrapper(embodied.Env):
             # Update episode achievements (OR with current)
             self._episode_achievements = np.logical_or(self._episode_achievements, achievements)
 
-        return self._to_numpy_result(
+        result = self._to_numpy_result(
             self._obs, reward_val, False, self._done, self._done, achievements
         )
+        # Add intrinsic reward logging (log/ prefix → filtered by replay.add)
+        if self._intrinsic_spatial:
+            result['log/r_spatial'] = np.float32(r_sp)
+            result['log/r_craft'] = np.float32(r_cr)
+            result['log/r_intr'] = np.float32(r_in)
+        return result
 
     def close(self):
         pass
@@ -813,12 +890,21 @@ class VectorCraftaxEnv:
     """
 
     def __init__(self, env_name='CraftaxSymbolic-v1', num_envs=16,
-                 embedding_dim=256, use_embedding=True, seed=42, track_achievements=True):
+                 embedding_dim=256, use_embedding=True, seed=42, track_achievements=True,
+                 intrinsic_spatial=False, alpha_i=0.9, alpha_e=0.9, craft_weight=1.0):
         self._env_name = env_name
         self._num_envs = num_envs
         self._embedding_dim = embedding_dim
         self._use_embedding = use_embedding
         self._track_achievements = track_achievements
+
+        # Spatial-counting + craft-novelty intrinsic reward (Eq.10-13)
+        self._intrinsic_spatial = intrinsic_spatial
+        self._alpha_i = alpha_i
+        self._alpha_e = alpha_e
+        self._craft_weight = craft_weight
+        self._spatial_counts = [{} for _ in range(num_envs)]
+        self._inventory_seen = [set() for _ in range(num_envs)]
 
         # Create one Craftax env to get params / spaces
         if 'Classic' in env_name:
@@ -838,6 +924,20 @@ class VectorCraftaxEnv:
         # Vectorised reset / step via vmap (single JIT, single CUDA context)
         self._v_reset = jax.jit(jax.vmap(self._env.reset, in_axes=(0, None)))
         self._v_step = jax.jit(jax.vmap(self._env.step, in_axes=(0, 0, 0, None)))
+
+        # Fused step-or-reset: single vmap call instead of separate reset + step
+        env = self._env
+        def _step_or_reset(key, state, action, env_params, should_reset):
+            def do_reset(_):
+                obs, new_state = env.reset(key, env_params)
+                return obs, new_state, jnp.float32(0.0), jnp.bool_(False)
+            def do_step(_):
+                obs, new_state, reward, done, _info = env.step(
+                    key, state, action, env_params)
+                return obs, new_state, reward, done
+            return jax.lax.cond(should_reset, do_reset, do_step, None)
+        self._v_step_or_reset = jax.jit(jax.vmap(
+            _step_or_reset, in_axes=(0, 0, 0, None, 0)))
 
         # Initial reset to get obs shape
         keys = jax.random.split(jax.random.PRNGKey(seed), num_envs)
@@ -972,6 +1072,10 @@ class VectorCraftaxEnv:
         if self._track_achievements:
             spaces['log/achievements'] = elements.Space(np.int32, (NUM_CRAFTAX_ACHIEVEMENTS,), 0, 2)
             spaces['log/achievement_depth'] = elements.Space(np.int32)
+        if self._intrinsic_spatial:
+            spaces['log/r_spatial'] = elements.Space(np.float32)
+            spaces['log/r_craft'] = elements.Space(np.float32)
+            spaces['log/r_intr'] = elements.Space(np.float32)
         return spaces
 
     @property
@@ -981,8 +1085,64 @@ class VectorCraftaxEnv:
             'reset': elements.Space(bool),
         }
 
+    @staticmethod
+    def _spatial_hash_single(flat_obs):
+        """Hash visual map for a single env: argmax of block-type channels per tile."""
+        map_obs = flat_obs[:MAP_SIZE].reshape(TILES_R, TILES_C, N_CH)
+        block_ids = np.argmax(map_obs[:, :, :N_BLOCK_CH], axis=-1).astype(np.int8)
+        return block_ids.tobytes()
+
+    @staticmethod
+    def _inventory_hash_single(flat_obs):
+        """Hash inventory vector for a single env."""
+        inv = flat_obs[INV_START:INV_START + INV_SIZE]
+        return tuple(np.round(inv, 1))
+
+    def _compute_intrinsic_rewards(self, raw_obs_batch, extr_rewards, is_firsts):
+        """Batch compute intrinsic rewards for all envs (Eq.10-13).
+
+        Args:
+            raw_obs_batch: numpy (N, flat_dim) raw observations.
+            extr_rewards: numpy (N,) extrinsic rewards.
+            is_firsts: numpy (N,) bool reset flags.
+
+        Returns:
+            (combined_rewards, r_spatials, r_crafts, r_intrs) — all (N,) float32.
+        """
+        N = self._num_envs
+        combined = np.empty(N, dtype=np.float32)
+        r_spatials = np.empty(N, dtype=np.float32)
+        r_crafts = np.empty(N, dtype=np.float32)
+        r_intrs = np.empty(N, dtype=np.float32)
+        for i in range(N):
+            if is_firsts[i]:
+                self._spatial_counts[i] = {}
+                self._inventory_seen[i] = set()
+            if not self._intrinsic_spatial:
+                combined[i] = extr_rewards[i]
+                r_spatials[i] = 0.0
+                r_crafts[i] = 0.0
+                r_intrs[i] = 0.0
+                continue
+            flat = raw_obs_batch[i]
+            # Spatial counting (Eq.10)
+            s_key = self._spatial_hash_single(flat)
+            self._spatial_counts[i][s_key] = self._spatial_counts[i].get(s_key, 0) + 1
+            r_sp = 1.0 / np.sqrt(self._spatial_counts[i][s_key])
+            # Craft novelty (Eq.11)
+            i_key = self._inventory_hash_single(flat)
+            r_cr = 1.0 if i_key not in self._inventory_seen[i] else 0.0
+            self._inventory_seen[i].add(i_key)
+            # Combined (Eq.12-13)
+            r_in = r_sp + self._craft_weight * r_cr
+            combined[i] = self._alpha_i * r_in + self._alpha_e * extr_rewards[i]
+            r_spatials[i] = r_sp
+            r_crafts[i] = r_cr
+            r_intrs[i] = r_in
+        return combined, r_spatials, r_crafts, r_intrs
+
     def step(self, actions_batch):
-        """Step all N envs at once.
+        """Step all N envs at once using a fused step-or-reset vmap.
 
         Args:
             actions_batch: dict with 'action' (N,) int, 'reset' (N,) bool.
@@ -991,63 +1151,45 @@ class VectorCraftaxEnv:
         """
         reset_mask = actions_batch['reset'] | np.asarray(self._dones)
         acts = jnp.asarray(actions_batch['action'], dtype=jnp.int32)
-
         keys = self._get_keys(self._num_envs)
+        should_reset = jnp.asarray(reset_mask, dtype=jnp.bool_)
 
-        # Auto-reset envs that are done  (all on GPU, vmapped)
-        if np.any(reset_mask):
-            reset_idx = np.where(reset_mask)[0]
-            reset_keys = keys[reset_idx]
-            # vmap over only the envs that need reset
-            r_obs, r_states = jax.vmap(
-                self._env.reset, in_axes=(0, None))(reset_keys, self._env_params)
-            # Scatter back into full state tree
-            r_obs_raw = self._extract_obs_batch(r_obs)
-            self._obs_jax = self._obs_jax.at[reset_idx].set(r_obs_raw)
-            self._states = jax.tree_util.tree_map(
-                lambda full, part: full.at[reset_idx].set(part),
-                self._states, r_states)
-
-        # Step all envs  (on GPU, single vmap call)
-        step_keys = self._get_keys(self._num_envs)
-        obs_new, new_states, rewards, dones, _info = self._v_step(
-            step_keys, self._states, acts, self._env_params)
+        # Single fused vmap: each env either resets or steps
+        obs_new, new_states, rewards_final, dones_final = self._v_step_or_reset(
+            keys, self._states, acts, self._env_params, should_reset)
         obs_raw = self._extract_obs_batch(obs_new)
 
-        # For reset envs, the observation is from the reset, reward=0
-        reset_jnp = jnp.asarray(reset_mask)
-        # Where reset happened, keep the already-written reset obs
-        obs_final = jnp.where(
-            reset_jnp[:, None] if obs_raw.ndim == 2 else reset_jnp.reshape(-1, *([1]*(obs_raw.ndim-1))),
-            self._obs_jax, obs_raw)
-        rewards_final = jnp.where(reset_jnp, 0.0, rewards)
-        dones_final = jnp.where(reset_jnp, False, dones)
-
-        # For non-reset envs, update states
-        self._states = jax.tree_util.tree_map(
-            lambda ns, old: jnp.where(
-                reset_jnp.reshape(-1, *([1]*(ns.ndim-1))), old, ns),
-            new_states, self._states)
-        self._obs_jax = jnp.where(
-            reset_jnp[:, None] if obs_raw.ndim == 2 else reset_jnp.reshape(-1, *([1]*(obs_raw.ndim-1))),
-            self._obs_jax, obs_raw)
-
+        self._states = new_states
+        self._obs_jax = obs_raw
         self._dones = dones_final
 
         # Process observations (embedding projection) — all on GPU, one call
         processed = self._process_obs(self._obs_jax)
 
         # === Single batched GPU→CPU transfer ===
-        result_jax = (processed, rewards_final, dones_final)
-        processed_np, rewards_np, dones_np = jax.device_get(result_jax)
+        if self._intrinsic_spatial:
+            # Also transfer raw obs for intrinsic reward hashing
+            raw_flat = self._obs_jax.reshape(self._num_envs, -1).astype(jnp.float32)
+            result_jax = (processed, rewards_final, dones_final, raw_flat)
+            processed_np, rewards_np, dones_np, raw_obs_np = jax.device_get(result_jax)
+        else:
+            result_jax = (processed, rewards_final, dones_final)
+            processed_np, rewards_np, dones_np = jax.device_get(result_jax)
 
         is_first = np.asarray(reset_mask, dtype=bool)
         is_last = np.asarray(dones_np, dtype=bool)
+        rewards_out = np.asarray(rewards_np, dtype=np.float32)
+
+        # Compute intrinsic rewards if enabled
+        if self._intrinsic_spatial:
+            raw_np = np.asarray(raw_obs_np, dtype=np.float32)
+            rewards_out, r_spatials, r_crafts, r_intrs = \
+                self._compute_intrinsic_rewards(raw_np, rewards_out, is_first)
 
         key = 'embedding' if self._use_embedding else 'image'
         result = {
             key: np.asarray(processed_np, dtype=np.float32),
-            'reward': np.asarray(rewards_np, dtype=np.float32),
+            'reward': rewards_out,
             'is_first': is_first,
             'is_last': is_last,
             'is_terminal': is_last.copy(),
@@ -1059,6 +1201,12 @@ class VectorCraftaxEnv:
             depths = self._compute_achievement_depths_batch(achievements)
             result['log/achievements'] = achievements
             result['log/achievement_depth'] = depths
+
+        # Add intrinsic reward logging (log/ prefix → filtered by replay.add)
+        if self._intrinsic_spatial:
+            result['log/r_spatial'] = r_spatials
+            result['log/r_craft'] = r_crafts
+            result['log/r_intr'] = r_intrs
 
         return result
 
@@ -1245,6 +1393,7 @@ def make_selector(args, capacity, seed=0):
             novelty_eps=getattr(args, 'nlr_novelty_eps', 0.01),
             novelty_temp=getattr(args, 'nlr_novelty_temp', 1.0),
             learnability_temp=getattr(args, 'nlr_learnability_temp', 1.0),
+            recompute_interval=getattr(args, 'nlr_recompute_interval', 500),
             seed=seed,
         )
         if use_nlu_priv:
@@ -1374,15 +1523,15 @@ def make_replay(config, directory, args=None):
         if args is not None:
             selector = make_selector(args, capacity, seed=config.seed)
             # Use reservoir eviction if flag is set
-            if getattr(args, 'reservoir_sampling', False):
+            if getattr(args, 'reservoir_eviction', False):
                 eviction = 'reservoir'
 
         replay_kwargs['selector'] = selector
         replay_kwargs['eviction'] = eviction
     else:
         # Original DreamerV3: use default selector (uniform) and no eviction parameter
-        if args is not None and getattr(args, 'reservoir_sampling', False):
-            print("Warning: --reservoir_sampling is not supported with --use_original_dreamer")
+        if args is not None and getattr(args, 'reservoir_eviction', False):
+            print("Warning: --reservoir_eviction is not supported with --use_original_dreamer")
         if args is not None and getattr(args, 'recent_frac', 0.0) > 0:
             print("Warning: --recent_frac sampling is not supported with --use_original_dreamer")
 
@@ -1556,7 +1705,11 @@ def train_single(make_env, config, args, env_name=None):
         vec_env = VectorCraftaxEnv(
             env_name=env_name, num_envs=num_envs,
             embedding_dim=embedding_dim, use_embedding=use_embedding,
-            seed=config.seed)
+            seed=config.seed,
+            intrinsic_spatial=getattr(args, 'intrinsic_spatial', False),
+            alpha_i=getattr(args, 'alpha_i', 0.9),
+            alpha_e=getattr(args, 'alpha_e', 0.9),
+            craft_weight=getattr(args, 'craft_weight', 1.0))
         driver = VectorDriver(vec_env)
         # Use a lightweight single env for agent space inference
         tmp_env = wrap_env(make_env(config.seed))
@@ -1575,6 +1728,15 @@ def train_single(make_env, config, args, env_name=None):
         else:
             agent = make_agent(config, driver.envs[0], args)
     replay = make_replay(config, logdir / 'replay', args)
+
+    # Print intrinsic reward config
+    if getattr(args, 'intrinsic_spatial', False):
+        print('=== Spatial-Counting + Craft-Novelty Intrinsic Reward ===')
+        print(f'  alpha_i (intrinsic scale): {getattr(args, "alpha_i", 0.9)}')
+        print(f'  alpha_e (extrinsic scale): {getattr(args, "alpha_e", 0.9)}')
+        print(f'  craft_weight (lambda):     {getattr(args, "craft_weight", 1.0)}')
+        print(f'  r_t = alpha_i * (r_spatial + lambda * r_craft) + alpha_e * r_extr')
+        print('==========================================================')
 
     step = elements.Counter()
     logger = make_logger(config, step)
@@ -1618,6 +1780,12 @@ def train_single(make_env, config, args, env_name=None):
         episode.add('score', tran['reward'], agg='sum')
         episode.add('length', 1, agg='sum')
 
+        # Intrinsic reward logging (spatial-counting + craft-novelty)
+        if 'log/r_spatial' in tran:
+            episode.add('r_spatial', float(tran['log/r_spatial']), agg='avg')
+            episode.add('r_craft', float(tran['log/r_craft']), agg='avg')
+            episode.add('r_intr', float(tran['log/r_intr']), agg='avg')
+
         # NLR: track newly inserted item keys for this worker's episode
         if nlr_active and worker in episode_item_keys:
             cur_id = replay.last_inserted_itemid
@@ -1637,6 +1805,11 @@ def train_single(make_env, config, args, env_name=None):
             score = result.pop('score')
             length = result.pop('length')
             logger.add({'score': score, 'length': length}, prefix='episode')
+
+            # Log intrinsic reward episode averages
+            for k in ('r_spatial', 'r_craft', 'r_intr'):
+                if k in result:
+                    logger.add({k: result.pop(k)}, prefix='episode')
 
             # NLR/NLU: feed episode metadata to replay selector
             if nlr_active:
@@ -1781,21 +1954,27 @@ def train_single(make_env, config, args, env_name=None):
     stream_train = iter(agent.stream(make_stream(replay, 'train')))
     carry_train = [agent.init_train(batch_size)]
 
-    # Always start fresh: remove old checkpoint directory if it exists
-    ckpt_dir = logdir / 'ckpt'
-    if ckpt_dir.exists():
-        import shutil as _shutil
-        _shutil.rmtree(str(ckpt_dir), ignore_errors=True)
-        print('Removed old checkpoint directory for fresh start.')
-
     cp = elements.Checkpoint(logdir / 'ckpt')
     cp.step = step
     cp.agent = agent
     cp.replay = replay
-    # Never load checkpoint - always start fresh
-    cp.save()
 
-    print('Start training loop (fresh start, no checkpoint loaded)')
+    if getattr(args, 'fresh_start', True):
+        ckpt_dir = logdir / 'ckpt'
+        if ckpt_dir.exists():
+            import shutil as _shutil
+            _shutil.rmtree(str(ckpt_dir), ignore_errors=True)
+            print('Removed old checkpoint directory for fresh start.')
+        cp.save()
+        print('Start training loop (fresh start, no checkpoint loaded)')
+    else:
+        loaded = cp.load()
+        if loaded:
+            print(f'Resumed from checkpoint at step {step.value}')
+        else:
+            cp.save()
+            print('No checkpoint found, starting fresh')
+
     policy = lambda carry, obs: agent.policy(carry, obs, mode='train')
     driver.reset(agent.init_policy)
 
@@ -1823,8 +2002,8 @@ def train_single(make_env, config, args, env_name=None):
         if step.value % 10000 < 10:
             cp.save()
         # Periodically clear JAX caches to prevent memory accumulation
-        # that causes CUDA_ERROR_ILLEGAL_ADDRESS after ~15k steps
-        if step.value % 5000 == 0 and step.value > 0:
+        _cache_interval = getattr(args, 'jax_cache_clear_interval', 0)
+        if _cache_interval > 0 and step.value % _cache_interval == 0 and step.value > 0:
             jax.clear_caches()
 
     cp.save()
@@ -1887,19 +2066,26 @@ def cl_train_loop(make_envs, config, args, env_names=None):
     train_ratio = config.run.train_ratio
     should_train = elements.when.Ratio(train_ratio / batch_steps)
 
-    # Always start fresh: remove old checkpoint directory if it exists
-    ckpt_dir = logdir / 'ckpt'
-    if ckpt_dir.exists():
-        import shutil as _shutil
-        _shutil.rmtree(str(ckpt_dir), ignore_errors=True)
-        print('Removed old checkpoint directory for fresh start.')
-
     cp = elements.Checkpoint(logdir / 'ckpt')
     cp.step = total_step
     cp.agent = agent
     cp.replay = replay
-    # Never load checkpoint - always start fresh
-    cp.save()
+
+    if getattr(args, 'fresh_start', True):
+        ckpt_dir = logdir / 'ckpt'
+        if ckpt_dir.exists():
+            import shutil as _shutil
+            _shutil.rmtree(str(ckpt_dir), ignore_errors=True)
+            print('Removed old checkpoint directory for fresh start.')
+        cp.save()
+        print('Start CL training loop (fresh start, no checkpoint loaded)')
+    else:
+        loaded = cp.load()
+        if loaded:
+            print(f'Resumed CL from checkpoint at step {total_step.value}')
+        else:
+            cp.save()
+            print('No checkpoint found, starting CL fresh')
 
     stats = replay.stats()
     total_steps_done = stats.get('total_steps', 0)
@@ -2040,6 +2226,12 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                 episode.add('score', tran['reward'], agg='sum')
                 episode.add('length', 1, agg='sum')
 
+                # Intrinsic reward logging (spatial-counting + craft-novelty)
+                if 'log/r_spatial' in tran:
+                    episode.add('r_spatial', float(tran['log/r_spatial']), agg='avg')
+                    episode.add('r_craft', float(tran['log/r_craft']), agg='avg')
+                    episode.add('r_intr', float(tran['log/r_intr']), agg='avg')
+
                 # NLR: track newly inserted item keys for this worker's episode
                 if cl_nlr_active and worker in cl_episode_item_keys:
                     cur_id = replay.last_inserted_itemid
@@ -2059,6 +2251,11 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                     score = result.pop('score')
                     length = result.pop('length')
                     logger.add({'score': score, 'length': length, 'task': current_task}, prefix='episode')
+
+                    # Log intrinsic reward episode averages
+                    for k in ('r_spatial', 'r_craft', 'r_intr'):
+                        if k in result:
+                            logger.add({k: result.pop(k)}, prefix='episode')
 
                     # NLR/NLU: feed episode metadata to replay selector
                     if cl_nlr_active:
@@ -2094,7 +2291,11 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                 vec_env = VectorCraftaxEnv(
                     env_name=task_env_name, num_envs=num_envs,
                     embedding_dim=embedding_dim, use_embedding=use_embedding,
-                    seed=config.seed)
+                    seed=config.seed,
+                    intrinsic_spatial=getattr(args, 'intrinsic_spatial', False),
+                    alpha_i=getattr(args, 'alpha_i', 0.9),
+                    alpha_e=getattr(args, 'alpha_e', 0.9),
+                    craft_weight=getattr(args, 'craft_weight', 1.0))
                 driver = VectorDriver(vec_env)
             else:
                 env_fns = [lambda i=i, fn=make_task_env: wrap_env(fn(config.seed + i)) for i in range(num_envs)]
@@ -2146,7 +2347,8 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                 if step.value % 10000 < 10:
                     cp.save()
                 # Periodically clear JAX caches to prevent memory accumulation
-                if total_step.value % 5000 == 0 and total_step.value > 0:
+                _cache_interval = getattr(args, 'jax_cache_clear_interval', 0)
+                if _cache_interval > 0 and total_step.value % _cache_interval == 0 and total_step.value > 0:
                     jax.clear_caches()
 
             driver.close()
@@ -2161,16 +2363,21 @@ def cl_train_loop(make_envs, config, args, env_names=None):
     logger.close()
 
 
-def make_craftax(env_name, embedding_dim=256, use_embedding=True, seed=42):
+def make_craftax(env_name, embedding_dim=256, use_embedding=True, seed=42,
+                 intrinsic_spatial=False, alpha_i=0.9, alpha_e=0.9, craft_weight=1.0):
     """Create a Craftax environment with proper wrappers."""
     if not CRAFTAX_AVAILABLE:
         raise ImportError("Craftax is not installed. Install with: pip install craftax")
-    
+
     return CraftaxWrapper(
         env_name=env_name,
         embedding_dim=embedding_dim,
         use_embedding=use_embedding,
         seed=seed,
+        intrinsic_spatial=intrinsic_spatial,
+        alpha_i=alpha_i,
+        alpha_e=alpha_e,
+        craft_weight=craft_weight,
     )
 
 
@@ -2234,6 +2441,10 @@ def run_craftax(args):
                 embedding_dim=args.embedding_dim,
                 use_embedding=use_embedding,
                 seed=seed,
+                intrinsic_spatial=getattr(args, 'intrinsic_spatial', False),
+                alpha_i=getattr(args, 'alpha_i', 0.9),
+                alpha_e=getattr(args, 'alpha_e', 0.9),
+                craft_weight=getattr(args, 'craft_weight', 1.0),
             ))
             print(f"Task {i}: env {name}, use_embedding: {use_embedding}")
 
@@ -2257,6 +2468,10 @@ def run_craftax(args):
             embedding_dim=args.embedding_dim,
             use_embedding=use_embedding,
             seed=seed,
+            intrinsic_spatial=getattr(args, 'intrinsic_spatial', False),
+            alpha_i=getattr(args, 'alpha_i', 0.9),
+            alpha_e=getattr(args, 'alpha_e', 0.9),
+            craft_weight=getattr(args, 'craft_weight', 1.0),
         )
 
         train_single(make_env, config, args, env_name=env_name)

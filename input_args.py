@@ -203,9 +203,16 @@ def parse_craftax_args(args=None):
     parser.add_argument('--unbalanced_steps', type=list, default=None,
                         help="number of steps per each task")
 
+    # Replay eviction strategy (PDF Section 4.1)
+    parser.add_argument('--reservoir_eviction', default=True, action='store_true',
+                        help='Use reservoir eviction (random item removal) instead of FIFO. PDF Section 4.1: Vitter 1985.')
+    parser.add_argument('--no_reservoir_eviction', dest='reservoir_eviction', action='store_false',
+                        help='Use FIFO eviction instead of reservoir.')
+    # Deprecated alias for backward compatibility
+    parser.add_argument('--reservoir_sampling', default=None, action='store_true',
+                        help='(DEPRECATED: use --reservoir_eviction) Alias for reservoir eviction.')
+
     # Replay sampling strategies (PDF Section 4.1)
-    parser.add_argument('--reservoir_sampling', default=True, action='store_true',
-                        help='Flag for using reservoir sampling (random eviction). PDF Section 4.1: Vitter 1985.')
     parser.add_argument('--reward_sampling', default=False, action='store_true',
                         help='Flag for using reward-weighted sampling.')
     parser.add_argument('--recency_sampling', default=False, action='store_true',
@@ -260,6 +267,10 @@ def parse_craftax_args(args=None):
     parser.add_argument('--nlr_novelty_eps', type=float, default=0.01,
                         help='Privileged NLR: epsilon added to success rate in novelty scoring.')
 
+    # ---- Privileged-only: score recomputation ----
+    parser.add_argument('--nlr_recompute_interval', type=int, default=500,
+                        help='Privileged NLR: recompute all pool scores every N episodes to fix staleness.')
+
     # ---- Non-privileged-only parameters (2D grid novelty) ----
     parser.add_argument('--nlr_grid_reward_bins', type=int, default=5,
                         help='Non-privileged NLR: number of quantile bins for reward axis.')
@@ -290,6 +301,18 @@ def parse_craftax_args(args=None):
     parser.add_argument('--rssm_full_recon', default=False, action='store_true',
                         help='Whether to have the WM reconstruct the obs, discount and rewards.')
 
+    # Spatial-counting + Craft-novelty intrinsic reward (PDF Section 4.2, Eq.10-13)
+    parser.add_argument('--intrinsic_spatial', default=False, action='store_true',
+                        help='Enable spatial-counting + craft-novelty intrinsic reward (Eq.10-12).')
+    parser.add_argument('--no_intrinsic_spatial', dest='intrinsic_spatial', action='store_false',
+                        help='Disable spatial-counting + craft-novelty intrinsic reward.')
+    parser.add_argument('--alpha_i', type=float, default=0.9,
+                        help='Intrinsic reward scale alpha_i (Eq.13, default 0.9).')
+    parser.add_argument('--alpha_e', type=float, default=0.9,
+                        help='Extrinsic reward scale alpha_e (Eq.13, default 0.9).')
+    parser.add_argument('--craft_weight', type=float, default=1.0,
+                        help='Lambda: weight of craft-novelty vs spatial (Eq.12, default 1.0).')
+
     # Online metrics
     parser.add_argument('--online_metrics', default=True, action='store_true',
                         help='Enable online continual-learning metrics logging.')
@@ -302,7 +325,41 @@ def parse_craftax_args(args=None):
     parser.add_argument('--use_original_dreamer', default=False, action='store_true',
                         help='Use original DreamerV3 from dreamerv3-main folder instead of continuous enhanced version.')
 
+    # Checkpoint resumption
+    parser.add_argument('--fresh_start', default=True, action='store_true',
+                        help='Start fresh (delete old checkpoints). Default: True.')
+    parser.add_argument('--resume', dest='fresh_start', action='store_false',
+                        help='Resume from existing checkpoint if available.')
+
+    # JAX cache management
+    parser.add_argument('--jax_cache_clear_interval', type=int, default=0,
+                        help='Clear JAX caches every N steps (0=disabled). '
+                             'Needed if dynamic shapes cause cache growth.')
+
     args = parser.parse_known_args(args=args)[0]
+
+    # Map deprecated --reservoir_sampling to --reservoir_eviction
+    if args.reservoir_sampling is not None:
+      import warnings
+      warnings.warn('--reservoir_sampling is deprecated, use --reservoir_eviction',
+                    DeprecationWarning, stacklevel=2)
+      args.reservoir_eviction = args.reservoir_sampling
+
+    # Validate NLR pool fractions sum to 1.0
+    nlr_sum = args.nlr_novel_frac + args.nlr_learnable_frac + args.nlr_recent_frac
+    if abs(nlr_sum - 1.0) > 1e-6:
+      parser.error(
+          f'NLR fractions must sum to 1.0, got '
+          f'{args.nlr_novel_frac} + {args.nlr_learnable_frac} + '
+          f'{args.nlr_recent_frac} = {nlr_sum}')
+
+    # Log configured fractions when any NLR/NLU flag is active
+    if any([args.nlr_privileged_sampling, args.nlu_privileged_sampling,
+            args.nlr_sampling, args.nlu_sampling]):
+      print(f'NLR/NLU pool fractions: novel={args.nlr_novel_frac}, '
+            f'learnable={args.nlr_learnable_frac}, '
+            f'recent/uniform={args.nlr_recent_frac}')
+
     return args
 
 
