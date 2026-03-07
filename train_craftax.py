@@ -616,6 +616,13 @@ class CraftaxWrapper(embodied.Env):
         self._craft_weight = craft_weight
         self._spatial_counts = {}    # spatial hash → visit count (episodic)
         self._inventory_seen = set() # set of inventory hashes (episodic)
+        # Adaptive intrinsic reward normalizer (cross-episode EMA).
+        # Scales r_intr so that mean(r_intr_norm) ≈ mean(|r_extr|), making
+        # α_i / α_e a true relative weight and preventing value explosion.
+        self._intr_ema_mean = 0.0   # EMA of r_intr
+        self._extr_ema_mean = 0.0   # EMA of |r_extr|
+        self._ema_rate = 0.01
+        self._ema_count = 0
 
         # Achievement tracking for current episode
         self._episode_achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
@@ -802,10 +809,26 @@ class CraftaxWrapper(embodied.Env):
         i_key = self._inventory_hash(flat_obs)
         r_craft = 1.0 if i_key not in self._inventory_seen else 0.0
         self._inventory_seen.add(i_key)
-        # Combined (Eq.12-13)
-        r_intr = r_spatial + self._craft_weight * r_craft
-        combined = self._alpha_i * r_intr + self._alpha_e * extr_reward
-        return combined, r_spatial, r_craft, r_intr
+        # Combined (Eq.12)
+        r_intr_raw = r_spatial + self._craft_weight * r_craft
+        # Adaptive normalization: scale r_intr so its running mean matches
+        # the running mean of |r_extr|.  This makes α_i / α_e a true
+        # relative-importance ratio and prevents value explosion.
+        rate = self._ema_rate
+        self._ema_count += 1
+        self._intr_ema_mean = (1 - rate) * self._intr_ema_mean + rate * r_intr_raw
+        self._extr_ema_mean = (1 - rate) * self._extr_ema_mean + rate * abs(extr_reward)
+        # Warmup: use raw values until EMA has enough samples.
+        if self._ema_count < 100:
+            r_intr_norm = r_intr_raw
+        else:
+            # ratio = mean(|r_extr|) / mean(r_intr) — the adaptive scale factor
+            intr_mean = max(1e-8, self._intr_ema_mean)
+            extr_mean = max(1e-8, self._extr_ema_mean)
+            r_intr_norm = r_intr_raw * (extr_mean / intr_mean)
+        # Eq.13 with adaptively normalized intrinsic
+        combined = self._alpha_i * r_intr_norm + self._alpha_e * extr_reward
+        return combined, r_spatial, r_craft, r_intr_raw
 
     def _to_numpy_result(self, obs_jax, reward, is_first, is_last, is_terminal, achievements=None):
         """Single batched transfer from GPU to CPU at the end of step."""
@@ -915,6 +938,11 @@ class VectorCraftaxEnv:
         self._craft_weight = craft_weight
         self._spatial_counts = [{} for _ in range(num_envs)]
         self._inventory_seen = [set() for _ in range(num_envs)]
+        # Adaptive intrinsic reward normalizer (shared across all envs, cross-episode)
+        self._intr_ema_mean = 0.0
+        self._extr_ema_mean = 0.0
+        self._ema_rate = 0.01
+        self._ema_count = 0
 
         # Create one Craftax env to get params / spaces
         if 'Classic' in env_name:
@@ -1138,12 +1166,31 @@ class VectorCraftaxEnv:
             i_key = self._inventory_hash_single(flat)
             r_cr = 1.0 if i_key not in self._inventory_seen[i] else 0.0
             self._inventory_seen[i].add(i_key)
-            # Combined (Eq.12-13)
+            # Combined (Eq.12)
             r_in = r_sp + self._craft_weight * r_cr
-            combined[i] = self._alpha_i * r_in + self._alpha_e * extr_rewards[i]
             r_spatials[i] = r_sp
             r_crafts[i] = r_cr
             r_intrs[i] = r_in
+        # Adaptive normalization: scale r_intr so its running mean matches
+        # the running mean of |r_extr|, preventing value explosion.
+        active_mask = ~is_firsts & (r_intrs > 0)
+        if active_mask.any():
+            rate = self._ema_rate
+            self._ema_count += 1
+            self._intr_ema_mean = (1 - rate) * self._intr_ema_mean + rate * r_intrs[active_mask].mean()
+            self._extr_ema_mean = (1 - rate) * self._extr_ema_mean + rate * np.abs(extr_rewards[active_mask]).mean()
+        # Warmup: use raw values until EMA has enough samples.
+        if self._ema_count >= 100:
+            intr_mean = max(1e-8, self._intr_ema_mean)
+            extr_mean = max(1e-8, self._extr_ema_mean)
+            scale = extr_mean / intr_mean
+        else:
+            scale = 1.0  # no normalization during warmup
+        for i in range(N):
+            if is_firsts[i] or not self._intrinsic_spatial:
+                continue
+            r_in_norm = r_intrs[i] * scale
+            combined[i] = self._alpha_i * r_in_norm + self._alpha_e * extr_rewards[i]
         return combined, r_spatials, r_crafts, r_intrs
 
     def step(self, actions_batch):
@@ -1748,7 +1795,8 @@ def train_single(make_env, config, args, env_name=None):
         print(f'  alpha_i (intrinsic scale): {getattr(args, "alpha_i", 0.9)}')
         print(f'  alpha_e (extrinsic scale): {getattr(args, "alpha_e", 0.9)}')
         print(f'  craft_weight (lambda):     {getattr(args, "craft_weight", 1.0)}')
-        print(f'  r_t = alpha_i * (r_spatial + lambda * r_craft) + alpha_e * r_extr')
+        print(f'  r_t = alpha_i * norm(r_spatial + lambda * r_craft) + alpha_e * r_extr')
+        print(f'  norm = adaptive EMA scaling (mean(|r_extr|) / mean(r_intr)), warmup=100 steps')
         print('==========================================================')
 
     step = elements.Counter()
