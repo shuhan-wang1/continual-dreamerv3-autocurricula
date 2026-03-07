@@ -429,7 +429,21 @@ class PrivilegedNoveltyLearnabilityRecency:
     self._sample_counts = {'novel': 0, 'learnable': 0, 'recent': 0}
     self._total_samples = 0
 
+    # ---- Cached arrays for O(1)-amortised sampling ----
+    self._novel_cache_keys = None   # list of keys, or None = dirty
+    self._novel_cache_probs = None  # np.ndarray of sampling probs
+    self._learn_cache_keys = None
+    self._learn_cache_probs = None
+
     self._insert_counter = 0
+
+  def _invalidate_novel_cache(self):
+    self._novel_cache_keys = None
+    self._novel_cache_probs = None
+
+  def _invalidate_learn_cache(self):
+    self._learn_cache_keys = None
+    self._learn_cache_probs = None
 
   # ------------------------------------------------------------------
   # Public API: update per-episode statistics
@@ -496,17 +510,34 @@ class PrivilegedNoveltyLearnabilityRecency:
       # --- Insert into pools ---
       if novelty_score > 0:
         self.novel_pool[key] = novelty_score
+        self._invalidate_novel_cache()
       if learnability_score > 0:
         self.learn_pool[key] = learnability_score
+        self._invalidate_learn_cache()
 
       # --- Periodic score recomputation ---
       self._episodes_since_recompute += 1
       if self._episodes_since_recompute >= self.recompute_interval:
         self._recompute_all_scores()
+        self._invalidate_novel_cache()
+        self._invalidate_learn_cache()
         self._episodes_since_recompute = 0
 
   def _recompute_all_scores(self):
-    """Recompute novelty and learnability scores for all pool items."""
+    """Recompute novelty and learnability scores for all pool items.
+
+    Rebuilds achievement_counts and achievement_successes from the
+    metadata of items *currently in the buffer* so that evicted episodes
+    no longer inflate the denominator.
+    """
+    # Recompute achievement statistics from current buffer contents
+    self.achievement_counts = np.zeros(self.num_achievements, dtype=np.float64)
+    self.achievement_successes = np.zeros(self.num_achievements, dtype=np.float64)
+    for key in self.indices:
+      if key in self._key_achievements:
+        self.achievement_counts += 1
+        self.achievement_successes += self._key_achievements[key].astype(np.float64)
+
     success_rates = np.where(
         self.achievement_counts > 0,
         self.achievement_successes / self.achievement_counts,
@@ -606,8 +637,12 @@ class PrivilegedNoveltyLearnabilityRecency:
       self.insertion_order.pop(key, None)
 
       # Remove from novel and learnable pools (O(1))
-      self.novel_pool.pop(key, None)
-      self.learn_pool.pop(key, None)
+      if key in self.novel_pool:
+        del self.novel_pool[key]
+        self._invalidate_novel_cache()
+      if key in self.learn_pool:
+        del self.learn_pool[key]
+        self._invalidate_learn_cache()
 
       # Remove stored metadata
       self._key_achievements.pop(key, None)
@@ -617,44 +652,54 @@ class PrivilegedNoveltyLearnabilityRecency:
   # Internal sampling methods
   # ------------------------------------------------------------------
   def _sample_novel(self):
-    """Sample from the novel pool, weighted by novelty score."""
-    keys = list(self.novel_pool.keys())
-    scores = np.array(list(self.novel_pool.values()), dtype=np.float64)
-    scores = scores ** (1.0 / self.novelty_temp)
-    total = scores.sum()
-    if total <= 0:
-      return self._sample_recent()
-    probs = scores / total
-    idx = self.rng.choice(len(keys), p=probs)
-    return keys[idx]
+    """Sample from the novel pool, weighted by novelty score (cached)."""
+    if self._novel_cache_keys is None:
+      keys = list(self.novel_pool.keys())
+      scores = np.array(list(self.novel_pool.values()), dtype=np.float64)
+      scores = scores ** (1.0 / self.novelty_temp)
+      total = scores.sum()
+      if total <= 0:
+        return self._sample_recent()
+      self._novel_cache_keys = keys
+      self._novel_cache_probs = scores / total
+    idx = self.rng.choice(len(self._novel_cache_keys), p=self._novel_cache_probs)
+    return self._novel_cache_keys[idx]
 
   def _sample_learnable(self):
-    """Sample from the learnable pool, weighted by advantage."""
-    keys = list(self.learn_pool.keys())
-    scores = np.array(list(self.learn_pool.values()), dtype=np.float64)
-    scores = scores ** (1.0 / self.learnability_temp)
-    total = scores.sum()
-    if total <= 0:
-      return self._sample_recent()
-    probs = scores / total
-    idx = self.rng.choice(len(keys), p=probs)
-    return keys[idx]
+    """Sample from the learnable pool, weighted by advantage (cached)."""
+    if self._learn_cache_keys is None:
+      keys = list(self.learn_pool.keys())
+      scores = np.array(list(self.learn_pool.values()), dtype=np.float64)
+      scores = scores ** (1.0 / self.learnability_temp)
+      total = scores.sum()
+      if total <= 0:
+        return self._sample_recent()
+      self._learn_cache_keys = keys
+      self._learn_cache_probs = scores / total
+    idx = self.rng.choice(len(self._learn_cache_keys), p=self._learn_cache_probs)
+    return self._learn_cache_keys[idx]
 
   def _sample_recent(self):
-    """Sample from recent items with triangular weighting."""
+    """Sample from recent items with triangular weighting.
+
+    Uses insertion_order dict to determine true recency, since the keys
+    list may have its order disturbed by swap-and-pop deletions.
+    """
     n = len(self.keys)
     if n == 0:
       raise IndexError('Privileged NLR selector is empty (recent)')
     window = min(n, self.recent_window)
-    weights = np.linspace(1.0, 0.0, window, endpoint=False)
+    # Sort keys by insertion order (descending) and take most recent `window`
+    sorted_keys = sorted(
+        self.keys, key=lambda k: self.insertion_order.get(k, 0), reverse=True)
+    recent_keys = sorted_keys[:window]
+    weights = np.linspace(1.0, 0.0, len(recent_keys), endpoint=False)
     total = weights.sum()
     if total <= 0:
-      idx = self.rng.integers(max(0, n - window), n).item()
-      return self.keys[idx]
+      return recent_keys[self.rng.integers(0, len(recent_keys)).item()]
     probs = weights / total
-    start = n - window
-    local_idx = self.rng.choice(window, p=probs)
-    return self.keys[start + local_idx]
+    idx = self.rng.choice(len(recent_keys), p=probs)
+    return recent_keys[idx]
 
   def get_pool_utilization(self):
     """Return actual pool sampling distribution (for logging)."""
@@ -764,6 +809,12 @@ class NoveltyLearnabilityRecency:
     # ---- Sample tracking for pool utilization logging ----
     self._sample_counts = {'novel': 0, 'learnable': 0, 'recent': 0}
     self._total_samples = 0
+
+    # ---- Cached arrays for O(1)-amortised sampling ----
+    self._novel_cache_keys = None   # list of keys, or None = dirty
+    self._novel_cache_probs = None  # np.ndarray of sampling probs
+    self._learn_cache_keys = None
+    self._learn_cache_probs = None
 
     # ---- Reward baseline (EMA) ----
     self.reward_ema_decay = reward_ema_decay
@@ -896,6 +947,14 @@ class NoveltyLearnabilityRecency:
       return 0.0
     return score / (count + self.grid_eps)
 
+  def _invalidate_novel_cache(self):
+    self._novel_cache_keys = None
+    self._novel_cache_probs = None
+
+  def _invalidate_learn_cache(self):
+    self._learn_cache_keys = None
+    self._learn_cache_probs = None
+
   def _rebuild_novel_pool(self):
     """Rebuild the entire novel pool from current grid state."""
     self.novel_pool.clear()
@@ -905,6 +964,7 @@ class NoveltyLearnabilityRecency:
       score = self._compute_novelty_score_for_cell(lb, rb)
       if score > 0:
         self.novel_pool[key] = score
+    self._invalidate_novel_cache()
 
   def _rebuild_learnable_pool(self):
     """Rebuild the entire learnable pool from current reward EMA."""
@@ -917,6 +977,7 @@ class NoveltyLearnabilityRecency:
       score = max(0.0, advantage)
       if score > 0:
         self.learn_pool[key] = score
+    self._invalidate_learn_cache()
 
   # ------------------------------------------------------------------
   # Public API: update per-episode statistics
@@ -981,6 +1042,7 @@ class NoveltyLearnabilityRecency:
           score = self._compute_novelty_score_for_cell(lb, rb)
           if score > 0:
             self.novel_pool[key] = score
+            self._invalidate_novel_cache()
 
       # --- Compute learnability score ---
       # Use EMA BEFORE this episode's update to avoid systematic attenuation.
@@ -988,6 +1050,7 @@ class NoveltyLearnabilityRecency:
       learnability_score = max(0.0, advantage)
       if learnability_score > 0:
         self.learn_pool[key] = learnability_score
+        self._invalidate_learn_cache()
 
   # ------------------------------------------------------------------
   # Selector interface (called by Replay)
@@ -1054,8 +1117,12 @@ class NoveltyLearnabilityRecency:
       self.insertion_order.pop(key, None)
 
       # Remove from novel and learnable pools (O(1))
-      self.novel_pool.pop(key, None)
-      self.learn_pool.pop(key, None)
+      if key in self.novel_pool:
+        del self.novel_pool[key]
+        self._invalidate_novel_cache()
+      if key in self.learn_pool:
+        del self.learn_pool[key]
+        self._invalidate_learn_cache()
 
       # Remove stored metadata (dict-based, O(1))
       self._key_rewards.pop(key, None)
@@ -1065,44 +1132,54 @@ class NoveltyLearnabilityRecency:
   # Internal sampling methods
   # ------------------------------------------------------------------
   def _sample_novel(self):
-    """Sample from the novel pool, weighted by novelty score."""
-    keys = list(self.novel_pool.keys())
-    scores = np.array(list(self.novel_pool.values()), dtype=np.float64)
-    scores = scores ** (1.0 / self.novelty_temp)
-    total = scores.sum()
-    if total <= 0:
-      return self._sample_recent()
-    probs = scores / total
-    idx = self.rng.choice(len(keys), p=probs)
-    return keys[idx]
+    """Sample from the novel pool, weighted by novelty score (cached)."""
+    if self._novel_cache_keys is None:
+      keys = list(self.novel_pool.keys())
+      scores = np.array(list(self.novel_pool.values()), dtype=np.float64)
+      scores = scores ** (1.0 / self.novelty_temp)
+      total = scores.sum()
+      if total <= 0:
+        return self._sample_recent()
+      self._novel_cache_keys = keys
+      self._novel_cache_probs = scores / total
+    idx = self.rng.choice(len(self._novel_cache_keys), p=self._novel_cache_probs)
+    return self._novel_cache_keys[idx]
 
   def _sample_learnable(self):
-    """Sample from the learnable pool, weighted by advantage."""
-    keys = list(self.learn_pool.keys())
-    scores = np.array(list(self.learn_pool.values()), dtype=np.float64)
-    scores = scores ** (1.0 / self.learnability_temp)
-    total = scores.sum()
-    if total <= 0:
-      return self._sample_recent()
-    probs = scores / total
-    idx = self.rng.choice(len(keys), p=probs)
-    return keys[idx]
+    """Sample from the learnable pool, weighted by advantage (cached)."""
+    if self._learn_cache_keys is None:
+      keys = list(self.learn_pool.keys())
+      scores = np.array(list(self.learn_pool.values()), dtype=np.float64)
+      scores = scores ** (1.0 / self.learnability_temp)
+      total = scores.sum()
+      if total <= 0:
+        return self._sample_recent()
+      self._learn_cache_keys = keys
+      self._learn_cache_probs = scores / total
+    idx = self.rng.choice(len(self._learn_cache_keys), p=self._learn_cache_probs)
+    return self._learn_cache_keys[idx]
 
   def _sample_recent(self):
-    """Sample from recent items with triangular weighting."""
+    """Sample from recent items with triangular weighting.
+
+    Uses insertion_order dict to determine true recency, since the keys
+    list may have its order disturbed by swap-and-pop deletions.
+    """
     n = len(self.keys)
     if n == 0:
       raise IndexError('NLR selector is empty (recent)')
     window = min(n, self.recent_window)
-    weights = np.linspace(1.0, 0.0, window, endpoint=False)
+    # Sort keys by insertion order (descending) and take most recent `window`
+    sorted_keys = sorted(
+        self.keys, key=lambda k: self.insertion_order.get(k, 0), reverse=True)
+    recent_keys = sorted_keys[:window]
+    weights = np.linspace(1.0, 0.0, len(recent_keys), endpoint=False)
     total = weights.sum()
     if total <= 0:
-      idx = self.rng.integers(max(0, n - window), n).item()
-      return self.keys[idx]
+      return recent_keys[self.rng.integers(0, len(recent_keys)).item()]
     probs = weights / total
-    start = n - window
-    local_idx = self.rng.choice(window, p=probs)
-    return self.keys[start + local_idx]
+    idx = self.rng.choice(len(recent_keys), p=probs)
+    return recent_keys[idx]
 
   def get_pool_utilization(self):
     """Return actual pool sampling distribution (for logging)."""

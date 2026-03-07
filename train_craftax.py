@@ -576,6 +576,12 @@ if CRAFTAX_ACHIEVEMENTS_AVAILABLE:
         else:
             ACHIEVEMENT_TIERS[name] = 3  # default unknown to tier 3
 
+    # Pre-built vectorised tier lookup array for fast depth computation
+    # _TIER_ARRAY[i] = tier of achievement i  (-1 sentinel unused here)
+    _TIER_ARRAY = np.array(
+        [ACHIEVEMENT_TIERS.get(n, 3) for n in CRAFTAX_ACHIEVEMENT_NAMES],
+        dtype=np.int32)
+
 
 # ============== Craftax Observation Layout Constants ==============
 # Symbolic observation: 9×11 tiles × 83 channels = 8217 map dims + 51 inventory dims
@@ -764,14 +770,11 @@ class CraftaxWrapper(embodied.Env):
         return np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.int32)
 
     def _compute_achievement_depth(self, achievements):
-        """Compute max achievement tier from achievement vector."""
-        max_tier = -1
-        for i, achieved in enumerate(achievements):
-            if achieved and i < len(CRAFTAX_ACHIEVEMENT_NAMES):
-                name = CRAFTAX_ACHIEVEMENT_NAMES[i]
-                if name in ACHIEVEMENT_TIERS:
-                    max_tier = max(max_tier, ACHIEVEMENT_TIERS[name])
-        return max_tier
+        """Compute max achievement tier from achievement vector (vectorised)."""
+        mask = np.asarray(achievements, dtype=bool)[:len(_TIER_ARRAY)]
+        if not mask.any():
+            return -1
+        return int(_TIER_ARRAY[:len(mask)][mask].max())
 
     def _spatial_hash(self, flat_obs):
         """Hash visual map: argmax of block-type channels per tile → bytes key."""
@@ -1029,7 +1032,7 @@ class VectorCraftaxEnv:
         return np.zeros((self._num_envs, NUM_CRAFTAX_ACHIEVEMENTS), dtype=np.int32)
 
     def _compute_achievement_depths_batch(self, achievements):
-        """Compute achievement depths for a batch of achievement vectors.
+        """Compute achievement depths for a batch of achievement vectors (vectorised).
 
         Args:
             achievements: numpy array of shape (num_envs, NUM_CRAFTAX_ACHIEVEMENTS).
@@ -1037,16 +1040,11 @@ class VectorCraftaxEnv:
         Returns:
             numpy array of shape (num_envs,) with achievement depths.
         """
-        depths = np.full(achievements.shape[0], -1, dtype=np.int32)
-        for i, ach in enumerate(achievements):
-            max_tier = -1
-            for j, achieved in enumerate(ach):
-                if achieved and j < len(CRAFTAX_ACHIEVEMENT_NAMES):
-                    name = CRAFTAX_ACHIEVEMENT_NAMES[j]
-                    if name in ACHIEVEMENT_TIERS:
-                        max_tier = max(max_tier, ACHIEVEMENT_TIERS[name])
-            depths[i] = max_tier
-        return depths
+        n_ach = min(achievements.shape[1], len(_TIER_ARRAY))
+        mask = achievements[:, :n_ach].astype(bool)
+        # Broadcast tier array: where achieved, use tier; else -1
+        tiers = np.where(mask, _TIER_ARRAY[None, :n_ach], -1)
+        return tiers.max(axis=1).astype(np.int32)
 
     @property
     def obs_space(self):

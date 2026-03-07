@@ -198,6 +198,7 @@ class Replay:
       j = self._eviction_rng.integers(0, self.total_seen)
       if j >= self.capacity:
         # Reject this item - don't add it
+        self.last_inserted_itemid = None
         return
       # Accept: remove a random existing item and add this one
       self._remove_random(j)
