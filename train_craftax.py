@@ -601,7 +601,7 @@ class CraftaxWrapper(embodied.Env):
     """
 
     def __init__(self, env_name='CraftaxSymbolic-v1', embedding_dim=256, use_embedding=True, seed=42, track_achievements=True,
-                 intrinsic_spatial=False, alpha_i=0.9, alpha_e=0.9, craft_weight=1.0):
+                 intrinsic_spatial=False, alpha_i=0.1, alpha_e=1.0, craft_weight=1.0):
         self._env_name = env_name
         self._embedding_dim = embedding_dim
         self._use_embedding = use_embedding
@@ -924,7 +924,7 @@ class VectorCraftaxEnv:
 
     def __init__(self, env_name='CraftaxSymbolic-v1', num_envs=16,
                  embedding_dim=256, use_embedding=True, seed=42, track_achievements=True,
-                 intrinsic_spatial=False, alpha_i=0.9, alpha_e=0.9, craft_weight=1.0):
+                 intrinsic_spatial=False, alpha_i=0.1, alpha_e=1.0, craft_weight=1.0):
         self._env_name = env_name
         self._num_envs = num_envs
         self._embedding_dim = embedding_dim
@@ -1767,8 +1767,8 @@ def train_single(make_env, config, args, env_name=None):
             embedding_dim=embedding_dim, use_embedding=use_embedding,
             seed=config.seed,
             intrinsic_spatial=getattr(args, 'intrinsic_spatial', False),
-            alpha_i=getattr(args, 'alpha_i', 0.9),
-            alpha_e=getattr(args, 'alpha_e', 0.9),
+            alpha_i=getattr(args, 'alpha_i', 0.1),
+            alpha_e=getattr(args, 'alpha_e', 1.0),
             craft_weight=getattr(args, 'craft_weight', 1.0))
         driver = VectorDriver(vec_env)
         # Use a lightweight single env for agent space inference
@@ -1792,8 +1792,8 @@ def train_single(make_env, config, args, env_name=None):
     # Print intrinsic reward config
     if getattr(args, 'intrinsic_spatial', False):
         print('=== Spatial-Counting + Craft-Novelty Intrinsic Reward ===')
-        print(f'  alpha_i (intrinsic scale): {getattr(args, "alpha_i", 0.9)}')
-        print(f'  alpha_e (extrinsic scale): {getattr(args, "alpha_e", 0.9)}')
+        print(f'  alpha_i (intrinsic scale): {getattr(args, "alpha_i", 0.1)}')
+        print(f'  alpha_e (extrinsic scale): {getattr(args, "alpha_e", 1.0)}')
         print(f'  craft_weight (lambda):     {getattr(args, "craft_weight", 1.0)}')
         print(f'  r_t = alpha_i * norm(r_spatial + lambda * r_craft) + alpha_e * r_extr')
         print(f'  norm = adaptive EMA scaling (mean(|r_extr|) / mean(r_intr)), warmup=100 steps')
@@ -2435,8 +2435,8 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                     embedding_dim=embedding_dim, use_embedding=use_embedding,
                     seed=config.seed,
                     intrinsic_spatial=getattr(args, 'intrinsic_spatial', False),
-                    alpha_i=getattr(args, 'alpha_i', 0.9),
-                    alpha_e=getattr(args, 'alpha_e', 0.9),
+                    alpha_i=getattr(args, 'alpha_i', 0.1),
+                    alpha_e=getattr(args, 'alpha_e', 1.0),
                     craft_weight=getattr(args, 'craft_weight', 1.0))
                 driver = VectorDriver(vec_env)
             else:
@@ -2531,7 +2531,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
 
 
 def make_craftax(env_name, embedding_dim=256, use_embedding=True, seed=42,
-                 intrinsic_spatial=False, alpha_i=0.9, alpha_e=0.9, craft_weight=1.0):
+                 intrinsic_spatial=False, alpha_i=0.1, alpha_e=1.0, craft_weight=1.0):
     """Create a Craftax environment with proper wrappers."""
     if not CRAFTAX_AVAILABLE:
         raise ImportError("Craftax is not installed. Install with: pip install craftax")
@@ -2609,8 +2609,8 @@ def run_craftax(args):
                 use_embedding=use_embedding,
                 seed=seed,
                 intrinsic_spatial=getattr(args, 'intrinsic_spatial', False),
-                alpha_i=getattr(args, 'alpha_i', 0.9),
-                alpha_e=getattr(args, 'alpha_e', 0.9),
+                alpha_i=getattr(args, 'alpha_i', 0.1),
+                alpha_e=getattr(args, 'alpha_e', 1.0),
                 craft_weight=getattr(args, 'craft_weight', 1.0),
             ))
             print(f"Task {i}: env {name}, use_embedding: {use_embedding}")
@@ -2636,8 +2636,8 @@ def run_craftax(args):
             use_embedding=use_embedding,
             seed=seed,
             intrinsic_spatial=getattr(args, 'intrinsic_spatial', False),
-            alpha_i=getattr(args, 'alpha_i', 0.9),
-            alpha_e=getattr(args, 'alpha_e', 0.9),
+            alpha_i=getattr(args, 'alpha_i', 0.1),
+            alpha_e=getattr(args, 'alpha_e', 1.0),
             craft_weight=getattr(args, 'craft_weight', 1.0),
         )
 

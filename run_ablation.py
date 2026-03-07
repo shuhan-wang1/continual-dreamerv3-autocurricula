@@ -10,7 +10,7 @@ Runs a systematic ablation study for:
 Experiment groups:
   A  Core comparison      (baseline, P2E, intrinsic, P2E+intrinsic)
   B  Component ablation   (craft_weight sensitivity)
-  C  Reward scale          (alpha_i / alpha_e sensitivity)
+  C  Reward scale          (alpha_i sensitivity: 0.01, 0.3, 1.0 around default 0.1)
   D  Replay strategy       (NLR interaction with intrinsic / P2E)
 
 Output directory structure:
@@ -95,8 +95,8 @@ EXPERIMENTS["A3_intrinsic"] = {
     "args": {
         "no_plan2explore": True,
         "intrinsic_spatial": True,
-        "alpha_i": 0.9,
-        "alpha_e": 0.9,
+        "alpha_i": 0.1,
+        "alpha_e": 1.0,
         "craft_weight": 1.0,
     },
 }
@@ -106,8 +106,8 @@ EXPERIMENTS["A4_p2e_intrinsic"] = {
     "args": {
         "plan2explore": True,
         "intrinsic_spatial": True,
-        "alpha_i": 0.9,
-        "alpha_e": 0.9,
+        "alpha_i": 0.1,
+        "alpha_e": 1.0,
         "craft_weight": 1.0,
     },
 }
@@ -119,8 +119,8 @@ EXPERIMENTS["B1_spatial_only"] = {
     "args": {
         "no_plan2explore": True,
         "intrinsic_spatial": True,
-        "alpha_i": 0.9,
-        "alpha_e": 0.9,
+        "alpha_i": 0.1,
+        "alpha_e": 1.0,
         "craft_weight": 0.0,
     },
 }
@@ -130,8 +130,8 @@ EXPERIMENTS["B2_craft_light"] = {
     "args": {
         "no_plan2explore": True,
         "intrinsic_spatial": True,
-        "alpha_i": 0.9,
-        "alpha_e": 0.9,
+        "alpha_i": 0.1,
+        "alpha_e": 1.0,
         "craft_weight": 0.5,
     },
 }
@@ -141,43 +141,43 @@ EXPERIMENTS["B3_craft_heavy"] = {
     "args": {
         "no_plan2explore": True,
         "intrinsic_spatial": True,
-        "alpha_i": 0.9,
-        "alpha_e": 0.9,
+        "alpha_i": 0.1,
+        "alpha_e": 1.0,
         "craft_weight": 2.0,
     },
 }
 
 # ---------- Group C: Reward Scale Sensitivity ----------
-EXPERIMENTS["C1_low_intrinsic"] = {
+EXPERIMENTS["C1_tiny_intrinsic"] = {
     "group": "C",
-    "desc": "Low intrinsic scale (alpha_i=0.5, alpha_e=0.9, no P2E)",
+    "desc": "Tiny intrinsic (alpha_i=0.01, alpha_e=1.0, no P2E)",
     "args": {
         "no_plan2explore": True,
         "intrinsic_spatial": True,
-        "alpha_i": 0.5,
-        "alpha_e": 0.9,
+        "alpha_i": 0.01,
+        "alpha_e": 1.0,
         "craft_weight": 1.0,
     },
 }
-EXPERIMENTS["C2_low_extrinsic"] = {
+EXPERIMENTS["C2_high_intrinsic"] = {
     "group": "C",
-    "desc": "Low extrinsic scale (alpha_i=0.9, alpha_e=0.5, no P2E)",
+    "desc": "High intrinsic (alpha_i=0.3, alpha_e=1.0, no P2E)",
     "args": {
         "no_plan2explore": True,
         "intrinsic_spatial": True,
-        "alpha_i": 0.9,
-        "alpha_e": 0.5,
+        "alpha_i": 0.3,
+        "alpha_e": 1.0,
         "craft_weight": 1.0,
     },
 }
-EXPERIMENTS["C3_balanced_low"] = {
+EXPERIMENTS["C3_equal_weight"] = {
     "group": "C",
-    "desc": "Balanced low (alpha_i=0.5, alpha_e=0.5, no P2E)",
+    "desc": "Equal weight (alpha_i=1.0, alpha_e=1.0, no P2E)",
     "args": {
         "no_plan2explore": True,
         "intrinsic_spatial": True,
-        "alpha_i": 0.5,
-        "alpha_e": 0.5,
+        "alpha_i": 1.0,
+        "alpha_e": 1.0,
         "craft_weight": 1.0,
     },
 }
@@ -198,8 +198,8 @@ EXPERIMENTS["D2_nlr_intrinsic"] = {
         "no_plan2explore": True,
         "nlr_sampling": True,
         "intrinsic_spatial": True,
-        "alpha_i": 0.9,
-        "alpha_e": 0.9,
+        "alpha_i": 0.1,
+        "alpha_e": 1.0,
         "craft_weight": 1.0,
     },
 }
@@ -210,8 +210,8 @@ EXPERIMENTS["D3_nlr_p2e_intrinsic"] = {
         "plan2explore": True,
         "nlr_sampling": True,
         "intrinsic_spatial": True,
-        "alpha_i": 0.9,
-        "alpha_e": 0.9,
+        "alpha_i": 0.1,
+        "alpha_e": 1.0,
         "craft_weight": 1.0,
     },
 }

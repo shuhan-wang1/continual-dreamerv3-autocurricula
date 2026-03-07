@@ -306,10 +306,12 @@ def parse_craftax_args(args=None):
                         help='Enable spatial-counting + craft-novelty intrinsic reward (Eq.10-12).')
     parser.add_argument('--no_intrinsic_spatial', dest='intrinsic_spatial', action='store_false',
                         help='Disable spatial-counting + craft-novelty intrinsic reward.')
-    parser.add_argument('--alpha_i', type=float, default=0.9,
-                        help='Intrinsic reward scale alpha_i (Eq.13, default 0.9).')
-    parser.add_argument('--alpha_e', type=float, default=0.9,
-                        help='Extrinsic reward scale alpha_e (Eq.13, default 0.9).')
+    parser.add_argument('--alpha_i', type=float, default=0.1,
+                        help='Intrinsic reward scale alpha_i (Eq.13, default 0.1). '
+                             'After adaptive normalization r_intr is rescaled to match |r_extr|, '
+                             'so alpha_i/alpha_e is the true relative weight.')
+    parser.add_argument('--alpha_e', type=float, default=1.0,
+                        help='Extrinsic reward scale alpha_e (Eq.13, default 1.0).')
     parser.add_argument('--craft_weight', type=float, default=1.0,
                         help='Lambda: weight of craft-novelty vs spatial (Eq.12, default 1.0).')
 

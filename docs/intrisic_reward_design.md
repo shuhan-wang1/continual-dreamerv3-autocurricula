@@ -57,12 +57,16 @@ $$
 
 最终混合奖励 (Eq.13)
 $$
-r_t = \alpha_i \cdot r_t^{\text{intr}} + \alpha_e \cdot r_t^{\text{extr}}
+r_t = \alpha_i \cdot \text{norm}(r_t^{\text{intr}}) + \alpha_e \cdot r_t^{\text{extr}}
 $$
 
-其中：
+其中 $\text{norm}$ 为自适应归一化：通过 cross-episode EMA 追踪 $\bar{r}^{\text{intr}}$ 和 $\bar{|r^{\text{extr}}|}$，令
+$$
+\text{norm}(r^{\text{intr}}) = r^{\text{intr}} \cdot \frac{\bar{|r^{\text{extr}}|}}{\bar{r}^{\text{intr}}}
+$$
+使得归一化后 $\mathbb{E}[\text{norm}(r^{\text{intr}})] \approx \mathbb{E}[|r^{\text{extr}}|]$，从而 $\alpha_i / \alpha_e$ 成为真正的相对权重比。前 100 步为 warmup 期，不做归一化。
 
-$\alpha_i$：intrinsic reward 缩放系数（默认 $0.9$）
-$\alpha_e$：extrinsic reward 缩放系数（默认 $0.9$）
+$\alpha_i$：intrinsic reward 缩放系数（默认 $0.1$，即 intrinsic 贡献为 extrinsic 的 1/10）
+$\alpha_e$：extrinsic reward 缩放系数（默认 $1.0$）
 $r_t^{\text{extr}}$：环境原始外部奖励
 两个 episodic 状态（$N_{\text{ep}}$ 和 $\mathcal{H}_{\text{inv}}$）在每个 episode 的 is_first 信号为 true 时完全重置，因此这是 episodic intrinsic motivation——每个 episode 独立地鼓励探索，不会随训练推进而全局衰减。

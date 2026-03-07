@@ -76,9 +76,9 @@ Environment-level intrinsic rewards that shape the reward signal before it enter
 
 - **Spatial-counting** — `r_spatial = 1/sqrt(N_ep(phi(o_t)))` where `phi` hashes the map tile at the agent's position. Encourages visiting new map locations within each episode.
 - **Craft-novelty** — `r_craft = I[psi(o_t) not in H_inv]` where `psi` is the inventory configuration hash. Binary bonus for discovering new inventory states.
-- **Combined reward** — `r = alpha_i * (r_spatial + lambda * r_craft) + alpha_e * r_extrinsic`
+- **Combined reward** — `r = alpha_i * norm(r_intr) + alpha_e * r_extrinsic`, where `norm` adaptively scales `r_intr` to match `mean(|r_extr|)` via cross-episode EMA, so `alpha_i / alpha_e` is the true relative weight.
 
-Key parameters: `--intrinsic_spatial`, `--alpha_i`, `--alpha_e`, `--craft_weight` (lambda).
+Key parameters: `--intrinsic_spatial`, `--alpha_i` (default 0.1), `--alpha_e` (default 1.0), `--craft_weight` (lambda, default 1.0).
 
 #### 4. Online Continual-Learning Metrics (`train_craftax.py` — `CraftaxMetrics`)
 
@@ -265,7 +265,7 @@ A systematic ablation study is provided via `run_ablation.py`. It covers 13 expe
 |---|---|---|
 | **A** | Core comparison | A1 baseline, A2 P2E, A3 intrinsic, A4 P2E+intrinsic |
 | **B** | Craft-weight sensitivity | B1 spatial-only, B2 light (0.5), B3 heavy (2.0) |
-| **C** | Reward scale (alpha_i/alpha_e) | C1 low-intrinsic, C2 low-extrinsic, C3 balanced-low |
+| **C** | Reward scale (alpha_i sensitivity) | C1 tiny (0.01), C2 high (0.3), C3 equal (1.0) |
 | **D** | Replay strategy (NLR interaction) | D1 NLR+P2E, D2 NLR+intrinsic, D3 NLR+P2E+intrinsic |
 
 ### Default Hyperparameters
