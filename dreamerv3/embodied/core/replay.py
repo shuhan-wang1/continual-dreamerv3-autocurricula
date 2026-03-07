@@ -69,6 +69,7 @@ class Replay:
 
     self.metrics = {'samples': 0, 'inserts': 0, 'updates': 0}
     self.last_inserted_itemid = None  # Track last inserted item for NLR
+    self._last_inserted_by_worker = {}  # Per-worker last inserted item ID
 
   def __len__(self):
     return len(self.items)
@@ -131,6 +132,8 @@ class Replay:
         self.metrics['inserts'] += 1
         chunkid, index = stream.popleft()
         self._insert(chunkid, index)
+        # Track per-worker last inserted item for NLR episode attribution
+        self._last_inserted_by_worker[worker] = self.last_inserted_itemid
 
         if self.online and self.lengths[worker] % self.length == 0:
           self.queue.append((chunkid, index))

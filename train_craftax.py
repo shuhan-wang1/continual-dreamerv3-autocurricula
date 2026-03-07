@@ -1112,14 +1112,19 @@ class VectorCraftaxEnv:
             if is_firsts[i]:
                 self._spatial_counts[i] = {}
                 self._inventory_seen[i] = set()
-                # Reset steps get zero reward — don't pollute counts or replay
-                combined[i] = 0.0
-                r_spatials[i] = 0.0
-                r_crafts[i] = 0.0
-                r_intrs[i] = 0.0
-                continue
-            if not self._intrinsic_spatial:
-                combined[i] = extr_rewards[i]
+            if not self._intrinsic_spatial or is_firsts[i]:
+                # Reset steps get zero reward; also skip if intrinsic disabled.
+                # Still register initial obs in counts below (fall-through on
+                # is_first populates _spatial_counts/_inventory_seen so the
+                # second step sees the first obs as already visited, matching
+                # CraftaxWrapper behavior).
+                if is_firsts[i] and self._intrinsic_spatial:
+                    flat = raw_obs_batch[i]
+                    s_key = self._spatial_hash_single(flat)
+                    self._spatial_counts[i][s_key] = self._spatial_counts[i].get(s_key, 0) + 1
+                    i_key = self._inventory_hash_single(flat)
+                    self._inventory_seen[i].add(i_key)
+                combined[i] = 0.0 if is_firsts[i] else extr_rewards[i]
                 r_spatials[i] = 0.0
                 r_crafts[i] = 0.0
                 r_intrs[i] = 0.0
@@ -1807,7 +1812,7 @@ def train_single(make_env, config, args, env_name=None):
 
         # NLR: track newly inserted item keys for this worker's episode
         if nlr_active and worker in episode_item_keys:
-            cur_id = replay.last_inserted_itemid
+            cur_id = replay._last_inserted_by_worker.get(worker)
             if cur_id is not None and cur_id != _prev_inserted_id.get(worker):
                 episode_item_keys[worker].append(cur_id)
                 _prev_inserted_id[worker] = cur_id
@@ -2308,7 +2313,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
 
                 # NLR: track newly inserted item keys for this worker's episode
                 if cl_nlr_active and worker in cl_episode_item_keys:
-                    cur_id = replay.last_inserted_itemid
+                    cur_id = replay._last_inserted_by_worker.get(worker)
                     if cur_id is not None and cur_id != cl_prev_inserted_id.get(worker):
                         cl_episode_item_keys[worker].append(cur_id)
                         cl_prev_inserted_id[worker] = cur_id
