@@ -267,6 +267,10 @@ class Agent(embodied.jax.Agent):
         pred = head(disag_inp, 2)
         disag_loss = disag_loss + pred.loss(disag_tgt)
       disag_loss = disag_loss / self._disag_models
+      # Normalize by target dimension so disag loss magnitude is comparable
+      # to other per-element losses (dyn, rep, etc.).  Without this, the
+      # 3840-dim log-prob sum overwhelms the optimizer.
+      disag_loss = disag_loss / max(1, self._disag_target_dim)
       losses['disag'] = jnp.concatenate(
           [disag_loss, jnp.zeros((B, 1))], axis=1)
 
