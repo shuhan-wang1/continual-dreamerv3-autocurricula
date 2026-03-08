@@ -127,7 +127,7 @@ python train.py --env_type craftax \
     --cl --num_tasks 2 --num_task_repeats 3 \
     --steps 250000 \
     --nlr_privileged_sampling \
-    --plan2explore --expl_intr_scale 0.9 --expl_extr_scale 0.9 \
+    --plan2explore --expl_intr_scale 0.9 \
     --tag cl_nlr_p2e
 ```
 
@@ -223,7 +223,6 @@ Choose **one** of the following strategies (they are mutually exclusive):
 | `--disag_models` | Number of ensemble heads for disagreement | `10` |
 | `--disag_target` | Prediction target: `feat` (deter+stoch), `stoch`, or `deter` | `feat` |
 | `--expl_intr_scale` | Scale of intrinsic (disagreement) reward | `0.9` |
-| `--expl_extr_scale` | Scale of extrinsic (task) reward mixed during exploration | `0.9` |
 | `--sep_exp_eval_policies` | Use separate exploration and evaluation policies | `False` |
 | `--rssm_full_recon` | Reconstruct obs, discount, and rewards (not just obs) | `False` |
 

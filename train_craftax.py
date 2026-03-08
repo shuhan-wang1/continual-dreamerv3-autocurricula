@@ -1362,10 +1362,6 @@ def make_agent(config, env, args=None):
             'disag_models': getattr(args, 'disag_models', 10),
             'disag_target': getattr(args, 'disag_target', 'feat'),
             'expl_intr_scale': getattr(args, 'expl_intr_scale', 0.9),
-            'expl_extr_scale': getattr(args, 'expl_extr_scale', 0.9),
-            # Tell agent whether env reward already has intrinsic shaping
-            # to avoid double-scaling in P2E imagination reward.
-            'env_reward_shaped': getattr(args, 'intrinsic_spatial', False),
         }
     agent_config = elements.Config(
         **config.agent,

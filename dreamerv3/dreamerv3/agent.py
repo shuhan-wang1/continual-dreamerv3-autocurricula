@@ -77,13 +77,11 @@ class Agent(embodied.jax.Agent):
     # counting + craft-novelty), the world model predicts the shaped reward.
     # In that case, don't re-scale it with expl_extr_scale to avoid double-
     # counting the intrinsic component.
-    self._env_reward_shaped = getattr(config, 'env_reward_shaped', False)
     self.p2e_ensemble = []
     if self.p2e_enabled:
       self._disag_models = getattr(config, 'disag_models', 10)
       self._disag_target = getattr(config, 'disag_target', 'feat')
       self._expl_intr_scale = getattr(config, 'expl_intr_scale', 0.9)
-      self._expl_extr_scale = getattr(config, 'expl_extr_scale', 0.9)
       # Determine target dimension based on disag_target
       rssm_cfg = config.dyn.rssm
       if self._disag_target == 'stoch':
@@ -120,7 +118,7 @@ class Agent(embodied.jax.Agent):
       print(f'Plan2Explore enabled: {self._disag_models} ensemble heads, '
             f'target={self._disag_target}, act_dim={self._act_dim}, '
             f'intr_scale={self._expl_intr_scale}, '
-            f'extr_scale={self._expl_extr_scale}')
+            f'extr_scale=1.0 (always full)')
 
     self.modules = [
         self.dyn, self.enc, self.dec, self.rew, self.con, self.pol, self.val]
@@ -313,16 +311,10 @@ class Agent(embodied.jax.Agent):
       intr_rew = epistemic.mean(axis=-1)          # [B*K, H+1]
       # Stop gradient: ensemble should only be trained via disag_loss,
       # not via the imagination policy/value loss.
-      if self._env_reward_shaped:
-        # Env reward already contains intrinsic shaping (e.g. spatial +
-        # craft rewards mixed via alpha_i/alpha_e).  The world model predicts
-        # this shaped reward, so pass it through at scale 1.0 to avoid
-        # double-scaling the intrinsic component.
-        combined_rew = (self._expl_intr_scale * jax.lax.stop_gradient(intr_rew)
-                        + extr_rew)
-      else:
-        combined_rew = (self._expl_intr_scale * jax.lax.stop_gradient(intr_rew)
-                        + self._expl_extr_scale * extr_rew)
+      # Always keep extrinsic reward at full scale (1.0×).  Only the
+      # disagreement intrinsic reward is scaled by expl_intr_scale.
+      combined_rew = (self._expl_intr_scale * jax.lax.stop_gradient(intr_rew)
+                      + extr_rew)
       metrics['p2e/intr_rew'] = intr_rew.mean()
       metrics['p2e/extr_rew'] = extr_rew.mean()
       metrics['p2e/combined_rew'] = combined_rew.mean()

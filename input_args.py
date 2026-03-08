@@ -294,8 +294,6 @@ def parse_craftax_args(args=None):
                         help='Target for ensemble disagreement prediction (feat = deter + stoch).')
     parser.add_argument('--expl_intr_scale', type=float, default=0.9,
                         help="scale of the intrinsic reward (PDF Section 5.1: α_i=0.9).")
-    parser.add_argument('--expl_extr_scale', type=float, default=0.9,
-                        help="scale of the extrinsic reward (PDF Section 5.1: α_e=0.9).")
     parser.add_argument('--sep_exp_eval_policies', default=False, action='store_true',
                         help='Whether to use separate exploration and evaluation policies.')
     parser.add_argument('--rssm_full_recon', default=False, action='store_true',
