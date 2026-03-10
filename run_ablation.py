@@ -183,23 +183,15 @@ EXPERIMENTS["C3_equal_weight"] = {
 }
 
 # ---------- Group D: Replay Strategy Comparison ----------
-# All experiments use the same exploration setup (P2E + Spatial+Craft intrinsic)
-# to isolate the effect of the replay sampling strategy.
+# Pure baseline (no P2E, no intrinsic) — isolate the replay strategy effect.
 # Baseline replay = reservoir eviction + 50:50 recent/uniform (the default).
-
-_D_BASE_ARGS = {
-    "plan2explore": True,
-    "intrinsic_spatial": True,
-    "alpha_i": 0.1,
-    "alpha_e": 1.0,
-    "craft_weight": 1.0,
-}
+# Group E (future) will add intrinsic/P2E on top of the best strategy from D.
 
 EXPERIMENTS["D1_fifty_fifty"] = {
     "group": "D",
     "desc": "50:50 reservoir+recent replay (default baseline)",
     "args": {
-        **_D_BASE_ARGS,
+        "no_plan2explore": True,
         # reservoir_eviction=True and recent_frac=0.5 are already defaults
     },
 }
@@ -207,7 +199,7 @@ EXPERIMENTS["D2_nlr"] = {
     "group": "D",
     "desc": "NLR non-privileged (2D grid novelty-learnability-recency)",
     "args": {
-        **_D_BASE_ARGS,
+        "no_plan2explore": True,
         "nlr_sampling": True,
     },
 }
@@ -215,7 +207,7 @@ EXPERIMENTS["D3_nlu"] = {
     "group": "D",
     "desc": "NLU non-privileged (2D grid novelty-learnability-uniform)",
     "args": {
-        **_D_BASE_ARGS,
+        "no_plan2explore": True,
         "nlu_sampling": True,
     },
 }
@@ -223,7 +215,7 @@ EXPERIMENTS["D4_nlr_priv"] = {
     "group": "D",
     "desc": "NLR privileged (per-achievement novelty-learnability-recency)",
     "args": {
-        **_D_BASE_ARGS,
+        "no_plan2explore": True,
         "nlr_privileged_sampling": True,
     },
 }
@@ -231,7 +223,7 @@ EXPERIMENTS["D5_nlu_priv"] = {
     "group": "D",
     "desc": "NLU privileged (per-achievement novelty-learnability-uniform)",
     "args": {
-        **_D_BASE_ARGS,
+        "no_plan2explore": True,
         "nlu_privileged_sampling": True,
     },
 }

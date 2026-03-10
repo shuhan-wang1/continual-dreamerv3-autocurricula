@@ -267,8 +267,8 @@ A systematic ablation study is provided via `run_ablation.py`. It covers 15 expe
 | **C** | Reward scale (alpha_i sensitivity) | C1 tiny (0.01), C2 high (0.3), C3 equal (1.0) |
 | **D** | Replay strategy comparison | D1 50:50 baseline, D2 NLR, D3 NLU, D4 NLR-privileged, D5 NLU-privileged |
 
-Group D uses a fixed exploration setup (P2E + Spatial+Craft intrinsic) across all experiments to isolate the effect of the replay sampling strategy:
-- **D1** — 50:50 reservoir+recent (default baseline, same replay as Groups A–C)
+Group D uses pure DreamerV3 baseline (no P2E, no intrinsic) to isolate the effect of the replay sampling strategy:
+- **D1** — 50:50 reservoir+recent (default baseline, same replay as A1)
 - **D2** — NLR non-privileged: 2D (reward × length) grid novelty-learnability-recency
 - **D3** — NLU non-privileged: 2D grid novelty-learnability-uniform
 - **D4** — NLR privileged: per-achievement novelty-learnability-recency
