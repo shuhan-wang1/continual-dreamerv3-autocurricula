@@ -1498,6 +1498,16 @@ def make_selector(args, capacity, seed=0):
               f'grid={args.nlr_grid_length_bins}x{args.nlr_grid_reward_bins}')
         return selector
 
+    # ------------------------------------------------------------------
+    # Reward-weighted sampling
+    # ------------------------------------------------------------------
+    if getattr(args, 'reward_sampling', False):
+        temperature = getattr(args, 'reward_sampling_temp', 1.0)
+        selector = selectors.RewardWeighted(temperature=temperature, seed=seed)
+        print(f'[RewardWeighted] Reward-weighted sampling enabled '
+              f'(temperature={temperature})')
+        return selector
+
     # Check if using 50:50 sampling (Continual-Dreamer strategy)
     # This is the recommended setup for continual learning with 8+ tasks.
     # The "recent" half uses a triangular (linearly decaying) distribution

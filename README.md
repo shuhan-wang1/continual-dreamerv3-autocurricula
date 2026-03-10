@@ -256,7 +256,7 @@ JAX pre-allocates GPU memory at startup. The default allocation is 70% of VRAM (
 
 ## Ablation Experiments
 
-A systematic ablation study is provided via `run_ablation.py`. It covers 13 experiment configurations across 4 groups, each run with 3 seeds (39 total runs).
+A systematic ablation study is provided via `run_ablation.py`. It covers 15 experiment configurations across 4 groups, each run with 3 seeds (45 total runs).
 
 ### Experiment Groups
 
@@ -265,7 +265,14 @@ A systematic ablation study is provided via `run_ablation.py`. It covers 13 expe
 | **A** | Core comparison | A1 baseline, A2 P2E, A3 intrinsic, A4 P2E+intrinsic |
 | **B** | Craft-weight sensitivity | B1 spatial-only, B2 light (0.5), B3 heavy (2.0) |
 | **C** | Reward scale (alpha_i sensitivity) | C1 tiny (0.01), C2 high (0.3), C3 equal (1.0) |
-| **D** | Replay strategy (NLR interaction) | D1 NLR+P2E, D2 NLR+intrinsic, D3 NLR+P2E+intrinsic |
+| **D** | Replay strategy comparison | D1 50:50 baseline, D2 NLR, D3 NLU, D4 NLR-privileged, D5 NLU-privileged |
+
+Group D uses a fixed exploration setup (P2E + Spatial+Craft intrinsic) across all experiments to isolate the effect of the replay sampling strategy:
+- **D1** — 50:50 reservoir+recent (default baseline, same replay as Groups A–C)
+- **D2** — NLR non-privileged: 2D (reward × length) grid novelty-learnability-recency
+- **D3** — NLU non-privileged: 2D grid novelty-learnability-uniform
+- **D4** — NLR privileged: per-achievement novelty-learnability-recency
+- **D5** — NLU privileged: per-achievement novelty-learnability-uniform
 
 ### Default Hyperparameters
 
@@ -274,7 +281,7 @@ All experiments use: `--steps 1000000 --batch_size 16 --batch_length 64 --envs 1
 ### Running Experiments
 
 ```sh
-# Run all 39 experiments (13 configs × 3 seeds)
+# Run all 45 experiments (15 configs × 3 seeds)
 python run_ablation.py
 
 # Dry run — print commands without executing
@@ -284,7 +291,7 @@ python run_ablation.py --dry_run
 python run_ablation.py --only A
 
 # Run specific experiments
-python run_ablation.py --only A1_baseline,D3_nlr_p2e_intrinsic
+python run_ablation.py --only A1_baseline,D4_nlr_priv
 
 # Skip a group
 python run_ablation.py --skip C,D

@@ -11,7 +11,7 @@ Experiment groups:
   A  Core comparison      (baseline, P2E, intrinsic, P2E+intrinsic)
   B  Component ablation   (craft_weight sensitivity)
   C  Reward scale          (alpha_i sensitivity: 0.01, 0.3, 1.0 around default 0.1)
-  D  Replay strategy       (NLR interaction with intrinsic / P2E)
+  D  Replay strategy       (50:50, NLR, NLU — privileged & non-privileged)
 
 Output directory structure:
   experiment_results/ablation/
@@ -29,7 +29,7 @@ Output directory structure:
   └── ...
 
 Usage:
-  python run_ablation.py                          # run all 39 experiments
+  python run_ablation.py                          # run all 45 experiments
   python run_ablation.py --dry_run                # print commands only
   python run_ablation.py --only A                 # run group A only (12 runs)
   python run_ablation.py --only A1,A2             # run specific experiments
@@ -182,37 +182,57 @@ EXPERIMENTS["C3_equal_weight"] = {
     },
 }
 
-# ---------- Group D: Replay Strategy Interaction (NLR) ----------
-EXPERIMENTS["D1_nlr_p2e"] = {
+# ---------- Group D: Replay Strategy Comparison ----------
+# All experiments use the same exploration setup (P2E + Spatial+Craft intrinsic)
+# to isolate the effect of the replay sampling strategy.
+# Baseline replay = reservoir eviction + 50:50 recent/uniform (the default).
+
+_D_BASE_ARGS = {
+    "plan2explore": True,
+    "intrinsic_spatial": True,
+    "alpha_i": 0.1,
+    "alpha_e": 1.0,
+    "craft_weight": 1.0,
+}
+
+EXPERIMENTS["D1_fifty_fifty"] = {
     "group": "D",
-    "desc": "NLR replay + P2E (no intrinsic)",
+    "desc": "50:50 reservoir+recent replay (default baseline)",
     "args": {
-        "plan2explore": True,
+        **_D_BASE_ARGS,
+        # reservoir_eviction=True and recent_frac=0.5 are already defaults
+    },
+}
+EXPERIMENTS["D2_nlr"] = {
+    "group": "D",
+    "desc": "NLR non-privileged (2D grid novelty-learnability-recency)",
+    "args": {
+        **_D_BASE_ARGS,
         "nlr_sampling": True,
     },
 }
-EXPERIMENTS["D2_nlr_intrinsic"] = {
+EXPERIMENTS["D3_nlu"] = {
     "group": "D",
-    "desc": "NLR replay + Spatial+Craft intrinsic (no P2E)",
+    "desc": "NLU non-privileged (2D grid novelty-learnability-uniform)",
     "args": {
-        "no_plan2explore": True,
-        "nlr_sampling": True,
-        "intrinsic_spatial": True,
-        "alpha_i": 0.1,
-        "alpha_e": 1.0,
-        "craft_weight": 1.0,
+        **_D_BASE_ARGS,
+        "nlu_sampling": True,
     },
 }
-EXPERIMENTS["D3_nlr_p2e_intrinsic"] = {
+EXPERIMENTS["D4_nlr_priv"] = {
     "group": "D",
-    "desc": "NLR replay + P2E + Spatial+Craft intrinsic",
+    "desc": "NLR privileged (per-achievement novelty-learnability-recency)",
     "args": {
-        "plan2explore": True,
-        "nlr_sampling": True,
-        "intrinsic_spatial": True,
-        "alpha_i": 0.1,
-        "alpha_e": 1.0,
-        "craft_weight": 1.0,
+        **_D_BASE_ARGS,
+        "nlr_privileged_sampling": True,
+    },
+}
+EXPERIMENTS["D5_nlu_priv"] = {
+    "group": "D",
+    "desc": "NLU privileged (per-achievement novelty-learnability-uniform)",
+    "args": {
+        **_D_BASE_ARGS,
+        "nlu_privileged_sampling": True,
     },
 }
 
@@ -379,7 +399,7 @@ def print_experiment_table(experiments, seeds):
             elif current_group == "C":
                 print(f"  --- Group C: Reward Scale Sensitivity ---")
             elif current_group == "D":
-                print(f"  --- Group D: Replay Strategy (NLR) ---")
+                print(f"  --- Group D: Replay Strategy Comparison ---")
         print(f"  {exp_id:<25} [{cfg['group']}]    {cfg['desc']}")
     print("=" * 80 + "\n")
 
