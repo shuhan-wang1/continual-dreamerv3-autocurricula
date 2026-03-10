@@ -29,7 +29,7 @@ Output directory structure:
   └── ...
 
 Usage:
-  python run_ablation.py                          # run all 45 experiments
+  python run_ablation.py                          # run all 42 experiments
   python run_ablation.py --dry_run                # print commands only
   python run_ablation.py --only A                 # run group A only (12 runs)
   python run_ablation.py --only A1,A2             # run specific experiments
@@ -184,18 +184,11 @@ EXPERIMENTS["C3_equal_weight"] = {
 
 # ---------- Group D: Replay Strategy Comparison ----------
 # Pure baseline (no P2E, no intrinsic) — isolate the replay strategy effect.
-# Baseline replay = reservoir eviction + 50:50 recent/uniform (the default).
+# The default 50:50 reservoir+recent baseline is already covered by A1_baseline,
+# so Group D only tests the 4 NLR/NLU variants against it.
 # Group E (future) will add intrinsic/P2E on top of the best strategy from D.
 
-EXPERIMENTS["D1_fifty_fifty"] = {
-    "group": "D",
-    "desc": "50:50 reservoir+recent replay (default baseline)",
-    "args": {
-        "no_plan2explore": True,
-        # reservoir_eviction=True and recent_frac=0.5 are already defaults
-    },
-}
-EXPERIMENTS["D2_nlr"] = {
+EXPERIMENTS["D1_nlr"] = {
     "group": "D",
     "desc": "NLR non-privileged (2D grid novelty-learnability-recency)",
     "args": {
@@ -203,7 +196,7 @@ EXPERIMENTS["D2_nlr"] = {
         "nlr_sampling": True,
     },
 }
-EXPERIMENTS["D3_nlu"] = {
+EXPERIMENTS["D2_nlu"] = {
     "group": "D",
     "desc": "NLU non-privileged (2D grid novelty-learnability-uniform)",
     "args": {
@@ -211,7 +204,7 @@ EXPERIMENTS["D3_nlu"] = {
         "nlu_sampling": True,
     },
 }
-EXPERIMENTS["D4_nlr_priv"] = {
+EXPERIMENTS["D3_nlr_priv"] = {
     "group": "D",
     "desc": "NLR privileged (per-achievement novelty-learnability-recency)",
     "args": {
@@ -219,7 +212,7 @@ EXPERIMENTS["D4_nlr_priv"] = {
         "nlr_privileged_sampling": True,
     },
 }
-EXPERIMENTS["D5_nlu_priv"] = {
+EXPERIMENTS["D4_nlu_priv"] = {
     "group": "D",
     "desc": "NLU privileged (per-achievement novelty-learnability-uniform)",
     "args": {

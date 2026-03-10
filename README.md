@@ -256,7 +256,7 @@ JAX pre-allocates GPU memory at startup. The default allocation is 70% of VRAM (
 
 ## Ablation Experiments
 
-A systematic ablation study is provided via `run_ablation.py`. It covers 15 experiment configurations across 4 groups, each run with 3 seeds (45 total runs).
+A systematic ablation study is provided via `run_ablation.py`. It covers 14 experiment configurations across 4 groups, each run with 3 seeds (42 total runs).
 
 ### Experiment Groups
 
@@ -265,14 +265,13 @@ A systematic ablation study is provided via `run_ablation.py`. It covers 15 expe
 | **A** | Core comparison | A1 baseline, A2 P2E, A3 intrinsic, A4 P2E+intrinsic |
 | **B** | Craft-weight sensitivity | B1 spatial-only, B2 light (0.5), B3 heavy (2.0) |
 | **C** | Reward scale (alpha_i sensitivity) | C1 tiny (0.01), C2 high (0.3), C3 equal (1.0) |
-| **D** | Replay strategy comparison | D1 50:50 baseline, D2 NLR, D3 NLU, D4 NLR-privileged, D5 NLU-privileged |
+| **D** | Replay strategy comparison | D1 NLR, D2 NLU, D3 NLR-privileged, D4 NLU-privileged |
 
-Group D uses pure DreamerV3 baseline (no P2E, no intrinsic) to isolate the effect of the replay sampling strategy:
-- **D1** — 50:50 reservoir+recent (default baseline, same replay as A1)
-- **D2** — NLR non-privileged: 2D (reward × length) grid novelty-learnability-recency
-- **D3** — NLU non-privileged: 2D grid novelty-learnability-uniform
-- **D4** — NLR privileged: per-achievement novelty-learnability-recency
-- **D5** — NLU privileged: per-achievement novelty-learnability-uniform
+Group D uses pure DreamerV3 baseline (no P2E, no intrinsic) to isolate the effect of the replay sampling strategy. The default 50:50 reservoir+recent baseline is already A1, so Group D only adds the 4 NLR/NLU variants:
+- **D1** — NLR non-privileged: 2D (reward × length) grid novelty-learnability-recency
+- **D2** — NLU non-privileged: 2D grid novelty-learnability-uniform
+- **D3** — NLR privileged: per-achievement novelty-learnability-recency
+- **D4** — NLU privileged: per-achievement novelty-learnability-uniform
 
 ### Default Hyperparameters
 
@@ -281,7 +280,7 @@ All experiments use: `--steps 1000000 --batch_size 16 --batch_length 64 --envs 1
 ### Running Experiments
 
 ```sh
-# Run all 45 experiments (15 configs × 3 seeds)
+# Run all 42 experiments (14 configs × 3 seeds)
 python run_ablation.py
 
 # Dry run — print commands without executing
@@ -291,7 +290,7 @@ python run_ablation.py --dry_run
 python run_ablation.py --only A
 
 # Run specific experiments
-python run_ablation.py --only A1_baseline,D4_nlr_priv
+python run_ablation.py --only A1_baseline,D3_nlr_priv
 
 # Skip a group
 python run_ablation.py --skip C,D
