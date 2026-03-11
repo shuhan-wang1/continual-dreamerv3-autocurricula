@@ -18,6 +18,7 @@ Usage:
 """
 
 import argparse
+import csv
 import json
 import math
 import os
@@ -503,6 +504,59 @@ def aggregate_derived_series(
 
 
 # ============================================================================
+# Data Saving Helpers
+# ============================================================================
+
+def save_timeseries_csv(filepath: str, steps: np.ndarray,
+                        series: Dict[str, Tuple[np.ndarray, np.ndarray]]):
+    """Save time-series data as CSV.
+
+    Args:
+        filepath: output CSV path
+        steps: common step array
+        series: {exp_id: (mean_array, std_array)}
+    """
+    if len(steps) == 0:
+        return
+    with open(filepath, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        header = ["step"]
+        for eid in series:
+            header += [f"{eid}_mean", f"{eid}_std"]
+        writer.writerow(header)
+        for i in range(len(steps)):
+            row = [f"{steps[i]:.0f}"]
+            for eid in series:
+                m, s = series[eid]
+                row += [f"{m[i]:.6f}", f"{s[i]:.6f}"]
+            writer.writerow(row)
+
+
+def save_bar_csv(filepath: str, exp_ids: List[str], groups: List[str],
+                 means: List[float], stds: List[float]):
+    """Save bar chart data as CSV."""
+    if not exp_ids:
+        return
+    with open(filepath, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["exp_id", "group", "mean", "std"])
+        for eid, g, m, s in zip(exp_ids, groups, means, stds):
+            writer.writerow([eid, g, f"{m:.6f}", f"{s:.6f}"])
+
+
+def save_matrix_csv(filepath: str, row_labels: List[str],
+                    col_labels: List[str], matrix: np.ndarray):
+    """Save a 2D matrix as CSV with row/column labels."""
+    if matrix.size == 0:
+        return
+    with open(filepath, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["exp_id"] + col_labels)
+        for i, label in enumerate(row_labels):
+            writer.writerow([label] + [f"{v:.6f}" for v in matrix[i]])
+
+
+# ============================================================================
 # Plotting Functions
 # ============================================================================
 
@@ -527,12 +581,16 @@ def plot_group_learning_curves(
 
     fig, ax = plt.subplots(figsize=(10, 5))
     idx = 0
+    csv_series = OrderedDict()
+    common_steps = None
     for exp_id, exp_data in group_exps.items():
         steps, mean, std = aggregate_across_seeds(
             exp_data, metric_key, step_key=step_key, source=source
         )
         if len(steps) == 0:
             continue
+        common_steps = steps
+        csv_series[exp_id] = (mean, std)
         color = get_exp_color(exp_id, group, idx)
         sm = smooth(mean, smooth_window)
         ax.plot(steps, sm, color=color, linewidth=1.8, label=exp_id)
@@ -551,9 +609,13 @@ def plot_group_learning_curves(
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
 
-    fname = f"group_{group}_{metric_key.replace('/', '_')}.{fmt}"
-    fig.savefig(os.path.join(outdir, fname), dpi=150)
+    fname_base = f"group_{group}_{metric_key.replace('/', '_')}"
+    fig.savefig(os.path.join(outdir, f"{fname_base}.{fmt}"), dpi=150)
     plt.close(fig)
+
+    if common_steps is not None and csv_series:
+        save_timeseries_csv(os.path.join(outdir, f"{fname_base}.csv"),
+                            common_steps, csv_series)
 
 
 def plot_group_derived_curves(
@@ -570,10 +632,14 @@ def plot_group_derived_curves(
 
     fig, ax = plt.subplots(figsize=(10, 5))
     idx = 0
+    csv_series = OrderedDict()
+    common_steps = None
     for exp_id, exp_data in group_exps.items():
         steps, mean, std = aggregate_derived_series(exp_data, extract_fn)
         if len(steps) == 0:
             continue
+        common_steps = steps
+        csv_series[exp_id] = (mean, std)
         color = get_exp_color(exp_id, group, idx)
         sm = smooth(mean, smooth_window) if smooth_window > 1 else mean
         ax.plot(steps, sm, color=color, linewidth=1.8, label=exp_id)
@@ -591,9 +657,13 @@ def plot_group_derived_curves(
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
 
-    fname = f"group_{group}_{fname_suffix}.{fmt}"
-    fig.savefig(os.path.join(outdir, fname), dpi=150)
+    fname_base = f"group_{group}_{fname_suffix}"
+    fig.savefig(os.path.join(outdir, f"{fname_base}.{fmt}"), dpi=150)
     plt.close(fig)
+
+    if common_steps is not None and csv_series:
+        save_timeseries_csv(os.path.join(outdir, f"{fname_base}.csv"),
+                            common_steps, csv_series)
 
 
 def plot_cross_group_comparison(
@@ -605,6 +675,8 @@ def plot_cross_group_comparison(
     """Plot all experiments on a single figure for cross-group comparison."""
     fig, ax = plt.subplots(figsize=(12, 6))
     group_idx_map = defaultdict(int)
+    csv_series = OrderedDict()
+    common_steps = None
 
     for exp_id, exp_data in data.items():
         group = exp_data["group"]
@@ -616,6 +688,8 @@ def plot_cross_group_comparison(
         )
         if len(steps) == 0:
             continue
+        common_steps = steps
+        csv_series[exp_id] = (mean, std)
         color = get_exp_color(exp_id, group, idx)
         sm = smooth(mean, smooth_window)
         ax.plot(steps, sm, color=color, linewidth=1.5, label=exp_id)
@@ -632,9 +706,13 @@ def plot_cross_group_comparison(
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
 
-    fname = f"all_{metric_key.replace('/', '_')}.{fmt}"
-    fig.savefig(os.path.join(outdir, fname), dpi=150)
+    fname_base = f"all_{metric_key.replace('/', '_')}"
+    fig.savefig(os.path.join(outdir, f"{fname_base}.{fmt}"), dpi=150)
     plt.close(fig)
+
+    if common_steps is not None and csv_series:
+        save_timeseries_csv(os.path.join(outdir, f"{fname_base}.csv"),
+                            common_steps, csv_series)
 
 
 def plot_cross_group_derived(
@@ -645,6 +723,8 @@ def plot_cross_group_derived(
     """Cross-group comparison for derived series."""
     fig, ax = plt.subplots(figsize=(12, 6))
     group_idx_map = defaultdict(int)
+    csv_series = OrderedDict()
+    common_steps = None
 
     for exp_id, exp_data in data.items():
         group = exp_data["group"]
@@ -654,6 +734,8 @@ def plot_cross_group_derived(
         steps, mean, std = aggregate_derived_series(exp_data, extract_fn)
         if len(steps) == 0:
             continue
+        common_steps = steps
+        csv_series[exp_id] = (mean, std)
         color = get_exp_color(exp_id, group, idx)
         sm = smooth(mean, smooth_window) if smooth_window > 1 else mean
         ax.plot(steps, sm, color=color, linewidth=1.5, label=exp_id)
@@ -666,9 +748,13 @@ def plot_cross_group_derived(
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
 
-    fname = f"all_{fname_suffix}.{fmt}"
-    fig.savefig(os.path.join(outdir, fname), dpi=150)
+    fname_base = f"all_{fname_suffix}"
+    fig.savefig(os.path.join(outdir, f"{fname_base}.{fmt}"), dpi=150)
     plt.close(fig)
+
+    if common_steps is not None and csv_series:
+        save_timeseries_csv(os.path.join(outdir, f"{fname_base}.csv"),
+                            common_steps, csv_series)
 
 
 def plot_final_bar_chart(
@@ -719,9 +805,12 @@ def plot_final_bar_chart(
             f"{m:.3f}", ha="center", va="bottom", fontsize=7,
         )
     fig.tight_layout()
-    fname = f"bar_{metric_key.replace('/', '_')}.{fmt}"
-    fig.savefig(os.path.join(outdir, fname), dpi=150)
+    fname_base = f"bar_{metric_key.replace('/', '_')}"
+    fig.savefig(os.path.join(outdir, f"{fname_base}.{fmt}"), dpi=150)
     plt.close(fig)
+
+    save_bar_csv(os.path.join(outdir, f"{fname_base}.csv"),
+                 exp_ids, groups, means, stds)
 
 
 def plot_final_bar_derived(
@@ -771,9 +860,12 @@ def plot_final_bar_derived(
             f"{m:.2f}", ha="center", va="bottom", fontsize=7,
         )
     fig.tight_layout()
-    fname = f"bar_{fname_suffix}.{fmt}"
-    fig.savefig(os.path.join(outdir, fname), dpi=150)
+    fname_base = f"bar_{fname_suffix}"
+    fig.savefig(os.path.join(outdir, f"{fname_base}.{fmt}"), dpi=150)
     plt.close(fig)
+
+    save_bar_csv(os.path.join(outdir, f"{fname_base}.csv"),
+                 exp_ids, groups, means, stds)
 
 
 def plot_achievement_heatmap(data: Dict, outdir: str, fmt: str = "png"):
@@ -836,6 +928,10 @@ def plot_achievement_heatmap(data: Dict, outdir: str, fmt: str = "png"):
     fig.savefig(os.path.join(outdir, f"achievement_heatmap.{fmt}"), dpi=150)
     plt.close(fig)
 
+    # Save full (unfiltered) heatmap data
+    save_matrix_csv(os.path.join(outdir, "achievement_heatmap.csv"),
+                    exp_ids, ach_names[:n_ach], matrix)
+
 
 def plot_score_distribution(data: Dict, outdir: str, fmt: str = "png"):
     """Stacked bar chart of final score distribution per experiment."""
@@ -884,6 +980,9 @@ def plot_score_distribution(data: Dict, outdir: str, fmt: str = "png"):
     fig.savefig(os.path.join(outdir, f"score_distribution.{fmt}"), dpi=150)
     plt.close(fig)
 
+    save_matrix_csv(os.path.join(outdir, "score_distribution.csv"),
+                    exp_ids, actual_labels, matrix)
+
 
 def plot_training_losses(data: Dict, outdir: str, fmt: str = "png",
                          smooth_window: int = 50):
@@ -929,6 +1028,8 @@ def plot_training_losses(data: Dict, outdir: str, fmt: str = "png",
             row, col = mi // ncols, mi % ncols
             ax = axes[row, col]
             group_idx_map = defaultdict(int)
+            csv_series = OrderedDict()
+            common_steps = None
             for exp_id, exp_data in group_exps.items():
                 g_idx = group_idx_map[group]
                 group_idx_map[group] += 1
@@ -941,6 +1042,8 @@ def plot_training_losses(data: Dict, outdir: str, fmt: str = "png",
                     )
                 if len(steps) == 0:
                     continue
+                common_steps = steps
+                csv_series[exp_id] = (mean, std)
                 color = get_exp_color(exp_id, group, g_idx)
                 sm = smooth(mean, smooth_window)
                 ax.plot(steps, sm, color=color, linewidth=1.3, label=exp_id)
@@ -954,6 +1057,11 @@ def plot_training_losses(data: Dict, outdir: str, fmt: str = "png",
             ax.grid(True, alpha=0.3)
             if mi == 0:
                 ax.legend(fontsize=7, loc="best")
+            # Save per-metric CSV
+            if common_steps is not None and csv_series:
+                save_timeseries_csv(
+                    os.path.join(outdir, f"group_{group}_{mk.replace('/', '_')}.csv"),
+                    common_steps, csv_series)
 
         for mi in range(n_metrics, nrows * ncols):
             row, col = mi // ncols, mi % ncols
@@ -1025,6 +1133,8 @@ def plot_p2e_metrics(data: Dict, outdir: str, fmt: str = "png",
         row, col = mi // ncols, mi % ncols
         ax = axes[row, col]
         idx = 0
+        csv_series = OrderedDict()
+        common_steps = None
         for exp_id, exp_data in p2e_exps.items():
             group = exp_data["group"]
             steps, mean, std = aggregate_across_seeds(
@@ -1036,6 +1146,8 @@ def plot_p2e_metrics(data: Dict, outdir: str, fmt: str = "png",
                 )
             if len(steps) == 0:
                 continue
+            common_steps = steps
+            csv_series[exp_id] = (mean, std)
             color = get_exp_color(exp_id, group, idx)
             sm = smooth(mean, smooth_window)
             ax.plot(steps, sm, linewidth=1.3, label=exp_id, color=color)
@@ -1049,6 +1161,11 @@ def plot_p2e_metrics(data: Dict, outdir: str, fmt: str = "png",
         ax.set_xlabel("Step", fontsize=9)
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=7, loc="best")
+        # Save per-metric CSV
+        if common_steps is not None and csv_series:
+            save_timeseries_csv(
+                os.path.join(outdir, f"p2e_{mk.replace('/', '_')}.csv"),
+                common_steps, csv_series)
 
     for mi in range(n, nrows * ncols):
         row, col = mi // ncols, mi % ncols
@@ -1091,6 +1208,8 @@ def plot_replay_metrics(data: Dict, outdir: str, fmt: str = "png",
         row, col = mi // ncols, mi % ncols
         ax = axes[row, col]
         group_idx_map = defaultdict(int)
+        csv_series = OrderedDict()
+        common_steps = None
         for exp_id, exp_data in data.items():
             group = exp_data["group"]
             idx = group_idx_map[group]
@@ -1100,6 +1219,8 @@ def plot_replay_metrics(data: Dict, outdir: str, fmt: str = "png",
             )
             if len(steps) == 0:
                 continue
+            common_steps = steps
+            csv_series[exp_id] = (mean, std)
             color = get_exp_color(exp_id, group, idx)
             sm = smooth(mean, smooth_window)
             ax.plot(steps, sm, color=color, linewidth=1.3, label=exp_id)
@@ -1113,6 +1234,11 @@ def plot_replay_metrics(data: Dict, outdir: str, fmt: str = "png",
         ax.grid(True, alpha=0.3)
         if mi == 0:
             ax.legend(fontsize=7, loc="best")
+        # Save per-metric CSV
+        if common_steps is not None and csv_series:
+            save_timeseries_csv(
+                os.path.join(outdir, f"replay_{mk.replace('/', '_')}.csv"),
+                common_steps, csv_series)
 
     for mi in range(n, nrows * ncols):
         row, col = mi // ncols, mi % ncols
@@ -1133,7 +1259,7 @@ def plot_summary_dashboard(data: Dict, outdir: str, fmt: str = "png"):
     axes = axes.flatten()
 
     # --- Panel 0: Final Mean Return (bar) ---
-    _dashboard_bar(axes[0], data, "return_mean", "Final Mean Return")
+    d0 = _dashboard_bar(axes[0], data, "return_mean", "Final Mean Return")
 
     # --- Panel 1: Max Score (bar, derived) ---
     def _final_max_score(records):
@@ -1143,7 +1269,7 @@ def plot_summary_dashboard(data: Dict, outdir: str, fmt: str = "png"):
             if s is not None:
                 max_s = max(max_s, float(s))
         return max_s if max_s > float("-inf") else None
-    _dashboard_bar_derived(axes[1], data, _final_max_score, "Max Episode Score")
+    d1 = _dashboard_bar_derived(axes[1], data, _final_max_score, "Max Episode Score")
 
     # --- Panel 2: Max Achievements Unlocked (bar, derived) ---
     def _final_max_ach(records):
@@ -1153,26 +1279,55 @@ def plot_summary_dashboard(data: Dict, outdir: str, fmt: str = "png"):
             if ach and isinstance(ach, list):
                 mx = max(mx, count_achievements_unlocked(ach))
         return float(mx)
-    _dashboard_bar_derived(axes[2], data, _final_max_ach,
-                           "Max Achievements Unlocked")
+    d2 = _dashboard_bar_derived(axes[2], data, _final_max_ach,
+                                "Max Achievements Unlocked")
 
     # --- Panel 3: Combined Intrinsic Reward (bar) ---
-    _dashboard_bar(axes[3], data, "r_intr", "Final Intrinsic Reward (combined)")
+    d3 = _dashboard_bar(axes[3], data, "r_intr", "Final Intrinsic Reward (combined)")
 
     # --- Panel 4: Aggregate Forgetting (bar) ---
-    _dashboard_bar(axes[4], data, "aggregate_forgetting", "Aggregate Forgetting")
+    d4 = _dashboard_bar(axes[4], data, "aggregate_forgetting", "Aggregate Forgetting")
 
     # --- Panel 5: Spatial Intrinsic Reward (bar) ---
-    _dashboard_bar(axes[5], data, "r_spatial", "Final Spatial Intrinsic Reward")
+    d5 = _dashboard_bar(axes[5], data, "r_spatial", "Final Spatial Intrinsic Reward")
 
     fig.suptitle("Ablation Study — Summary Dashboard", fontsize=14, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     fig.savefig(os.path.join(outdir, f"summary_dashboard.{fmt}"), dpi=150)
     plt.close(fig)
 
+    # Save dashboard data as a combined CSV
+    dashboard_panels = [
+        ("return_mean", d0), ("max_score", d1), ("max_achievements", d2),
+        ("r_intr", d3), ("aggregate_forgetting", d4), ("r_spatial", d5),
+    ]
+    # Build a combined table: exp_id, metric1_mean, metric1_std, ...
+    all_exp_ids = set()
+    for _, (eids, _, _) in dashboard_panels:
+        all_exp_ids.update(eids)
+    all_exp_ids = sorted(all_exp_ids)
+    if all_exp_ids:
+        csv_path = os.path.join(outdir, "summary_dashboard.csv")
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            header = ["exp_id"]
+            for name, _ in dashboard_panels:
+                header += [f"{name}_mean", f"{name}_std"]
+            writer.writerow(header)
+            for eid in all_exp_ids:
+                row = [eid]
+                for _, (eids, means, stds) in dashboard_panels:
+                    if eid in eids:
+                        idx = eids.index(eid)
+                        row += [f"{means[idx]:.6f}", f"{stds[idx]:.6f}"]
+                    else:
+                        row += ["", ""]
+                writer.writerow(row)
+
 
 def _dashboard_bar(ax, data, metric_key, title):
-    """Helper: draw a bar subplot for a standard metric."""
+    """Helper: draw a bar subplot for a standard metric.
+    Returns (exp_ids, means, stds) for data saving."""
     exp_ids, means, stds, colors = [], [], [], []
     group_idx_map = defaultdict(int)
     for exp_id, exp_data in data.items():
@@ -1195,7 +1350,7 @@ def _dashboard_bar(ax, data, metric_key, title):
 
     if not exp_ids:
         ax.set_visible(False)
-        return
+        return exp_ids, means, stds
 
     x = np.arange(len(exp_ids))
     bars = ax.bar(x, means, yerr=stds, capsize=3, color=colors,
@@ -1207,10 +1362,12 @@ def _dashboard_bar(ax, data, metric_key, title):
     for bar, m in zip(bars, means):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
                 f"{m:.3f}", ha="center", va="bottom", fontsize=6)
+    return exp_ids, means, stds
 
 
 def _dashboard_bar_derived(ax, data, extract_fn, title):
-    """Helper: draw a bar subplot for a derived metric."""
+    """Helper: draw a bar subplot for a derived metric.
+    Returns (exp_ids, means, stds) for data saving."""
     exp_ids, means, stds, colors = [], [], [], []
     group_idx_map = defaultdict(int)
     for exp_id, exp_data in data.items():
@@ -1232,7 +1389,7 @@ def _dashboard_bar_derived(ax, data, extract_fn, title):
 
     if not exp_ids:
         ax.set_visible(False)
-        return
+        return exp_ids, means, stds
 
     x = np.arange(len(exp_ids))
     bars = ax.bar(x, means, yerr=stds, capsize=3, color=colors,
@@ -1244,6 +1401,7 @@ def _dashboard_bar_derived(ax, data, extract_fn, title):
     for bar, m in zip(bars, means):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
                 f"{m:.2f}", ha="center", va="bottom", fontsize=6)
+    return exp_ids, means, stds
 
 
 # ============================================================================
@@ -1660,6 +1818,7 @@ def main():
     plot_files = sorted(
         f for f in os.listdir(outdir)
         if f.endswith(f".{fmt}") or f.endswith(".txt") or f.endswith(".json")
+        or f.endswith(".csv")
     )
     print(f"Generated {len(plot_files)} files:")
     for f in plot_files:
