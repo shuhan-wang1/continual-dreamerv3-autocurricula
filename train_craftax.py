@@ -589,7 +589,14 @@ TILES_R, TILES_C, N_CH = 9, 11, 83
 MAP_SIZE = TILES_R * TILES_C * N_CH   # 8217
 INV_START = MAP_SIZE                   # 8217
 INV_SIZE = 51
+INV_CRAFT_SIZE = 16  # indices 0-15: materials (0-9) + equipment (10-15)
 N_BLOCK_CH = 37  # channels 0-36 are one-hot block type
+
+# --- Spatial novelty: binary first-visit indicator (Eq.10) ---
+# Hash the visible block-type layout per tile → bytes key.
+# r_spatial = 1.0 if the hash has never been seen this episode, else 0.0.
+# This directly incentivises visiting as many unique tile views as possible
+# and is immune to "walk in circles" exploitation (1/√N was too slow to decay).
 
 
 # ============== Craftax Environment Wrapper ==============
@@ -614,7 +621,7 @@ class CraftaxWrapper(embodied.Env):
         self._alpha_i = alpha_i
         self._alpha_e = alpha_e
         self._craft_weight = craft_weight
-        self._spatial_counts = {}    # spatial hash → visit count (episodic)
+        self._spatial_seen = set()   # set of spatial hashes (episodic)
         self._inventory_seen = set() # set of inventory hashes (episodic)
         # Adaptive intrinsic reward normalizer (cross-episode EMA).
         # Scales r_intr so that mean(r_intr_norm) ≈ mean(|r_extr|), making
@@ -784,14 +791,28 @@ class CraftaxWrapper(embodied.Env):
         return int(_TIER_ARRAY[:len(mask)][mask].max())
 
     def _spatial_hash(self, flat_obs):
-        """Hash visual map: argmax of block-type channels per tile → bytes key."""
+        """Hash visible block-type layout → bytes key."""
         map_obs = flat_obs[:MAP_SIZE].reshape(TILES_R, TILES_C, N_CH)
         block_ids = np.argmax(map_obs[:, :, :N_BLOCK_CH], axis=-1).astype(np.int8)
         return block_ids.tobytes()
 
+    def _spatial_novelty(self, flat_obs):
+        """Binary first-visit spatial reward (Eq.10).
+
+        Returns 1.0 if this tile-view has never been seen this episode, else 0.0.
+        """
+        s_key = self._spatial_hash(flat_obs)
+        r = 1.0 if s_key not in self._spatial_seen else 0.0
+        self._spatial_seen.add(s_key)
+        return r
+
     def _inventory_hash(self, flat_obs):
-        """Hash inventory vector (rounded to 1 decimal) → tuple key."""
-        inv = flat_obs[INV_START:INV_START + INV_SIZE]
+        """Hash craft-relevant inventory only: materials (0-9) + equipment (10-15).
+
+        Excludes player stats (health/food/drink/energy/...), direction,
+        and world state which change every step and drown the craft signal.
+        """
+        inv = flat_obs[INV_START:INV_START + INV_CRAFT_SIZE]
         return tuple(np.round(inv, 1))
 
     def _compute_intrinsic_reward(self, flat_obs, extr_reward):
@@ -801,10 +822,8 @@ class CraftaxWrapper(embodied.Env):
         """
         if not self._intrinsic_spatial:
             return extr_reward, 0.0, 0.0, 0.0
-        # Spatial counting (Eq.10): r_spatial = 1 / sqrt(N(phi(v_vis)))
-        s_key = self._spatial_hash(flat_obs)
-        self._spatial_counts[s_key] = self._spatial_counts.get(s_key, 0) + 1
-        r_spatial = 1.0 / np.sqrt(self._spatial_counts[s_key])
+        # Spatial novelty (Eq.10): binary first-visit indicator
+        r_spatial = self._spatial_novelty(flat_obs)
         # Craft novelty (Eq.11): r_craft = I[v_inv not in H_inv]
         i_key = self._inventory_hash(flat_obs)
         r_craft = 1.0 if i_key not in self._inventory_seen else 0.0
@@ -860,7 +879,7 @@ class CraftaxWrapper(embodied.Env):
             # Reset episode achievement tracking
             self._episode_achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
             # Reset episodic intrinsic reward state
-            self._spatial_counts = {}
+            self._spatial_seen = set()
             self._inventory_seen = set()
             achievements = self._extract_achievements_from_state(self._state) if self._track_achievements else None
             result = self._to_numpy_result(self._obs, 0.0, True, False, False, achievements)
@@ -936,7 +955,7 @@ class VectorCraftaxEnv:
         self._alpha_i = alpha_i
         self._alpha_e = alpha_e
         self._craft_weight = craft_weight
-        self._spatial_counts = [{} for _ in range(num_envs)]
+        self._spatial_seen = [set() for _ in range(num_envs)]
         self._inventory_seen = [set() for _ in range(num_envs)]
         # Adaptive intrinsic reward normalizer (shared across all envs, cross-episode)
         self._intr_ema_mean = 0.0
@@ -1109,15 +1128,15 @@ class VectorCraftaxEnv:
 
     @staticmethod
     def _spatial_hash_single(flat_obs):
-        """Hash visual map for a single env: argmax of block-type channels per tile."""
+        """Hash visible block-type layout for a single env → bytes key."""
         map_obs = flat_obs[:MAP_SIZE].reshape(TILES_R, TILES_C, N_CH)
         block_ids = np.argmax(map_obs[:, :, :N_BLOCK_CH], axis=-1).astype(np.int8)
         return block_ids.tobytes()
 
     @staticmethod
     def _inventory_hash_single(flat_obs):
-        """Hash inventory vector for a single env."""
-        inv = flat_obs[INV_START:INV_START + INV_SIZE]
+        """Hash craft-relevant inventory only: materials (0-9) + equipment (10-15)."""
+        inv = flat_obs[INV_START:INV_START + INV_CRAFT_SIZE]
         return tuple(np.round(inv, 1))
 
     def _compute_intrinsic_rewards(self, raw_obs_batch, extr_rewards, is_firsts):
@@ -1138,18 +1157,15 @@ class VectorCraftaxEnv:
         r_intrs = np.empty(N, dtype=np.float32)
         for i in range(N):
             if is_firsts[i]:
-                self._spatial_counts[i] = {}
+                self._spatial_seen[i] = set()
                 self._inventory_seen[i] = set()
             if not self._intrinsic_spatial or is_firsts[i]:
-                # Reset steps get zero reward; also skip if intrinsic disabled.
-                # Still register initial obs in counts below (fall-through on
-                # is_first populates _spatial_counts/_inventory_seen so the
-                # second step sees the first obs as already visited, matching
-                # CraftaxWrapper behavior).
+                # Reset steps get zero reward; register initial obs so the
+                # second step sees the first obs as already visited.
                 if is_firsts[i] and self._intrinsic_spatial:
                     flat = raw_obs_batch[i]
                     s_key = self._spatial_hash_single(flat)
-                    self._spatial_counts[i][s_key] = self._spatial_counts[i].get(s_key, 0) + 1
+                    self._spatial_seen[i].add(s_key)
                     i_key = self._inventory_hash_single(flat)
                     self._inventory_seen[i].add(i_key)
                 combined[i] = 0.0 if is_firsts[i] else extr_rewards[i]
@@ -1158,10 +1174,10 @@ class VectorCraftaxEnv:
                 r_intrs[i] = 0.0
                 continue
             flat = raw_obs_batch[i]
-            # Spatial counting (Eq.10)
+            # Spatial novelty (Eq.10): binary first-visit indicator
             s_key = self._spatial_hash_single(flat)
-            self._spatial_counts[i][s_key] = self._spatial_counts[i].get(s_key, 0) + 1
-            r_sp = 1.0 / np.sqrt(self._spatial_counts[i][s_key])
+            r_sp = 1.0 if s_key not in self._spatial_seen[i] else 0.0
+            self._spatial_seen[i].add(s_key)
             # Craft novelty (Eq.11)
             i_key = self._inventory_hash_single(flat)
             r_cr = 1.0 if i_key not in self._inventory_seen[i] else 0.0
