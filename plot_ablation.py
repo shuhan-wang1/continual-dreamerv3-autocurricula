@@ -46,6 +46,7 @@ GROUP_COLORS = {
     "B": ["#9467bd", "#8c564b", "#e377c2"],
     "C": ["#7f7f7f", "#bcbd22", "#17becf"],
     "D": ["#aec7e8", "#ffbb78", "#98df8a"],
+    "E": ["#e6550d"],
 }
 
 # Descriptive labels for groups
@@ -54,6 +55,7 @@ GROUP_LABELS = {
     "B": "Component Ablation (craft_weight)",
     "C": "Reward Scale Sensitivity (alpha_i)",
     "D": "Replay Strategy (NLR)",
+    "E": "Final Model (NLR + Intrinsic)",
 }
 
 # ---------------------------------------------------------------------------

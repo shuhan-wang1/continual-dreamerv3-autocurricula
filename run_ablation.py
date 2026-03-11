@@ -12,6 +12,7 @@ Experiment groups:
   B  Component ablation   (craft_weight sensitivity)
   C  Reward scale          (alpha_i sensitivity: 0.01, 0.3, 1.0 around default 0.1)
   D  Replay strategy       (50:50, NLR, NLU — privileged & non-privileged)
+  E  Final model           (NLR replay + Spatial+Craft intrinsic)
 
 Output directory structure:
   experiment_results/ablation/
@@ -186,7 +187,7 @@ EXPERIMENTS["C3_equal_weight"] = {
 # Pure baseline (no P2E, no intrinsic) — isolate the replay strategy effect.
 # The default 50:50 reservoir+recent baseline is already covered by A1_baseline,
 # so Group D only tests the 4 NLR/NLU variants against it.
-# Group E (future) will add intrinsic/P2E on top of the best strategy from D.
+# Group E combines the best replay strategy (NLR) with intrinsic rewards.
 
 EXPERIMENTS["D1_nlr"] = {
     "group": "D",
@@ -218,6 +219,20 @@ EXPERIMENTS["D4_nlu_priv"] = {
     "args": {
         "no_plan2explore": True,
         "nlu_privileged_sampling": True,
+    },
+}
+
+# ---------- Group E: Final Model (NLR + Intrinsic) ----------
+EXPERIMENTS["E1_nlr_intrinsic"] = {
+    "group": "E",
+    "desc": "Final model: NLR replay + Spatial+Craft intrinsic (no P2E)",
+    "args": {
+        "no_plan2explore": True,
+        "nlr_sampling": True,
+        "intrinsic_spatial": True,
+        "alpha_i": 0.1,
+        "alpha_e": 1.0,
+        "craft_weight": 1.0,
     },
 }
 
@@ -385,6 +400,8 @@ def print_experiment_table(experiments, seeds):
                 print(f"  --- Group C: Reward Scale Sensitivity ---")
             elif current_group == "D":
                 print(f"  --- Group D: Replay Strategy Comparison ---")
+            elif current_group == "E":
+                print(f"  --- Group E: Final Model (NLR + Intrinsic) ---")
         print(f"  {exp_id:<25} [{cfg['group']}]    {cfg['desc']}")
     print("=" * 80 + "\n")
 
