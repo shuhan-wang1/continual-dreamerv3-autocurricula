@@ -883,13 +883,17 @@ class CraftaxWrapper(embodied.Env):
             self._inventory_seen = set()
             achievements = self._extract_achievements_from_state(self._state) if self._track_achievements else None
             result = self._to_numpy_result(self._obs, 0.0, True, False, False, achievements)
-            # Compute intrinsic reward components for first step (logging only)
+            result['log/extr_reward'] = np.float32(0.0)
+            # Register initial obs in hash sets (so the second step sees it
+            # as already visited) but do NOT update EMA — reset steps always
+            # produce r_intr=2.0 / r_extr=0.0 which would bias the normalizer.
             if self._intrinsic_spatial:
                 raw_obs = np.asarray(self._extract_obs(self._obs)).flatten()
-                _, r_sp, r_cr, r_in = self._compute_intrinsic_reward(raw_obs, 0.0)
-                result['log/r_spatial'] = np.float32(r_sp)
-                result['log/r_craft'] = np.float32(r_cr)
-                result['log/r_intr'] = np.float32(r_in)
+                self._spatial_seen.add(self._spatial_hash(raw_obs))
+                self._inventory_seen.add(self._inventory_hash(raw_obs))
+                result['log/r_spatial'] = np.float32(0.0)
+                result['log/r_craft'] = np.float32(0.0)
+                result['log/r_intr'] = np.float32(0.0)
             return result
 
         # Get action - avoid Python int() conversion, keep as jax-compatible
@@ -907,6 +911,7 @@ class CraftaxWrapper(embodied.Env):
         self._done = bool(done)
         # Transfer reward scalar to CPU
         reward_val = float(reward)
+        extr_reward_val = reward_val  # save clean extrinsic before mixing
         # Compute intrinsic reward if enabled (requires raw obs on CPU)
         if self._intrinsic_spatial:
             raw_obs = np.asarray(self._extract_obs(self._obs)).flatten()
@@ -922,6 +927,8 @@ class CraftaxWrapper(embodied.Env):
         result = self._to_numpy_result(
             self._obs, reward_val, False, self._done, self._done, achievements
         )
+        # Extrinsic reward (before intrinsic mixing) for clean eval metrics
+        result['log/extr_reward'] = np.float32(extr_reward_val)
         # Add intrinsic reward logging (log/ prefix → filtered by replay.add)
         if self._intrinsic_spatial:
             result['log/r_spatial'] = np.float32(r_sp)
@@ -1189,7 +1196,10 @@ class VectorCraftaxEnv:
             r_intrs[i] = r_in
         # Adaptive normalization: scale r_intr so its running mean matches
         # the running mean of |r_extr|, preventing value explosion.
-        active_mask = ~is_firsts & (r_intrs > 0)
+        # Use ALL non-reset steps (not just steps with r_intr > 0) so that
+        # the EMA tracks unconditional means and adapts as intrinsic becomes
+        # sparser during training.
+        active_mask = ~is_firsts
         if active_mask.any():
             rate = self._ema_rate
             self._ema_count += 1
