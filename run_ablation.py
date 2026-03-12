@@ -9,8 +9,7 @@ Runs a systematic ablation study for:
 
 Experiment groups:
   A  Core comparison      (baseline, P2E, intrinsic, P2E+intrinsic)
-  B  Component ablation   (craft_weight sensitivity)
-  C  Reward scale          (alpha_i sensitivity: 0.01, 0.3, 1.0 around default 0.1)
+  B  Component ablation     (spatial-only vs craft-only vs both)
   D  Replay strategy       (50:50, NLR, NLU — privileged & non-privileged)
   E  Final model           (NLR replay + Spatial+Craft intrinsic)
 
@@ -96,9 +95,9 @@ EXPERIMENTS["A3_intrinsic"] = {
     "args": {
         "no_plan2explore": True,
         "intrinsic_spatial": True,
-        "alpha_i": 0.1,
+        "alpha_spatial": 0.1,
+        "alpha_craft": 0.3,
         "alpha_e": 1.0,
-        "craft_weight": 1.0,
     },
 }
 EXPERIMENTS["A4_p2e_intrinsic"] = {
@@ -107,79 +106,34 @@ EXPERIMENTS["A4_p2e_intrinsic"] = {
     "args": {
         "plan2explore": True,
         "intrinsic_spatial": True,
-        "alpha_i": 0.1,
+        "alpha_spatial": 0.1,
+        "alpha_craft": 0.3,
         "alpha_e": 1.0,
-        "craft_weight": 1.0,
     },
 }
 
-# ---------- Group B: Component Ablation (craft_weight) ----------
+# ---------- Group B: Component Ablation ----------
+# Answer: does spatial help? does craft help? Both needed?
 EXPERIMENTS["B1_spatial_only"] = {
     "group": "B",
-    "desc": "Spatial counting only (craft_weight=0, no P2E)",
+    "desc": "Spatial only (no craft, no P2E)",
     "args": {
         "no_plan2explore": True,
         "intrinsic_spatial": True,
-        "alpha_i": 0.1,
+        "alpha_spatial": 0.1,
+        "alpha_craft": 0.0,
         "alpha_e": 1.0,
-        "craft_weight": 0.0,
     },
 }
-EXPERIMENTS["B2_craft_light"] = {
+EXPERIMENTS["B2_craft_only"] = {
     "group": "B",
-    "desc": "Light craft-novelty (craft_weight=0.5, no P2E)",
+    "desc": "Craft only (no spatial, no P2E)",
     "args": {
         "no_plan2explore": True,
         "intrinsic_spatial": True,
-        "alpha_i": 0.1,
+        "alpha_spatial": 0.0,
+        "alpha_craft": 0.3,
         "alpha_e": 1.0,
-        "craft_weight": 0.5,
-    },
-}
-EXPERIMENTS["B3_craft_heavy"] = {
-    "group": "B",
-    "desc": "Heavy craft-novelty (craft_weight=2.0, no P2E)",
-    "args": {
-        "no_plan2explore": True,
-        "intrinsic_spatial": True,
-        "alpha_i": 0.1,
-        "alpha_e": 1.0,
-        "craft_weight": 2.0,
-    },
-}
-
-# ---------- Group C: Reward Scale Sensitivity ----------
-EXPERIMENTS["C1_tiny_intrinsic"] = {
-    "group": "C",
-    "desc": "Tiny intrinsic (alpha_i=0.01, alpha_e=1.0, no P2E)",
-    "args": {
-        "no_plan2explore": True,
-        "intrinsic_spatial": True,
-        "alpha_i": 0.01,
-        "alpha_e": 1.0,
-        "craft_weight": 1.0,
-    },
-}
-EXPERIMENTS["C2_high_intrinsic"] = {
-    "group": "C",
-    "desc": "High intrinsic (alpha_i=0.3, alpha_e=1.0, no P2E)",
-    "args": {
-        "no_plan2explore": True,
-        "intrinsic_spatial": True,
-        "alpha_i": 0.3,
-        "alpha_e": 1.0,
-        "craft_weight": 1.0,
-    },
-}
-EXPERIMENTS["C3_equal_weight"] = {
-    "group": "C",
-    "desc": "Equal weight (alpha_i=1.0, alpha_e=1.0, no P2E)",
-    "args": {
-        "no_plan2explore": True,
-        "intrinsic_spatial": True,
-        "alpha_i": 1.0,
-        "alpha_e": 1.0,
-        "craft_weight": 1.0,
     },
 }
 
@@ -187,7 +141,6 @@ EXPERIMENTS["C3_equal_weight"] = {
 # Pure baseline (no P2E, no intrinsic) — isolate the replay strategy effect.
 # The default 50:50 reservoir+recent baseline is already covered by A1_baseline,
 # so Group D only tests the 4 NLR/NLU variants against it.
-# Group E combines the best replay strategy (NLR) with intrinsic rewards.
 
 EXPERIMENTS["D1_nlr"] = {
     "group": "D",
@@ -230,9 +183,9 @@ EXPERIMENTS["E1_nlr_intrinsic"] = {
         "no_plan2explore": True,
         "nlr_sampling": True,
         "intrinsic_spatial": True,
-        "alpha_i": 0.1,
+        "alpha_spatial": 0.1,
+        "alpha_craft": 0.3,
         "alpha_e": 1.0,
-        "craft_weight": 1.0,
     },
 }
 
@@ -392,16 +345,14 @@ def print_experiment_table(experiments, seeds):
     for exp_id, cfg in experiments.items():
         if cfg["group"] != current_group:
             current_group = cfg["group"]
-            if current_group == "A":
-                print(f"  --- Group A: Core Comparison ---")
-            elif current_group == "B":
-                print(f"  --- Group B: Component Ablation (craft_weight) ---")
-            elif current_group == "C":
-                print(f"  --- Group C: Reward Scale Sensitivity ---")
-            elif current_group == "D":
-                print(f"  --- Group D: Replay Strategy Comparison ---")
-            elif current_group == "E":
-                print(f"  --- Group E: Final Model (NLR + Intrinsic) ---")
+            group_labels = {
+                "A": "Core Comparison",
+                "B": "Component Ablation",
+                "D": "Replay Strategy Comparison",
+                "E": "Final Model (NLR + Intrinsic)",
+            }
+            label = group_labels.get(current_group, current_group)
+            print(f"  --- Group {current_group}: {label} ---")
         print(f"  {exp_id:<25} [{cfg['group']}]    {cfg['desc']}")
     print("=" * 80 + "\n")
 

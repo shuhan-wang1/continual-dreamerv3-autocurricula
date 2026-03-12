@@ -608,7 +608,7 @@ class CraftaxWrapper(embodied.Env):
     """
 
     def __init__(self, env_name='CraftaxSymbolic-v1', embedding_dim=256, use_embedding=True, seed=42, track_achievements=True,
-                 intrinsic_spatial=False, alpha_i=0.1, alpha_e=1.0, craft_weight=1.0):
+                 intrinsic_spatial=False, alpha_spatial=0.1, alpha_craft=0.3, alpha_e=1.0):
         self._env_name = env_name
         self._embedding_dim = embedding_dim
         self._use_embedding = use_embedding
@@ -617,17 +617,20 @@ class CraftaxWrapper(embodied.Env):
         self._track_achievements = track_achievements
 
         # Spatial-counting + craft-novelty intrinsic reward (Eq.10-13)
+        # Each component is independently normalized to match |r_extr| magnitude,
+        # so alpha_spatial/alpha_craft are true relative-importance weights.
         self._intrinsic_spatial = intrinsic_spatial
-        self._alpha_i = alpha_i
+        self._alpha_spatial = alpha_spatial
+        self._alpha_craft = alpha_craft
         self._alpha_e = alpha_e
-        self._craft_weight = craft_weight
         self._spatial_seen = set()   # set of spatial hashes (episodic)
         self._inventory_seen = set() # set of inventory hashes (episodic)
-        # Adaptive intrinsic reward normalizer (cross-episode EMA).
-        # Scales r_intr so that mean(r_intr_norm) ≈ mean(|r_extr|), making
-        # α_i / α_e a true relative weight and preventing value explosion.
-        self._intr_ema_mean = 0.0   # EMA of r_intr
-        self._extr_ema_mean = 0.0   # EMA of |r_extr|
+        # Independent EMA normalizers for spatial and craft (cross-episode).
+        # Each tracks its own running mean so that rare craft events get a
+        # proportionally larger scale factor when they do fire.
+        self._spatial_ema_mean = 0.0  # EMA of r_spatial
+        self._craft_ema_mean = 0.0    # EMA of r_craft
+        self._extr_ema_mean = 0.0     # EMA of |r_extr|
         self._ema_rate = 0.01
         self._ema_count = 0
 
@@ -816,9 +819,13 @@ class CraftaxWrapper(embodied.Env):
         return tuple(np.round(inv, 1))
 
     def _compute_intrinsic_reward(self, flat_obs, extr_reward):
-        """Compute combined reward r_t = alpha_i * r_intr + alpha_e * r_extr (Eq.10-13).
+        """Compute combined reward with independently normalized spatial & craft.
 
-        Returns (combined_reward, r_spatial, r_craft, r_intr).
+        Each component has its own EMA normalizer so that rare craft events
+        get a proportionally larger scale when they fire, preventing the
+        craft signal from being drowned by the more frequent spatial signal.
+
+        Returns (combined_reward, r_spatial, r_craft, r_intr_raw).
         """
         if not self._intrinsic_spatial:
             return extr_reward, 0.0, 0.0, 0.0
@@ -828,25 +835,26 @@ class CraftaxWrapper(embodied.Env):
         i_key = self._inventory_hash(flat_obs)
         r_craft = 1.0 if i_key not in self._inventory_seen else 0.0
         self._inventory_seen.add(i_key)
-        # Combined (Eq.12)
-        r_intr_raw = r_spatial + self._craft_weight * r_craft
-        # Adaptive normalization: scale r_intr so its running mean matches
-        # the running mean of |r_extr|.  This makes α_i / α_e a true
-        # relative-importance ratio and prevents value explosion.
+        r_intr_raw = r_spatial + r_craft  # for logging only
+        # --- Independent adaptive normalization ---
         rate = self._ema_rate
         self._ema_count += 1
-        self._intr_ema_mean = (1 - rate) * self._intr_ema_mean + rate * r_intr_raw
+        self._spatial_ema_mean = (1 - rate) * self._spatial_ema_mean + rate * r_spatial
+        self._craft_ema_mean = (1 - rate) * self._craft_ema_mean + rate * r_craft
         self._extr_ema_mean = (1 - rate) * self._extr_ema_mean + rate * abs(extr_reward)
-        # Warmup: use raw values until EMA has enough samples.
         if self._ema_count < 100:
-            r_intr_norm = r_intr_raw
+            # Warmup: use raw values until EMA has enough samples
+            r_sp_norm = r_spatial
+            r_cr_norm = r_craft
         else:
-            # ratio = mean(|r_extr|) / mean(r_intr) — the adaptive scale factor
-            intr_mean = max(1e-8, self._intr_ema_mean)
             extr_mean = max(1e-8, self._extr_ema_mean)
-            r_intr_norm = r_intr_raw * (extr_mean / intr_mean)
-        # Eq.13 with adaptively normalized intrinsic
-        combined = self._alpha_i * r_intr_norm + self._alpha_e * extr_reward
+            sp_mean = max(1e-8, self._spatial_ema_mean)
+            cr_mean = max(1e-8, self._craft_ema_mean)
+            r_sp_norm = r_spatial * (extr_mean / sp_mean)
+            r_cr_norm = r_craft * (extr_mean / cr_mean)
+        combined = (self._alpha_spatial * r_sp_norm
+                    + self._alpha_craft * r_cr_norm
+                    + self._alpha_e * extr_reward)
         return combined, r_spatial, r_craft, r_intr_raw
 
     def _to_numpy_result(self, obs_jax, reward, is_first, is_last, is_terminal, achievements=None):
@@ -950,7 +958,7 @@ class VectorCraftaxEnv:
 
     def __init__(self, env_name='CraftaxSymbolic-v1', num_envs=16,
                  embedding_dim=256, use_embedding=True, seed=42, track_achievements=True,
-                 intrinsic_spatial=False, alpha_i=0.1, alpha_e=1.0, craft_weight=1.0):
+                 intrinsic_spatial=False, alpha_spatial=0.1, alpha_craft=0.3, alpha_e=1.0):
         self._env_name = env_name
         self._num_envs = num_envs
         self._embedding_dim = embedding_dim
@@ -958,14 +966,16 @@ class VectorCraftaxEnv:
         self._track_achievements = track_achievements
 
         # Spatial-counting + craft-novelty intrinsic reward (Eq.10-13)
+        # Each component is independently normalized to match |r_extr|.
         self._intrinsic_spatial = intrinsic_spatial
-        self._alpha_i = alpha_i
+        self._alpha_spatial = alpha_spatial
+        self._alpha_craft = alpha_craft
         self._alpha_e = alpha_e
-        self._craft_weight = craft_weight
         self._spatial_seen = [set() for _ in range(num_envs)]
         self._inventory_seen = [set() for _ in range(num_envs)]
-        # Adaptive intrinsic reward normalizer (shared across all envs, cross-episode)
-        self._intr_ema_mean = 0.0
+        # Independent EMA normalizers for spatial and craft (shared across envs)
+        self._spatial_ema_mean = 0.0
+        self._craft_ema_mean = 0.0
         self._extr_ema_mean = 0.0
         self._ema_rate = 0.01
         self._ema_count = 0
@@ -1147,7 +1157,10 @@ class VectorCraftaxEnv:
         return tuple(np.round(inv, 1))
 
     def _compute_intrinsic_rewards(self, raw_obs_batch, extr_rewards, is_firsts):
-        """Batch compute intrinsic rewards for all envs (Eq.10-13).
+        """Batch compute intrinsic rewards with independent normalization.
+
+        Spatial and craft components are normalized separately so that rare
+        craft events receive a proportionally larger scale factor.
 
         Args:
             raw_obs_batch: numpy (N, flat_dim) raw observations.
@@ -1189,34 +1202,30 @@ class VectorCraftaxEnv:
             i_key = self._inventory_hash_single(flat)
             r_cr = 1.0 if i_key not in self._inventory_seen[i] else 0.0
             self._inventory_seen[i].add(i_key)
-            # Combined (Eq.12)
-            r_in = r_sp + self._craft_weight * r_cr
             r_spatials[i] = r_sp
             r_crafts[i] = r_cr
-            r_intrs[i] = r_in
-        # Adaptive normalization: scale r_intr so its running mean matches
-        # the running mean of |r_extr|, preventing value explosion.
-        # Use ALL non-reset steps (not just steps with r_intr > 0) so that
-        # the EMA tracks unconditional means and adapts as intrinsic becomes
-        # sparser during training.
+            r_intrs[i] = r_sp + r_cr  # raw total for logging
+        # --- Independent adaptive normalization ---
         active_mask = ~is_firsts
         if active_mask.any():
             rate = self._ema_rate
             self._ema_count += 1
-            self._intr_ema_mean = (1 - rate) * self._intr_ema_mean + rate * r_intrs[active_mask].mean()
+            self._spatial_ema_mean = (1 - rate) * self._spatial_ema_mean + rate * r_spatials[active_mask].mean()
+            self._craft_ema_mean = (1 - rate) * self._craft_ema_mean + rate * r_crafts[active_mask].mean()
             self._extr_ema_mean = (1 - rate) * self._extr_ema_mean + rate * np.abs(extr_rewards[active_mask]).mean()
-        # Warmup: use raw values until EMA has enough samples.
         if self._ema_count >= 100:
-            intr_mean = max(1e-8, self._intr_ema_mean)
             extr_mean = max(1e-8, self._extr_ema_mean)
-            scale = extr_mean / intr_mean
+            sp_scale = extr_mean / max(1e-8, self._spatial_ema_mean)
+            cr_scale = extr_mean / max(1e-8, self._craft_ema_mean)
         else:
-            scale = 1.0  # no normalization during warmup
+            sp_scale = 1.0
+            cr_scale = 1.0
         for i in range(N):
             if is_firsts[i] or not self._intrinsic_spatial:
                 continue
-            r_in_norm = r_intrs[i] * scale
-            combined[i] = self._alpha_i * r_in_norm + self._alpha_e * extr_rewards[i]
+            combined[i] = (self._alpha_spatial * r_spatials[i] * sp_scale
+                           + self._alpha_craft * r_crafts[i] * cr_scale
+                           + self._alpha_e * extr_rewards[i])
         return combined, r_spatials, r_crafts, r_intrs
 
     def step(self, actions_batch):
@@ -1799,9 +1808,9 @@ def train_single(make_env, config, args, env_name=None):
             embedding_dim=embedding_dim, use_embedding=use_embedding,
             seed=config.seed,
             intrinsic_spatial=getattr(args, 'intrinsic_spatial', False),
-            alpha_i=getattr(args, 'alpha_i', 0.1),
-            alpha_e=getattr(args, 'alpha_e', 1.0),
-            craft_weight=getattr(args, 'craft_weight', 1.0))
+            alpha_spatial=getattr(args, 'alpha_spatial', 0.1),
+            alpha_craft=getattr(args, 'alpha_craft', 0.3),
+            alpha_e=getattr(args, 'alpha_e', 1.0))
         driver = VectorDriver(vec_env)
         # Use a lightweight single env for agent space inference
         tmp_env = wrap_env(make_env(config.seed))
@@ -1824,11 +1833,11 @@ def train_single(make_env, config, args, env_name=None):
     # Print intrinsic reward config
     if getattr(args, 'intrinsic_spatial', False):
         print('=== Spatial-Counting + Craft-Novelty Intrinsic Reward ===')
-        print(f'  alpha_i (intrinsic scale): {getattr(args, "alpha_i", 0.1)}')
-        print(f'  alpha_e (extrinsic scale): {getattr(args, "alpha_e", 1.0)}')
-        print(f'  craft_weight (lambda):     {getattr(args, "craft_weight", 1.0)}')
-        print(f'  r_t = alpha_i * norm(r_spatial + lambda * r_craft) + alpha_e * r_extr')
-        print(f'  norm = adaptive EMA scaling (mean(|r_extr|) / mean(r_intr)), warmup=100 steps')
+        print(f'  alpha_spatial: {getattr(args, "alpha_spatial", 0.1)}')
+        print(f'  alpha_craft:   {getattr(args, "alpha_craft", 0.3)}')
+        print(f'  alpha_e:       {getattr(args, "alpha_e", 1.0)}')
+        print(f'  r_t = a_sp * norm_sp(r_spatial) + a_cr * norm_cr(r_craft) + a_e * r_extr')
+        print(f'  norm_x = adaptive EMA scaling (E[|r_extr|] / E[r_x]), independent per component')
         print('==========================================================')
 
     step = elements.Counter()
@@ -2467,9 +2476,9 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                     embedding_dim=embedding_dim, use_embedding=use_embedding,
                     seed=config.seed,
                     intrinsic_spatial=getattr(args, 'intrinsic_spatial', False),
-                    alpha_i=getattr(args, 'alpha_i', 0.1),
-                    alpha_e=getattr(args, 'alpha_e', 1.0),
-                    craft_weight=getattr(args, 'craft_weight', 1.0))
+                    alpha_spatial=getattr(args, 'alpha_spatial', 0.1),
+                    alpha_craft=getattr(args, 'alpha_craft', 0.3),
+                    alpha_e=getattr(args, 'alpha_e', 1.0))
                 driver = VectorDriver(vec_env)
             else:
                 env_fns = [lambda i=i, fn=make_task_env: wrap_env(fn(config.seed + i)) for i in range(num_envs)]
@@ -2563,7 +2572,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
 
 
 def make_craftax(env_name, embedding_dim=256, use_embedding=True, seed=42,
-                 intrinsic_spatial=False, alpha_i=0.1, alpha_e=1.0, craft_weight=1.0):
+                 intrinsic_spatial=False, alpha_spatial=0.1, alpha_craft=0.3, alpha_e=1.0):
     """Create a Craftax environment with proper wrappers."""
     if not CRAFTAX_AVAILABLE:
         raise ImportError("Craftax is not installed. Install with: pip install craftax")
@@ -2574,9 +2583,9 @@ def make_craftax(env_name, embedding_dim=256, use_embedding=True, seed=42,
         use_embedding=use_embedding,
         seed=seed,
         intrinsic_spatial=intrinsic_spatial,
-        alpha_i=alpha_i,
+        alpha_spatial=alpha_spatial,
+        alpha_craft=alpha_craft,
         alpha_e=alpha_e,
-        craft_weight=craft_weight,
     )
 
 
@@ -2641,9 +2650,9 @@ def run_craftax(args):
                 use_embedding=use_embedding,
                 seed=seed,
                 intrinsic_spatial=getattr(args, 'intrinsic_spatial', False),
-                alpha_i=getattr(args, 'alpha_i', 0.1),
+                alpha_spatial=getattr(args, 'alpha_spatial', 0.1),
+                alpha_craft=getattr(args, 'alpha_craft', 0.3),
                 alpha_e=getattr(args, 'alpha_e', 1.0),
-                craft_weight=getattr(args, 'craft_weight', 1.0),
             ))
             print(f"Task {i}: env {name}, use_embedding: {use_embedding}")
 
@@ -2668,9 +2677,9 @@ def run_craftax(args):
             use_embedding=use_embedding,
             seed=seed,
             intrinsic_spatial=getattr(args, 'intrinsic_spatial', False),
-            alpha_i=getattr(args, 'alpha_i', 0.1),
+            alpha_spatial=getattr(args, 'alpha_spatial', 0.1),
+            alpha_craft=getattr(args, 'alpha_craft', 0.3),
             alpha_e=getattr(args, 'alpha_e', 1.0),
-            craft_weight=getattr(args, 'craft_weight', 1.0),
         )
 
         train_single(make_env, config, args, env_name=env_name)

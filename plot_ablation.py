@@ -53,8 +53,7 @@ GROUP_COLORS = {
 # Descriptive labels for groups
 GROUP_LABELS = {
     "A": "Core Comparison",
-    "B": "Component Ablation (craft_weight)",
-    "C": "Reward Scale Sensitivity (alpha_i)",
+    "B": "Component Ablation",
     "D": "Replay Strategy (NLR)",
     "E": "Final Model (NLR + Intrinsic)",
 }
