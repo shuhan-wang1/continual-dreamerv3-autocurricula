@@ -53,13 +53,14 @@ from pathlib import Path
 # Default training hyperparameters (applied to every experiment)
 # ============================================================================
 DEFAULTS = {
-    "steps":           1_000_000,
+    "steps":           1_000_000_000,   # 1B steps
     "batch_size":      16,
     "batch_length":    64,
-    "envs":            16,
-    "model_size":      "25m",
+    "envs":            32,              # A100 has enough VRAM for 32 parallel envs
+    "model_size":      "25m",           # ~4GB VRAM, safe on A100-40G/80G
     "wandb_proj_name": "craftax-ablation",
     "wandb_mode":      "online",
+    "resume":          True,            # enable checkpoint resumption for multi-job runs
 }
 
 SEEDS = [1, 4, 42]
@@ -223,6 +224,10 @@ def build_command(exp_id, exp_cfg, seed, base_logdir, wandb_mode, extra_defaults
     cmd += ["--wandb_proj_name", merged["wandb_proj_name"]]
     cmd += ["--wandb_group", exp_id]
     cmd += ["--wandb_mode", wandb_mode]
+
+    # Checkpoint resumption (needed for 1B steps across multiple 48h jobs)
+    if merged.get("resume"):
+        cmd.append("--resume")
 
     # --- Experiment-specific args ---
     for key, val in exp_args.items():

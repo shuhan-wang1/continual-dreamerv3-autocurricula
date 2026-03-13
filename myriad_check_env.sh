@@ -1,32 +1,35 @@
 #!/bin/bash -l
 # =============================================================
 # Myriad Environment Check Script
-# Usage: source myriad_check_env.sh
+# Prerequisites: dreamer conda env must already be activated!
+#
+# Usage:
+#   conda activate dreamer
+#   source myriad_check_env.sh
 # =============================================================
 
-ENV_NAME="dreamer"
-
-# --- Activate environment ---
-module load gcc-libs/10.2.0 2>/dev/null || true
-module load compilers/gnu/10.2.0 2>/dev/null || true
-module load python/miniconda3/4.10.3 2>/dev/null || true
-if [ -n "$UCL_CONDA_PATH" ]; then
-    source $UCL_CONDA_PATH/etc/profile.d/conda.sh
-fi
-conda activate ${ENV_NAME} 2>/dev/null || true
-
 echo "============================================"
-echo "  Environment Check: ${ENV_NAME}"
+echo "  Environment Check: dreamer"
 echo "============================================"
 echo ""
 
 # --- System info ---
 echo ">>> System"
-echo "  Python:   $(python --version 2>&1)"
-echo "  Pip:      $(which pip)"
-echo "  Platform: $(uname -s -r -m)"
-echo "  Node:     $(hostname)"
+echo "  Python:        $(python --version 2>&1)"
+echo "  Python binary: $(which python)"
+echo "  Pip binary:    $(which pip)"
+echo "  Platform:      $(uname -s -r -m)"
+echo "  Node:          $(hostname)"
 echo ""
+
+# --- Sanity check: are we in the conda env? ---
+PY_PATH=$(which python)
+if [[ "$PY_PATH" != *"envs/dreamer"* ]]; then
+    echo "!!! WARNING: Python is NOT from 'dreamer' conda env !!!"
+    echo "    Got: $PY_PATH"
+    echo "    Run: conda activate dreamer"
+    echo ""
+fi
 
 # --- GPU info ---
 echo ">>> GPU"
@@ -39,14 +42,13 @@ echo ""
 
 # --- Required packages and expected versions ---
 echo ">>> Package Versions"
-echo "  (checking import + version for each dependency)"
 echo ""
 
 python << 'PYEOF'
 import importlib
 import sys
 
-# (module_name, import_name, expected_version_or_None)
+# (pip_name, import_name, expected_version_or_None)
 packages = [
     # JAX core
     ("jax",                "jax",                "0.4.33"),
@@ -107,7 +109,6 @@ for pkg_name, import_name, expected in packages:
         ver = getattr(mod, "__version__", "?")
         status = "OK"
 
-        # Version check
         if expected and not expected.startswith(">="):
             if ver != expected and ver != "?":
                 status = "MISMATCH"
