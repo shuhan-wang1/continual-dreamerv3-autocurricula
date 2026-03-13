@@ -3,11 +3,14 @@
 # UCL Myriad Environment Setup Script
 # Project: continual-dreamerv3-autocurricula
 # Usage:   bash myriad_setup.sh
+#
+# Prerequisites:
+#   conda create -n dreamer311 python=3.11 -y
 # =============================================================
 
 set -e
 
-ENV_NAME="dreamer"
+ENV_NAME="dreamer311"
 
 echo "============================================"
 echo "  Myriad Environment Setup: ${ENV_NAME}"
@@ -36,7 +39,7 @@ echo "[3/6] Locating conda env '${ENV_NAME}'..."
 CONDA_PREFIX=$(conda env list | grep "^${ENV_NAME} " | awk '{print $NF}')
 if [ -z "$CONDA_PREFIX" ]; then
     echo "ERROR: conda env '${ENV_NAME}' not found. Create it first:"
-    echo "  conda create -n ${ENV_NAME} python=3.10 -y"
+    echo "  conda create -n ${ENV_NAME} python=3.11 -y"
     exit 1
 fi
 
@@ -55,23 +58,13 @@ echo "  Pip binary:     ${PIP}"
 # ----------------------------------------------------------
 echo "[4/6] Installing JAX with CUDA 12..."
 ${PIP} install --upgrade pip
+# Python 3.11 supports JAX 0.4.33+. Use 0.4.33 for stability.
 ${PIP} install "jax[cuda12]==0.4.33"
 
 # ----------------------------------------------------------
 # Step 5: Install all project dependencies
 # ----------------------------------------------------------
 echo "[5/6] Installing project dependencies..."
-
-# tensorstore fails to build on Myriad (needs Bazel + GLIBC_2.25).
-# It's pulled by: flax -> orbax-checkpoint -> tensorstore
-#                 tensorflow-probability -> orbax-checkpoint -> tensorstore
-# DreamerV3 doesn't use tensorstore (uses elements checkpoint system).
-# Install all packages in this chain with --no-deps to block tensorstore.
-${PIP} install orbax-checkpoint --no-deps
-${PIP} install flax --no-deps
-${PIP} install tensorflow-probability --no-deps
-# Manually install the real deps of flax/tfp (minus tensorstore)
-${PIP} install msgpack optax rich typing_extensions pyyaml treescope
 
 # Core DreamerV3 dependencies
 ${PIP} install \
@@ -82,10 +75,12 @@ ${PIP} install \
     optax \
     numpy==1.26.4 \
     jaxtyping \
+    flax \
     distrax \
     dm-env \
     dm-tree \
-    rlax
+    rlax \
+    tensorflow-probability
 
 # Environment dependencies
 ${PIP} install \
@@ -134,6 +129,7 @@ print(f'JAX devices:     {jax.devices()}')
 print(f'GPU available:   {len(jax.devices(\"gpu\")) > 0}')
 "
 ${PYTHON} -c "import craftax; print('Craftax OK')"
+${PYTHON} -c "import tensorstore; print(f'tensorstore {tensorstore.__version__} OK')"
 echo "----------------------------------------"
 
 echo ""

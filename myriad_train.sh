@@ -29,7 +29,7 @@ module load gcc-libs/10.2.0
 module load compilers/gnu/10.2.0
 module load python/miniconda3/4.10.3
 source $UCL_CONDA_PATH/etc/profile.d/conda.sh
-conda activate dreamer
+conda activate dreamer311
 
 # --- Set working directory ---
 PROJECT_DIR="$HOME/continual-dreamerv3-autocurricula"

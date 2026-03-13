@@ -4,12 +4,12 @@
 # Prerequisites: dreamer conda env must already be activated!
 #
 # Usage:
-#   conda activate dreamer
+#   conda activate dreamer311
 #   source myriad_check_env.sh
 # =============================================================
 
 echo "============================================"
-echo "  Environment Check: dreamer"
+echo "  Environment Check: dreamer311"
 echo "============================================"
 echo ""
 
@@ -24,10 +24,10 @@ echo ""
 
 # --- Sanity check: are we in the conda env? ---
 PY_PATH=$(which python)
-if [[ "$PY_PATH" != *"envs/dreamer"* ]]; then
+if [[ "$PY_PATH" != *"envs/dreamer311"* ]]; then
     echo "!!! WARNING: Python is NOT from 'dreamer' conda env !!!"
     echo "    Got: $PY_PATH"
-    echo "    Run: conda activate dreamer"
+    echo "    Run: conda activate dreamer311"
     echo ""
 fi
 
