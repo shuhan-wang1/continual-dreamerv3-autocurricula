@@ -1,35 +1,38 @@
 #!/bin/bash -l
 # =============================================================
 # Myriad Environment Check Script
-# Prerequisites: dreamer conda env must already be activated!
-#
-# Usage:
-#   conda activate dreamer311
-#   source myriad_check_env.sh
+# Usage: bash myriad_check_env.sh
 # =============================================================
 
+ENV_NAME="dreamer311"
+
+# --- Load modules & resolve conda env path ---
+module load gcc-libs/10.2.0 2>/dev/null || true
+module load compilers/gnu/10.2.0 2>/dev/null || true
+module load python/miniconda3/4.10.3 2>/dev/null || true
+
+CONDA_PREFIX=$(conda env list | grep "^${ENV_NAME} " | awk '{print $NF}')
+if [ -z "$CONDA_PREFIX" ]; then
+    echo "ERROR: conda env '${ENV_NAME}' not found."
+    exit 1
+fi
+
+PYTHON="${CONDA_PREFIX}/bin/python"
+PIP="${CONDA_PREFIX}/bin/pip"
+
 echo "============================================"
-echo "  Environment Check: dreamer311"
+echo "  Environment Check: ${ENV_NAME}"
 echo "============================================"
 echo ""
 
 # --- System info ---
 echo ">>> System"
-echo "  Python:        $(python --version 2>&1)"
-echo "  Python binary: $(which python)"
-echo "  Pip binary:    $(which pip)"
+echo "  Python:        $(${PYTHON} --version 2>&1)"
+echo "  Python binary: ${PYTHON}"
+echo "  Pip binary:    ${PIP}"
 echo "  Platform:      $(uname -s -r -m)"
 echo "  Node:          $(hostname)"
 echo ""
-
-# --- Sanity check: are we in the conda env? ---
-PY_PATH=$(which python)
-if [[ "$PY_PATH" != *"envs/dreamer311"* ]]; then
-    echo "!!! WARNING: Python is NOT from 'dreamer' conda env !!!"
-    echo "    Got: $PY_PATH"
-    echo "    Run: conda activate dreamer311"
-    echo ""
-fi
 
 # --- GPU info ---
 echo ">>> GPU"
@@ -44,17 +47,13 @@ echo ""
 echo ">>> Package Versions"
 echo ""
 
-python << 'PYEOF'
+${PYTHON} << 'PYEOF'
 import importlib
 import sys
 
-# (pip_name, import_name, expected_version_or_None)
 packages = [
-    # JAX core
     ("jax",                "jax",                "0.4.33"),
     ("jaxlib",             "jaxlib",             "0.4.33"),
-
-    # DreamerV3 core
     ("chex",               "chex",               None),
     ("einops",             "einops",             None),
     ("elements",           "elements",           ">=3.19.1"),
@@ -69,15 +68,11 @@ packages = [
     ("jaxtyping",          "jaxtyping",          None),
     ("tensorflow-probability", "tensorflow_probability", None),
     ("portal",             "portal",             None),
-
-    # Environments
     ("craftax",            "craftax",            None),
     ("navix",              "navix",              None),
     ("gymnax",             "gymnax",             None),
     ("gymnasium",          "gymnasium",          None),
     ("pygame",             "pygame",             None),
-
-    # Utilities
     ("wandb",              "wandb",              None),
     ("ruamel.yaml",        "ruamel.yaml",        None),
     ("opencv-python-headless", "cv2",            None),
@@ -92,8 +87,6 @@ packages = [
     ("imageio",            "imageio",            None),
     ("google-cloud-storage", "google.cloud.storage", None),
     ("google-resumable-media", "google.resumable_media", None),
-
-    # Dev
     ("ipdb",               "ipdb",               None),
     ("colored_traceback",  "colored_traceback",  None),
     ("pytest",             "pytest",             None),
@@ -108,7 +101,6 @@ for pkg_name, import_name, expected in packages:
         mod = importlib.import_module(import_name)
         ver = getattr(mod, "__version__", "?")
         status = "OK"
-
         if expected and not expected.startswith(">="):
             if ver != expected and ver != "?":
                 status = "MISMATCH"
@@ -117,13 +109,11 @@ for pkg_name, import_name, expected in packages:
                 ok += 1
         else:
             ok += 1
-
         print(f"  {status:10s}  {pkg_name:30s}  {ver}")
     except ImportError as e:
         fail += 1
         print(f"  {'MISSING':10s}  {pkg_name:30s}  ({e})")
 
-# JAX GPU check
 print("")
 print(">>> JAX Device Check")
 try:

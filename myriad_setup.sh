@@ -88,7 +88,10 @@ STUBEOF
 fi
 
 # Core DreamerV3 dependencies
+# IMPORTANT: pin jax/jaxlib to prevent transitive upgrades (e.g. flax pulling jax 0.7)
 ${PIP} install \
+    "jax==0.4.33" \
+    "jaxlib==0.4.33" \
     chex \
     einops \
     "elements>=3.19.1" \
