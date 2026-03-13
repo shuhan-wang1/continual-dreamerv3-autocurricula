@@ -13,10 +13,8 @@
 #$ -l gpu=1                    # 1 GPU
 #$ -ac allow=L                 # L=A100-40G (easier to get)
 #$ -N gpu_test                 # Job name
-#$ -o $HOME/logs/gpu_test.$JOB_ID.out
-#$ -e $HOME/logs/gpu_test.$JOB_ID.err
-
-mkdir -p $HOME/logs
+#$ -o /home/ucab327/Scratch/projects/continual-dreamerv3-autocurricula/logs/gpu_test.$JOB_ID.out
+#$ -e /home/ucab327/Scratch/projects/continual-dreamerv3-autocurricula/logs/gpu_test.$JOB_ID.err
 
 # --- Load modules ---
 module unload compilers mpi gcc-libs 2>/dev/null || true

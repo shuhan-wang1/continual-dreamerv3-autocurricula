@@ -17,11 +17,8 @@
 #$ -l gpu=1                    # Number of GPUs
 #$ -ac allow=L                 # GPU type: L=A100-40G (safe for 25m model)
 #$ -N dreamerv3                # Job name
-#$ -o $HOME/logs/$JOB_NAME.$JOB_ID.out
-#$ -e $HOME/logs/$JOB_NAME.$JOB_ID.err
-
-# --- Create log directory ---
-mkdir -p $HOME/logs
+#$ -o /home/ucab327/Scratch/projects/continual-dreamerv3-autocurricula/logs/$JOB_NAME.$JOB_ID.out
+#$ -e /home/ucab327/Scratch/projects/continual-dreamerv3-autocurricula/logs/$JOB_NAME.$JOB_ID.err
 
 # --- Load modules ---
 module unload compilers mpi gcc-libs 2>/dev/null || true
