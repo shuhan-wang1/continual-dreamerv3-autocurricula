@@ -94,7 +94,7 @@ ${PIP} install \
 
 # Utilities
 ${PIP} install \
-    wandb==0.24.1 \
+    wandb==0.17.0 \
     ruamel.yaml==0.19.1 \
     opencv-python-headless \
     tqdm \
