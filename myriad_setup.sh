@@ -84,7 +84,9 @@ fi
 # ----------------------------------------------------------
 echo "[4/7] Installing JAX with CUDA 12..."
 pip install --upgrade pip
-pip install "jax[cuda12]==0.6.2"
+# JAX 0.6.2 requires nvidia-cudnn-cu12>=9.8 which is unavailable on Myriad.
+# Use 0.4.33 (matches dreamerv3/requirements.txt) which works with available CUDA libs.
+pip install "jax[cuda12]==0.4.33"
 
 # ----------------------------------------------------------
 # Step 5: Install all project dependencies
@@ -93,19 +95,19 @@ echo "[5/7] Installing project dependencies..."
 
 # Core DreamerV3 dependencies
 pip install \
-    chex==0.1.90 \
-    einops==0.8.2 \
-    elements==3.21.0 \
-    ninjax==3.6.2 \
-    optax==0.2.6 \
+    chex \
+    einops \
+    elements>=3.19.1 \
+    ninjax>=3.5.1 \
+    optax \
     numpy==1.26.4 \
     jaxtyping \
-    flax==0.10.7 \
-    distrax==0.1.5 \
-    dm-env==1.6 \
-    dm-tree==0.1.9 \
-    rlax==0.1.7 \
-    tensorflow-probability==0.25.0
+    flax \
+    distrax \
+    dm-env \
+    dm-tree \
+    rlax \
+    tensorflow-probability
 
 # Environment dependencies
 pip install \
