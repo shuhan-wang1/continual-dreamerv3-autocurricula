@@ -3,15 +3,11 @@
 # UCL Myriad Environment Setup Script
 # Project: continual-dreamerv3-autocurricula
 # Usage:   bash myriad_setup.sh
-#
-# IMPORTANT: Run this as "bash myriad_setup.sh", NOT "sh myriad_setup.sh"
-# If conda activate fails, try: source myriad_setup.sh
 # =============================================================
 
 set -e
 
 ENV_NAME="dreamer"
-PYTHON_VERSION="3.10"
 
 echo "============================================"
 echo "  Myriad Environment Setup: ${ENV_NAME}"
@@ -20,59 +16,58 @@ echo "============================================"
 # ----------------------------------------------------------
 # Step 1: Unload default modules that may conflict
 # ----------------------------------------------------------
-echo "[1/7] Unloading default modules..."
+echo "[1/6] Unloading default modules..."
 module unload compilers mpi gcc-libs 2>/dev/null || true
 
 # ----------------------------------------------------------
 # Step 2: Load required modules (GCC compiler + conda)
 # ----------------------------------------------------------
-echo "[2/7] Loading modules..."
+echo "[2/6] Loading modules..."
 module load gcc-libs/10.2.0
-# IMPORTANT: Load GNU compiler to avoid Intel icpc failures (e.g. ml-dtypes)
 module load compilers/gnu/10.2.0
 module load python/miniconda3/4.10.3
 
-# Activate conda — try both common paths
-if [ -n "$UCL_CONDA_PATH" ]; then
-    source $UCL_CONDA_PATH/etc/profile.d/conda.sh
-elif [ -f "$(conda info --base)/etc/profile.d/conda.sh" ]; then
-    source "$(conda info --base)/etc/profile.d/conda.sh"
-else
-    echo "ERROR: Cannot find conda.sh. Check 'module avail python' for available versions."
+# ----------------------------------------------------------
+# Step 3: Resolve conda env paths (bypass conda activate)
+# ----------------------------------------------------------
+echo "[3/6] Locating conda env '${ENV_NAME}'..."
+
+# Find conda env prefix
+CONDA_PREFIX=$(conda env list | grep "^${ENV_NAME} " | awk '{print $NF}')
+if [ -z "$CONDA_PREFIX" ]; then
+    echo "ERROR: conda env '${ENV_NAME}' not found. Create it first:"
+    echo "  conda create -n ${ENV_NAME} python=3.10 -y"
     exit 1
 fi
 
-# ----------------------------------------------------------
-# Step 3: Activate existing conda environment
-# Assumes 'dreamer' env already exists (conda create -n dreamer python=3.10)
-# ----------------------------------------------------------
-echo "[3/7] Activating conda env '${ENV_NAME}'..."
-conda activate ${ENV_NAME}
+# Use the env's own pip and python directly by absolute path.
+# This bypasses 'conda activate' which fails in non-interactive bash scripts.
+PIP="${CONDA_PREFIX}/bin/pip"
+PYTHON="${CONDA_PREFIX}/bin/python"
 
-echo "  Python binary:  $(which python)"
-echo "  Pip binary:     $(which pip)"
-echo "  Python version: $(python --version 2>&1)"
+echo "  Env prefix:     ${CONDA_PREFIX}"
+echo "  Python binary:  ${PYTHON}"
+echo "  Python version: $(${PYTHON} --version 2>&1)"
+echo "  Pip binary:     ${PIP}"
 
 # ----------------------------------------------------------
 # Step 4: Install JAX with CUDA 12 (pip-bundled CUDA libs)
 # ----------------------------------------------------------
-echo "[4/7] Installing JAX with CUDA 12..."
-pip install --upgrade pip
-# JAX 0.6.2 requires nvidia-cudnn-cu12>=9.8 which is unavailable on Myriad.
-# Use 0.4.33 (matches dreamerv3/requirements.txt) which works with available CUDA libs.
-pip install "jax[cuda12]==0.4.33"
+echo "[4/6] Installing JAX with CUDA 12..."
+${PIP} install --upgrade pip
+${PIP} install "jax[cuda12]==0.4.33"
 
 # ----------------------------------------------------------
 # Step 5: Install all project dependencies
 # ----------------------------------------------------------
-echo "[5/7] Installing project dependencies..."
+echo "[5/6] Installing project dependencies..."
 
 # Core DreamerV3 dependencies
-pip install \
+${PIP} install \
     chex \
     einops \
-    elements>=3.19.1 \
-    ninjax>=3.5.1 \
+    "elements>=3.19.1" \
+    "ninjax>=3.5.1" \
     optax \
     numpy==1.26.4 \
     jaxtyping \
@@ -84,7 +79,7 @@ pip install \
     tensorflow-probability
 
 # Environment dependencies
-pip install \
+${PIP} install \
     craftax==1.5.0 \
     navix==0.7.4 \
     gymnax==0.0.9 \
@@ -92,7 +87,7 @@ pip install \
     pygame==2.6.1
 
 # Utilities
-pip install \
+${PIP} install \
     wandb==0.24.1 \
     ruamel.yaml==0.19.1 \
     opencv-python-headless \
@@ -106,14 +101,14 @@ pip install \
     scipy==1.15.3 \
     imageio==2.37.2
 
-# Portal, scope, granular (DreamerV3 infra)
-pip install \
+# Portal (DreamerV3 infra)
+${PIP} install \
     portal==3.7.4 \
     google-resumable-media==2.8.0 \
     google-cloud-storage==3.9.0
 
-# Dev tools (optional, comment out if not needed)
-pip install \
+# Dev tools
+${PIP} install \
     ipdb \
     colored_traceback \
     pytest==9.0.2
@@ -121,27 +116,25 @@ pip install \
 # ----------------------------------------------------------
 # Step 6: Verify installation
 # ----------------------------------------------------------
-echo "[6/7] Verifying installation..."
+echo "[6/6] Verifying installation..."
 echo "----------------------------------------"
-python -c "
+${PYTHON} -c "
 import jax
 print(f'JAX version:     {jax.__version__}')
 print(f'JAX devices:     {jax.devices()}')
 print(f'GPU available:   {len(jax.devices(\"gpu\")) > 0}')
 "
-python -c "import craftax; print(f'Craftax OK')"
-python -c "import dreamerv3; print(f'DreamerV3 OK')" 2>/dev/null || echo "  (dreamerv3 needs to be in PYTHONPATH)"
+${PYTHON} -c "import craftax; print('Craftax OK')"
 echo "----------------------------------------"
 
 echo ""
-echo "[7/7] Summary"
 echo "============================================"
 echo "  Setup complete!"
-echo "  Python: $(python --version)"
-echo "  pip:    $(which pip)"
+echo "  Python: $(${PYTHON} --version 2>&1)"
 echo ""
 echo "  To activate in future sessions:"
 echo "    module load gcc-libs/10.2.0"
+echo "    module load compilers/gnu/10.2.0"
 echo "    module load python/miniconda3/4.10.3"
 echo "    source \$UCL_CONDA_PATH/etc/profile.d/conda.sh"
 echo "    conda activate ${ENV_NAME}"
