@@ -9,8 +9,7 @@
 
 # --- Job configuration ---
 #$ -l h_rt=1:00:00            # 1 hour
-#$ -l mem=16G                  # RAM per core
-#$ -pe smp 4                   # CPU cores
+#$ -l mem=16G                  # RAM
 #$ -l gpu=1                    # 1 GPU
 #$ -ac allow=L                 # L=A100-40G (easier to get)
 #$ -N gpu_test                 # Job name
