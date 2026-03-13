@@ -71,14 +71,21 @@ echo "[5/6] Installing project dependencies..."
 conda install -n ${ENV_NAME} scipy=1.15.3 -y
 
 # tensorstore requires glibc >= 2.27 but Myriad has < 2.25.
-# No prebuilt wheel works, and source build needs Bazel which also needs glibc 2.25.
+# No prebuilt wheel works, source build needs Bazel (also needs glibc 2.25).
 # DreamerV3 doesn't use tensorstore (uses elements checkpoint system).
-# Install packages that pull tensorstore with --no-deps to block it entirely.
-${PIP} install orbax-checkpoint --no-deps
-${PIP} install flax --no-deps
-${PIP} install tensorflow-probability --no-deps
-# Manually supply their real deps (minus tensorstore)
-${PIP} install msgpack treescope humanize simplejson etils protobuf
+# Solution: install a dummy stub package so pip thinks tensorstore is satisfied.
+if ! ${PYTHON} -c "import tensorstore" 2>/dev/null; then
+    echo "  Installing tensorstore stub (Myriad glibc too old for real package)..."
+    STUB_DIR=$(mktemp -d)
+    mkdir -p ${STUB_DIR}/tensorstore
+    echo '__version__ = "0.1.82"' > ${STUB_DIR}/tensorstore/__init__.py
+    cat > ${STUB_DIR}/setup.py << 'STUBEOF'
+from setuptools import setup
+setup(name="tensorstore", version="0.1.82", packages=["tensorstore"])
+STUBEOF
+    ${PIP} install ${STUB_DIR}
+    rm -rf ${STUB_DIR}
+fi
 
 # Core DreamerV3 dependencies
 ${PIP} install \
@@ -89,10 +96,12 @@ ${PIP} install \
     optax \
     numpy==1.26.4 \
     jaxtyping \
+    flax \
     distrax \
     dm-env \
     dm-tree \
-    rlax
+    rlax \
+    tensorflow-probability
 
 # Environment dependencies
 ${PIP} install \
