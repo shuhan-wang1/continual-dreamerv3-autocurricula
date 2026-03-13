@@ -141,6 +141,12 @@ ${PIP} install \
     pytest==9.0.2
 
 # ----------------------------------------------------------
+# Step 5.5: Force-pin critical versions that get overridden by transitive deps
+# ----------------------------------------------------------
+echo "[5.5/6] Pinning critical package versions..."
+${PIP} install "jax==0.4.33" "jaxlib==0.4.33" "numpy==1.26.4" --force-reinstall --no-deps
+
+# ----------------------------------------------------------
 # Step 6: Verify installation
 # ----------------------------------------------------------
 echo "[6/6] Verifying installation..."
