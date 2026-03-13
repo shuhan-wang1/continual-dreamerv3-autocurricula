@@ -62,12 +62,16 @@ ${PIP} install "jax[cuda12]==0.4.33"
 # ----------------------------------------------------------
 echo "[5/6] Installing project dependencies..."
 
-# tensorstore fails to build on Myriad (C++ compilation error).
-# It's pulled by flax -> orbax-checkpoint, but DreamerV3 doesn't use it
-# (uses elements checkpoint system). Install flax/orbax without tensorstore.
+# tensorstore fails to build on Myriad (needs Bazel + GLIBC_2.25).
+# It's pulled by: flax -> orbax-checkpoint -> tensorstore
+#                 tensorflow-probability -> orbax-checkpoint -> tensorstore
+# DreamerV3 doesn't use tensorstore (uses elements checkpoint system).
+# Install all packages in this chain with --no-deps to block tensorstore.
 ${PIP} install orbax-checkpoint --no-deps
 ${PIP} install flax --no-deps
-${PIP} install msgpack optax rich typing_extensions pyyaml
+${PIP} install tensorflow-probability --no-deps
+# Manually install the real deps of flax/tfp (minus tensorstore)
+${PIP} install msgpack optax rich typing_extensions pyyaml treescope
 
 # Core DreamerV3 dependencies
 ${PIP} install \
@@ -81,8 +85,7 @@ ${PIP} install \
     distrax \
     dm-env \
     dm-tree \
-    rlax \
-    tensorflow-probability
+    rlax
 
 # Environment dependencies
 ${PIP} install \
