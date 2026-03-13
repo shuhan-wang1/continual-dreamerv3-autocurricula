@@ -43,43 +43,15 @@ else
 fi
 
 # ----------------------------------------------------------
-# Step 3: Create conda environment with Python 3.10
+# Step 3: Activate existing conda environment
+# Assumes 'dreamer' env already exists (conda create -n dreamer python=3.10)
 # ----------------------------------------------------------
-if conda env list | grep -q "^${ENV_NAME} "; then
-    echo "[3/7] Conda env '${ENV_NAME}' already exists, skipping creation."
-else
-    echo "[3/7] Creating conda env '${ENV_NAME}' with Python ${PYTHON_VERSION}..."
-    conda create -n ${ENV_NAME} python=${PYTHON_VERSION} -y
-fi
-
+echo "[3/7] Activating conda env '${ENV_NAME}'..."
 conda activate ${ENV_NAME}
 
-# ----------------------------------------------------------
-# Step 3.5: Verify we are using the CONDA python, not system
-# ----------------------------------------------------------
-echo "[3.5/7] Verifying conda environment..."
-ACTUAL_PYTHON=$(which python)
-ACTUAL_PIP=$(which pip)
-ACTUAL_VERSION=$(python --version 2>&1)
-echo "  Python binary:  ${ACTUAL_PYTHON}"
-echo "  Pip binary:     ${ACTUAL_PIP}"
-echo "  Python version: ${ACTUAL_VERSION}"
-
-# Abort if pip/python is NOT from conda env
-if [[ "$ACTUAL_PIP" != *"envs/${ENV_NAME}"* ]]; then
-    echo ""
-    echo "ERROR: pip is NOT from the conda env!"
-    echo "  Expected path containing: envs/${ENV_NAME}"
-    echo "  Got: ${ACTUAL_PIP}"
-    echo ""
-    echo "FIX: Run this script with 'source' instead of 'bash':"
-    echo "  source myriad_setup.sh"
-    echo ""
-    echo "Or manually activate first, then run:"
-    echo "  conda activate ${ENV_NAME}"
-    echo "  bash myriad_setup.sh"
-    exit 1
-fi
+echo "  Python binary:  $(which python)"
+echo "  Pip binary:     $(which pip)"
+echo "  Python version: $(python --version 2>&1)"
 
 # ----------------------------------------------------------
 # Step 4: Install JAX with CUDA 12 (pip-bundled CUDA libs)
