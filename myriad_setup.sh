@@ -70,6 +70,16 @@ echo "[5/6] Installing project dependencies..."
 # Install via conda which bundles its own BLAS.
 conda install -n ${ENV_NAME} scipy=1.15.3 -y
 
+# tensorstore requires glibc >= 2.27 but Myriad has < 2.25.
+# No prebuilt wheel works, and source build needs Bazel which also needs glibc 2.25.
+# DreamerV3 doesn't use tensorstore (uses elements checkpoint system).
+# Install packages that pull tensorstore with --no-deps to block it entirely.
+${PIP} install orbax-checkpoint --no-deps
+${PIP} install flax --no-deps
+${PIP} install tensorflow-probability --no-deps
+# Manually supply their real deps (minus tensorstore)
+${PIP} install msgpack treescope humanize simplejson etils protobuf
+
 # Core DreamerV3 dependencies
 ${PIP} install \
     chex \
@@ -79,12 +89,10 @@ ${PIP} install \
     optax \
     numpy==1.26.4 \
     jaxtyping \
-    flax \
     distrax \
     dm-env \
     dm-tree \
-    rlax \
-    tensorflow-probability
+    rlax
 
 # Environment dependencies
 ${PIP} install \
