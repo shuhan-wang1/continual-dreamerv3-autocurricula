@@ -66,6 +66,10 @@ ${PIP} install "jax[cuda12]==0.4.33"
 # ----------------------------------------------------------
 echo "[5/6] Installing project dependencies..."
 
+# scipy needs OpenBLAS + CMake >= 3.4. Myriad has neither.
+# Install via conda which bundles its own BLAS.
+conda install -n ${ENV_NAME} scipy=1.15.3 -y
+
 # Core DreamerV3 dependencies
 ${PIP} install \
     chex \
@@ -102,7 +106,6 @@ ${PIP} install \
     matplotlib==3.10.8 \
     seaborn==0.13.2 \
     pandas==2.3.3 \
-    scipy==1.15.3 \
     imageio==2.37.2
 
 # Portal (DreamerV3 infra)
