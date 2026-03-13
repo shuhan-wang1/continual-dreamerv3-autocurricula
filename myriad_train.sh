@@ -25,6 +25,7 @@ module unload compilers mpi gcc-libs 2>/dev/null || true
 module load gcc-libs/10.2.0
 module load compilers/gnu/10.2.0
 module load python/miniconda3/4.10.3
+module load cudnn/9.2.0.82/cuda-12
 source $UCL_CONDA_PATH/etc/profile.d/conda.sh
 conda activate dreamer311
 
