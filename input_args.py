@@ -302,16 +302,16 @@ def parse_craftax_args(args=None):
     parser.add_argument('--use_original_dreamer', default=False, action='store_true',
                         help='Use original DreamerV3 from dreamerv3-main folder instead of continuous enhanced version.')
 
-    # Action mask (Craftax feasibility prior)
+    # Action mask (Craftax feasibility)
     parser.add_argument('--action_mask_enabled', default=False, action='store_true',
-                        help='Enable recipe-aware action mask for Craftax.')
+                        help='Enable action feasibility mask for early-game Craftax actions.')
     parser.add_argument('--action_mask_mode', type=str, default='soft',
                         choices=['none', 'soft', 'hard'],
-                        help='Action mask mode: none, soft (bias), or hard (zero prob).')
+                        help='Mask mode: none=disabled, soft=logit penalty, hard=hard mask.')
     parser.add_argument('--action_mask_lambda_penalty', type=float, default=5.0,
-                        help='Soft mode: bias = -lambda * deficit.')
+                        help='Soft mode: penalty weight for infeasible action logits.')
     parser.add_argument('--action_mask_large_negative', type=float, default=1e9,
-                        help='Hard mode: invalid action logit offset.')
+                        help='Hard mode: large negative logit for infeasible actions.')
 
     args = parser.parse_known_args(args=args)[0]
     return args
