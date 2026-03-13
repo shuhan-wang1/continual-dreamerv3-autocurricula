@@ -24,10 +24,12 @@ echo "[1/7] Unloading default modules..."
 module unload compilers mpi gcc-libs 2>/dev/null || true
 
 # ----------------------------------------------------------
-# Step 2: Load required modules
+# Step 2: Load required modules (GCC compiler + conda)
 # ----------------------------------------------------------
 echo "[2/7] Loading modules..."
 module load gcc-libs/10.2.0
+# IMPORTANT: Load GNU compiler to avoid Intel icpc failures (e.g. ml-dtypes)
+module load compilers/gnu/10.2.0
 module load python/miniconda3/4.10.3
 
 # Activate conda — try both common paths

@@ -8,6 +8,7 @@ ENV_NAME="dreamer"
 
 # --- Activate environment ---
 module load gcc-libs/10.2.0 2>/dev/null || true
+module load compilers/gnu/10.2.0 2>/dev/null || true
 module load python/miniconda3/4.10.3 2>/dev/null || true
 if [ -n "$UCL_CONDA_PATH" ]; then
     source $UCL_CONDA_PATH/etc/profile.d/conda.sh

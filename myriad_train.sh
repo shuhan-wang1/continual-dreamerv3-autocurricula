@@ -22,6 +22,7 @@ mkdir -p $HOME/logs
 # --- Load modules ---
 module unload compilers mpi gcc-libs 2>/dev/null || true
 module load gcc-libs/10.2.0
+module load compilers/gnu/10.2.0
 module load python/miniconda3/4.10.3
 source $UCL_CONDA_PATH/etc/profile.d/conda.sh
 conda activate dreamer
