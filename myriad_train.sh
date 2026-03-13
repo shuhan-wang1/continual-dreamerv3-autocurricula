@@ -29,7 +29,7 @@ source $UCL_CONDA_PATH/etc/profile.d/conda.sh
 conda activate dreamer311
 
 # --- Set working directory ---
-PROJECT_DIR="$HOME/continual-dreamerv3-autocurricula"
+PROJECT_DIR="$HOME/Scratch/projects/continual-dreamerv3-autocurricula"
 cd $PROJECT_DIR
 
 # --- Environment variables (A100 optimised, prevent OOM) ---

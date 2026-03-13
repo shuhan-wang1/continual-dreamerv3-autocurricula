@@ -29,7 +29,7 @@ PIP="${CONDA_PREFIX}/bin/pip"
 PYTHON="${CONDA_PREFIX}/bin/python"
 
 # --- Project dir ---
-PROJECT_DIR="$HOME/continual-dreamerv3-autocurricula"
+PROJECT_DIR="$HOME/Scratch/projects/continual-dreamerv3-autocurricula"
 cd $PROJECT_DIR
 
 export XLA_PYTHON_CLIENT_PREALLOCATE=true
