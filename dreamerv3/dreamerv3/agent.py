@@ -71,6 +71,15 @@ class Agent(embodied.jax.Agent):
     self.valnorm = embodied.jax.Normalize(**config.valnorm, name='valnorm')
     self.advnorm = embodied.jax.Normalize(**config.advnorm, name='advnorm')
 
+    # Action mask (Craftax feasibility prior)
+    self.action_mask_enabled = getattr(config, 'action_mask_enabled', False)
+    self._action_mask_mode = getattr(config, 'action_mask_mode', 'soft')
+    self._action_mask_lambda = getattr(config, 'action_mask_lambda_penalty', 5.0)
+    self._action_mask_large_neg = getattr(config, 'action_mask_large_negative', 1e9)
+    if self.action_mask_enabled:
+      print(f'Action mask enabled: mode={self._action_mask_mode}, '
+            f'lambda={self._action_mask_lambda}, large_neg={self._action_mask_large_neg}')
+
     # Plan2Explore (P2E) ensemble for intrinsic exploration reward
     self.p2e_enabled = getattr(config, 'plan2explore', False)
     self.p2e_ensemble = []
@@ -137,6 +146,35 @@ class Agent(embodied.jax.Agent):
           dec=self.dec.entry_space)))
     return spaces
 
+  def _apply_action_mask(self, policy, ctx_arr):
+    """Apply recipe-aware bias to action logits. ctx_arr: [wood, stone, near_table, near_furnace]."""
+    import embodied.jax.outs as outs
+    raw = policy['action']
+    logits = raw.dist.logits if hasattr(raw, 'dist') else raw.logits
+    num_actions = logits.shape[-1]
+    context = {
+        'wood': ctx_arr[..., 0],
+        'stone': ctx_arr[..., 1],
+        'near_table': ctx_arr[..., 2] > 0.5,
+        'near_furnace': ctx_arr[..., 3] > 0.5,
+        'coal': 0,
+        'iron': 0,
+    }
+    from craftax_mask import compute_logit_bias, BASIC_ACTION_RULES
+    bias = compute_logit_bias(
+        context, BASIC_ACTION_RULES, num_actions,
+        lambda_penalty=self._action_mask_lambda,
+        large_negative=self._action_mask_large_neg,
+        mode=self._action_mask_mode,
+    )
+    bias = jnp.asarray(bias)
+    if bias.ndim == 1 and logits.ndim > 1:
+      bias = jnp.broadcast_to(bias, logits.shape)
+    adj_logits = logits + bias
+    unimix = getattr(self.config.policy, 'unimix', 0.01)
+    new_dist = outs.OneHot(adj_logits, unimix) if hasattr(raw, 'dist') else outs.Categorical(adj_logits, unimix)
+    return {**policy, 'action': new_dist}
+
   def init_policy(self, batch_size):
     zeros = lambda x: jnp.zeros((batch_size, *x.shape), x.dtype)
     return (
@@ -162,6 +200,9 @@ class Agent(embodied.jax.Agent):
     if dec_carry:
       dec_carry, dec_entry, recons = self.dec(dec_carry, feat, reset, **kw)
     policy = self.pol(self.feat2tensor(feat), bdims=1)
+    # Apply action mask if enabled (Craftax feasibility prior)
+    if self.action_mask_enabled and 'log/action_mask_context' in obs:
+      policy = self._apply_action_mask(policy, obs['log/action_mask_context'])
     act = sample(policy)
     out = {}
     out['finite'] = elements.tree.flatdict(jax.tree.map(

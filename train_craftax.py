@@ -572,13 +572,14 @@ class CraftaxWrapper(embodied.Env):
     as possible and using JIT-compiled processing functions.
     """
 
-    def __init__(self, env_name='CraftaxSymbolic-v1', embedding_dim=256, use_embedding=True, seed=42, track_achievements=True):
+    def __init__(self, env_name='CraftaxSymbolic-v1', embedding_dim=256, use_embedding=True, seed=42, track_achievements=True, use_action_mask=False):
         self._env_name = env_name
         self._embedding_dim = embedding_dim
         self._use_embedding = use_embedding
         self._seed = seed
         self._done = True
         self._track_achievements = track_achievements
+        self._use_action_mask = use_action_mask
 
         # Achievement tracking for current episode
         self._episode_achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
@@ -674,6 +675,9 @@ class CraftaxWrapper(embodied.Env):
         if self._track_achievements:
             spaces['log/achievements'] = elements.Space(np.int32, (NUM_CRAFTAX_ACHIEVEMENTS,), 0, 2)
             spaces['log/achievement_depth'] = elements.Space(np.int32)
+        # Action mask context: [wood, stone, near_table, near_furnace] for recipe-aware masking
+        if self._use_action_mask:
+            spaces['log/action_mask_context'] = elements.Space(np.float32, (4,), -np.inf, np.inf)
         return spaces
 
     @property
@@ -739,7 +743,7 @@ class CraftaxWrapper(embodied.Env):
                     max_tier = max(max_tier, ACHIEVEMENT_TIERS[name])
         return max_tier
 
-    def _to_numpy_result(self, obs_jax, reward, is_first, is_last, is_terminal, achievements=None):
+    def _to_numpy_result(self, obs_jax, reward, is_first, is_last, is_terminal, achievements=None, mask_context=None):
         """Single batched transfer from GPU to CPU at the end of step."""
         # Process obs on GPU first
         processed = self._process_obs_jit(self._extract_obs(obs_jax))
@@ -759,6 +763,15 @@ class CraftaxWrapper(embodied.Env):
             # Ensure achievements are int32 to avoid JAX iota dtype issues
             result['log/achievements'] = np.asarray(achievements, dtype=np.int32)
             result['log/achievement_depth'] = np.int32(self._compute_achievement_depth(achievements))
+        if self._use_action_mask and mask_context is not None:
+            # [wood, stone, near_table, near_furnace]
+            ctx = np.array([
+                float(mask_context['wood']),
+                float(mask_context['stone']),
+                float(mask_context['near_table']),
+                float(mask_context['near_furnace']),
+            ], dtype=np.float32)
+            result['log/action_mask_context'] = ctx
         return result
 
     def step(self, action):
@@ -770,7 +783,8 @@ class CraftaxWrapper(embodied.Env):
             self._episode_achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
             self._cumulative_reward = 0.0
             achievements = self._extract_achievements_from_state(self._state) if self._track_achievements else None
-            return self._to_numpy_result(self._obs, 0.0, True, False, False, achievements)
+            mask_ctx = self._extract_mask_context() if self._use_action_mask else None
+            return self._to_numpy_result(self._obs, 0.0, True, False, False, achievements, mask_ctx)
 
         # Get action - avoid Python int() conversion, keep as jax-compatible
         act = action['action']
@@ -796,9 +810,18 @@ class CraftaxWrapper(embodied.Env):
             # Update episode achievements (OR with current)
             self._episode_achievements = np.logical_or(self._episode_achievements, achievements)
 
+        mask_ctx = self._extract_mask_context() if self._use_action_mask else None
         return self._to_numpy_result(
-            self._obs, reward_val, False, self._done, self._done, achievements
+            self._obs, reward_val, False, self._done, self._done, achievements, mask_ctx
         )
+
+    def _extract_mask_context(self):
+        """Extract action mask context from current state."""
+        try:
+            from craftax_mask import extract_mask_context
+            return extract_mask_context(self._state)
+        except Exception:
+            return None
 
     def close(self):
         pass
@@ -1159,6 +1182,15 @@ def make_agent(config, env, args=None):
             'expl_intr_scale': getattr(args, 'expl_intr_scale', 0.9),
             'expl_extr_scale': getattr(args, 'expl_extr_scale', 0.9),
         }
+    # Action mask config (Craftax feasibility prior)
+    action_mask_config = {}
+    if args is not None and getattr(args, 'action_mask_enabled', False):
+        action_mask_config = {
+            'action_mask_enabled': True,
+            'action_mask_mode': getattr(args, 'action_mask_mode', 'soft'),
+            'action_mask_lambda_penalty': getattr(args, 'action_mask_lambda_penalty', 5.0),
+            'action_mask_large_negative': getattr(args, 'action_mask_large_negative', 1e9),
+        }
     agent_config = elements.Config(
         **config.agent,
         logdir=config.logdir,
@@ -1171,6 +1203,7 @@ def make_agent(config, env, args=None):
         replica=config.replica,
         replicas=config.replicas,
         **p2e_config,
+        **action_mask_config,
     )
     return Agent(obs_space, act_space, agent_config)
 
@@ -2161,7 +2194,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
     logger.close()
 
 
-def make_craftax(env_name, embedding_dim=256, use_embedding=True, seed=42):
+def make_craftax(env_name, embedding_dim=256, use_embedding=True, seed=42, use_action_mask=False):
     """Create a Craftax environment with proper wrappers."""
     if not CRAFTAX_AVAILABLE:
         raise ImportError("Craftax is not installed. Install with: pip install craftax")
@@ -2171,6 +2204,7 @@ def make_craftax(env_name, embedding_dim=256, use_embedding=True, seed=42):
         embedding_dim=embedding_dim,
         use_embedding=use_embedding,
         seed=seed,
+        use_action_mask=use_action_mask,
     )
 
 
@@ -2234,6 +2268,7 @@ def run_craftax(args):
                 embedding_dim=args.embedding_dim,
                 use_embedding=use_embedding,
                 seed=seed,
+                use_action_mask=getattr(args, 'action_mask_enabled', False),
             ))
             print(f"Task {i}: env {name}, use_embedding: {use_embedding}")
 
@@ -2257,9 +2292,12 @@ def run_craftax(args):
             embedding_dim=args.embedding_dim,
             use_embedding=use_embedding,
             seed=seed,
+            use_action_mask=getattr(args, 'action_mask_enabled', False),
         )
 
-        train_single(make_env, config, args, env_name=env_name)
+        # Use non-vectorized path when action mask enabled (VectorCraftaxEnv has no state access)
+        use_vec = env_name and not getattr(args, 'action_mask_enabled', False)
+        train_single(make_env, config, args, env_name=env_name if use_vec else None)
 
     if args.del_exp_replay:
         shutil.rmtree(os.path.join(config.logdir, 'replay'), ignore_errors=True)

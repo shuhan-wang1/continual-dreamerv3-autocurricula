@@ -1,5 +1,5 @@
 -r ./dreamerv3/requirements.txt
-python>=3.9
+# python>=3.11 (env constraint, not a pip package)
 jax>=0.4.20
 jaxlib>=0.4.20
 craftax>=1.0.0
