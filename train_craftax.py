@@ -778,8 +778,12 @@ class CraftaxWrapper(embodied.Env):
             # Ensure achievements are int32 to avoid JAX iota dtype issues
             result['log/achievements'] = np.asarray(achievements, dtype=np.int32)
             result['log/achievement_depth'] = np.int32(self._compute_achievement_depth(achievements))
-        if self._use_action_mask and mask_context is not None:
-            result['action_mask_context'] = np.asarray(mask_context, dtype=np.float32)
+        if self._use_action_mask:
+            if mask_context is not None:
+                result['action_mask_context'] = np.asarray(mask_context, dtype=np.float32)
+            else:
+                from craftax_mask import CONTEXT_SIZE
+                result['action_mask_context'] = np.zeros(CONTEXT_SIZE, dtype=np.float32)
         return result
 
     def step(self, action):
@@ -1712,7 +1716,7 @@ def train_single(make_env, config, args, env_name=None):
     nlr_nonpriv = getattr(args, 'nlr_sampling', False) or getattr(args, 'nlu_sampling', False)
     nlr_active = nlr_privileged or nlr_nonpriv
     episode_item_keys = {}          # worker -> list of item keys inserted this episode
-    _prev_inserted_id = [None]      # mutable ref to detect new insertions
+    _prev_inserted_id = {}           # per-worker tracking to avoid cross-worker misattribution
 
     # Shared state for training metrics
     training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0, 'latest_td_error': 0.0}
@@ -1737,9 +1741,9 @@ def train_single(make_env, config, args, env_name=None):
         # NLR: track newly inserted item keys for this worker's episode
         if nlr_active and worker in episode_item_keys:
             cur_id = replay.last_inserted_itemid
-            if cur_id is not None and cur_id != _prev_inserted_id[0]:
+            if cur_id is not None and cur_id != _prev_inserted_id.get(worker):
                 episode_item_keys[worker].append(cur_id)
-                _prev_inserted_id[0] = cur_id
+                _prev_inserted_id[worker] = cur_id
 
         # Accumulate achievements throughout episode
         if 'log/achievements' in tran and worker in episode_achievements:
@@ -1903,21 +1907,23 @@ def train_single(make_env, config, args, env_name=None):
     stream_train = iter(agent.stream(make_stream(replay, 'train')))
     carry_train = [agent.init_train(batch_size)]
 
-    # Always start fresh: remove old checkpoint directory if it exists
+    # Checkpoint setup: support resuming interrupted runs
     ckpt_dir = logdir / 'ckpt'
-    if ckpt_dir.exists():
-        import shutil as _shutil
-        _shutil.rmtree(str(ckpt_dir), ignore_errors=True)
-        print('Removed old checkpoint directory for fresh start.')
+    if getattr(args, 'fresh_start', True):
+        if ckpt_dir.exists():
+            import shutil as _shutil
+            _shutil.rmtree(str(ckpt_dir), ignore_errors=True)
+            print('Removed old checkpoint directory for fresh start.')
 
     cp = elements.Checkpoint(logdir / 'ckpt')
     cp.step = step
     cp.agent = agent
     cp.replay = replay
-    # Never load checkpoint - always start fresh
+    if not getattr(args, 'fresh_start', True):
+        cp.load(ckpt_dir, keys=['step', 'agent', 'replay'])
     cp.save()
 
-    print('Start training loop (fresh start, no checkpoint loaded)')
+    print(f'Start training loop (step={int(step.value)})')
     policy = lambda carry, obs: agent.policy(carry, obs, mode='train')
     driver.reset(agent.init_policy)
 
@@ -2009,18 +2015,20 @@ def cl_train_loop(make_envs, config, args, env_names=None):
     train_ratio = config.run.train_ratio
     should_train = elements.when.Ratio(train_ratio / batch_steps)
 
-    # Always start fresh: remove old checkpoint directory if it exists
+    # Checkpoint setup: support resuming interrupted runs
     ckpt_dir = logdir / 'ckpt'
-    if ckpt_dir.exists():
-        import shutil as _shutil
-        _shutil.rmtree(str(ckpt_dir), ignore_errors=True)
-        print('Removed old checkpoint directory for fresh start.')
+    if getattr(args, 'fresh_start', True):
+        if ckpt_dir.exists():
+            import shutil as _shutil
+            _shutil.rmtree(str(ckpt_dir), ignore_errors=True)
+            print('Removed old checkpoint directory for fresh start.')
 
     cp = elements.Checkpoint(logdir / 'ckpt')
     cp.step = total_step
     cp.agent = agent
     cp.replay = replay
-    # Never load checkpoint - always start fresh
+    if not getattr(args, 'fresh_start', True):
+        cp.load(ckpt_dir, keys=['step', 'agent', 'replay'])
     cp.save()
 
     stats = replay.stats()
@@ -2150,7 +2158,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
             cl_nlr_nonpriv = getattr(args, 'nlr_sampling', False) or getattr(args, 'nlu_sampling', False)
             cl_nlr_active = cl_nlr_privileged or cl_nlr_nonpriv
             cl_episode_item_keys = {}
-            cl_prev_inserted_id = [None]
+            cl_prev_inserted_id = {}  # per-worker tracking
 
             def logfn(tran, worker):
                 episode = episodes[worker]
@@ -2167,9 +2175,9 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                 # NLR: track newly inserted item keys for this worker's episode
                 if cl_nlr_active and worker in cl_episode_item_keys:
                     cur_id = replay.last_inserted_itemid
-                    if cur_id is not None and cur_id != cl_prev_inserted_id[0]:
+                    if cur_id is not None and cur_id != cl_prev_inserted_id.get(worker):
                         cl_episode_item_keys[worker].append(cur_id)
-                        cl_prev_inserted_id[0] = cur_id
+                        cl_prev_inserted_id[worker] = cur_id
 
                 # Accumulate achievements
                 if 'log/achievements' in tran and worker in episode_achievements:

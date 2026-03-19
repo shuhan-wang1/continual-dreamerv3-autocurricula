@@ -29,7 +29,7 @@ try:
     _BLOCK_IDS = {bt.name: int(bt.value) for bt in BlockType}
     # Solid blocks that prevent placement (from SOLID_BLOCK_MAPPING in constants.py)
     _SOLID_NAMES = {
-        'STONE', 'TREE', 'COAL_ORE', 'IRON_ORE', 'DIAMOND_ORE',
+        'STONE', 'TREE', 'COAL', 'IRON', 'DIAMOND',
         'CRAFTING_TABLE', 'FURNACE', 'PLANT', 'RIPE_PLANT', 'WALL',
         'WALL_MOSS', 'STALAGMITE', 'RUBY', 'SAPPHIRE', 'CHEST',
         'FOUNTAIN', 'FIRE_TREE', 'ENCHANTMENT_TABLE_FIRE',

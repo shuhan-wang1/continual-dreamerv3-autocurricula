@@ -324,6 +324,9 @@ class Agent(embodied.jax.Agent):
         # Use .loss() instead of .log_prob() - returns negative log prob
         disag_loss = disag_loss + pred.loss(disag_tgt)
       disag_loss = disag_loss / self._disag_models
+      # Normalize by target dimension so disag loss magnitude is comparable
+      # to other per-element losses (dyn, rep, etc.)
+      disag_loss = disag_loss / max(1, self._disag_target_dim)
       # Pad to [B, T] to match other losses (pad last timestep with zeros)
       losses['disag'] = jnp.concatenate(
           [disag_loss, jnp.zeros((B, 1))], axis=1)
@@ -357,7 +360,9 @@ class Agent(embodied.jax.Agent):
       # Intrinsic reward = mean variance across ensemble (epistemic uncertainty)
       intr_rew = preds.var(axis=0).mean(axis=-1)  # [B*K, H+1]
       # Combine: r_total = α_i * r_intr + α_e * r_extr
-      combined_rew = (self._expl_intr_scale * intr_rew +
+      # Stop gradient: ensemble should only be trained via disag_loss,
+      # not via gradients flowing back through the imagination policy/value loss.
+      combined_rew = (self._expl_intr_scale * jax.lax.stop_gradient(intr_rew) +
                       self._expl_extr_scale * extr_rew)
       metrics['p2e/intr_rew'] = intr_rew.mean()
       metrics['p2e/extr_rew'] = extr_rew.mean()
