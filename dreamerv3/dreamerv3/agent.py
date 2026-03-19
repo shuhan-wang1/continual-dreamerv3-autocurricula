@@ -35,7 +35,7 @@ class Agent(embodied.jax.Agent):
     self.act_space = act_space
     self.config = config
 
-    exclude = ('is_first', 'is_last', 'is_terminal', 'reward')
+    exclude = ('is_first', 'is_last', 'is_terminal', 'reward', 'action_mask_context')
     enc_space = {k: v for k, v in obs_space.items() if k not in exclude}
     dec_space = {k: v for k, v in obs_space.items() if k not in exclude}
     self.enc = {
@@ -154,41 +154,42 @@ class Agent(embodied.jax.Agent):
     return spaces
 
   def _apply_action_mask(self, policy, ctx_arr):
-    """Apply recipe-aware bias to action logits. ctx_arr: [wood, stone, near_table, near_furnace]."""
+    """Apply feasibility bias to action logits. ctx_arr: float32 (CONTEXT_SIZE,) or (B, CONTEXT_SIZE)."""
     import embodied.jax.outs as outs
     from craftax_mask import (
-        BASIC_ACTION_RULES,
+        ACTION_RULES,
         compute_mask_details,
         compute_mask_logging_stats,
     )
     raw = policy['action']
-    logits = raw.dist.logits if hasattr(raw, 'dist') else raw.logits
+    # Extract logits from distribution (OneHot wraps .dist, Categorical is bare)
+    if isinstance(raw, outs.OneHot):
+      logits = raw.dist.logits
+    else:
+      logits = raw.logits
     num_actions = logits.shape[-1]
-    context = {
-        'wood': ctx_arr[..., 0],
-        'stone': ctx_arr[..., 1],
-        'near_table': ctx_arr[..., 2] > 0.5,
-        'near_furnace': ctx_arr[..., 3] > 0.5,
-        'coal': 0,
-        'iron': 0,
-    }
     details = compute_mask_details(
-        context, BASIC_ACTION_RULES, num_actions,
+        ctx_arr, ACTION_RULES, num_actions,
         lambda_penalty=self._action_mask_lambda,
         large_negative=self._action_mask_large_neg,
         mode=self._action_mask_mode,
     )
     bias = jnp.asarray(details['bias'])
-    if bias.ndim == 1 and logits.ndim > 1:
+    if bias.ndim < logits.ndim:
       bias = jnp.broadcast_to(bias, logits.shape)
     adj_logits = logits + bias
-    unimix = getattr(self.config.policy, 'unimix', 0.01)
-    new_dist = outs.OneHot(adj_logits, unimix) if hasattr(raw, 'dist') else outs.Categorical(adj_logits, unimix)
+    # Use unimix=0.0 to match the original Head.categorical() which passes no unimix
+    if isinstance(raw, outs.OneHot):
+      new_dist = outs.OneHot(adj_logits, 0.0)
+    else:
+      new_dist = outs.Categorical(adj_logits, 0.0)
+    # Preserve minent/maxent from original distribution for entropy reporting
+    if hasattr(raw, 'minent'):
+      new_dist.minent = raw.minent
+      new_dist.maxent = raw.maxent
     stats = compute_mask_logging_stats(
-        details,
-        BASIC_ACTION_RULES,
-        raw_logits=logits,
-        adjusted_logits=adj_logits,
+        details, ACTION_RULES,
+        raw_logits=logits, adjusted_logits=adj_logits,
         large_negative=self._action_mask_large_neg,
     )
     stats = {k: jnp.asarray(v, dtype=f32) for k, v in stats.items()}
@@ -234,8 +235,8 @@ class Agent(embodied.jax.Agent):
     if mask_stats is not None:
       out.update({f'log/{k}': v for k, v in mask_stats.items()})
     elif self.action_mask_enabled:
-      from craftax_mask import BASIC_ACTION_RULES, empty_mask_logging_stats
-      stats = empty_mask_logging_stats(reset.shape, BASIC_ACTION_RULES, context_missing=True)
+      from craftax_mask import ACTION_RULES, empty_mask_logging_stats
+      stats = empty_mask_logging_stats(reset.shape, ACTION_RULES, context_missing=True)
       out.update({f'log/{k}': jnp.asarray(v, dtype=f32) for k, v in stats.items()})
     out['finite'] = elements.tree.flatdict(jax.tree.map(
         lambda x: jnp.isfinite(x).all(range(1, x.ndim)),
@@ -421,7 +422,7 @@ class Agent(embodied.jax.Agent):
     # Train metrics
     _, (new_carry, entries, outs, mets) = self.loss(
         carry, obs, prevact, training=False)
-    mets.update(mets)
+    metrics.update(mets)
 
     # Grad norms
     if self.config.report_gradnorms:

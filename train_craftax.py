@@ -691,7 +691,8 @@ class CraftaxWrapper(embodied.Env):
         # Action mask context used by policy-time masking.
         # Keep this as a non-log key so it reaches the policy network input path.
         if self._use_action_mask:
-            spaces['action_mask_context'] = elements.Space(np.float32, (4,), -np.inf, np.inf)
+            from craftax_mask import CONTEXT_SIZE
+            spaces['action_mask_context'] = elements.Space(np.float32, (CONTEXT_SIZE,), -np.inf, np.inf)
         return spaces
 
     @property
@@ -778,14 +779,7 @@ class CraftaxWrapper(embodied.Env):
             result['log/achievements'] = np.asarray(achievements, dtype=np.int32)
             result['log/achievement_depth'] = np.int32(self._compute_achievement_depth(achievements))
         if self._use_action_mask and mask_context is not None:
-            # [wood, stone, near_table, near_furnace]
-            ctx = np.array([
-                float(mask_context['wood']),
-                float(mask_context['stone']),
-                float(mask_context['near_table']),
-                float(mask_context['near_furnace']),
-            ], dtype=np.float32)
-            result['action_mask_context'] = ctx
+            result['action_mask_context'] = np.asarray(mask_context, dtype=np.float32)
         return result
 
     def step(self, action):
@@ -830,14 +824,20 @@ class CraftaxWrapper(embodied.Env):
         )
 
     def _extract_mask_context(self):
-        """Extract action mask context from current state."""
+        """Extract action mask context array from current state."""
         try:
             from craftax_mask import extract_mask_context
             return extract_mask_context(self._state)
-        except Exception as exc:
+        except ImportError as exc:
             if not self._mask_extract_warning:
-                print(f'Action mask context extraction failed once: {exc}')
+                print(f'[action_mask] craftax_mask not importable: {exc}')
                 self._mask_extract_warning = True
+            return None
+        except Exception as exc:
+            # Log every unique error, not just the first
+            import traceback
+            print(f'[action_mask] extraction error: {exc}')
+            traceback.print_exc()
             return None
 
     def close(self):

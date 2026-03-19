@@ -1,12 +1,8 @@
-"""
-Craftax action feasibility mask.
+"""Craftax action feasibility mask for all 37 maskable actions."""
 
-Recipe-aware action mask to discourage infeasible crafting actions.
-"""
-from .rules import BASIC_ACTION_RULES
+from .rules import ACTION_RULES, BASIC_ACTION_RULES, CONTEXT_SIZE, C
 from .extractor import extract_mask_context
 from .mask import (
-    assert_basic_mask_expectations,
     compute_logit_bias,
     compute_mask_details,
     compute_mask_logging_stats,
@@ -14,11 +10,13 @@ from .mask import (
 )
 
 __all__ = [
+    "ACTION_RULES",
     "BASIC_ACTION_RULES",
+    "CONTEXT_SIZE",
+    "C",
     "extract_mask_context",
     "compute_logit_bias",
     "compute_mask_details",
     "compute_mask_logging_stats",
     "empty_mask_logging_stats",
-    "assert_basic_mask_expectations",
 ]
