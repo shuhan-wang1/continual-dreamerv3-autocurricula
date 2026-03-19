@@ -458,5 +458,16 @@ def parse_navix_args(args=None):
     parser.add_argument('--eval_skills', default=False, action='store_true',
                         help='Flag evaluating our model on the multiskill envs.')
 
+    # Action masking (Craftax feasibility prior)
+    parser.add_argument('--action_mask_enabled', default=False, action='store_true',
+                        help='Enable action feasibility masking at actor sampling time.')
+    parser.add_argument('--action_mask_mode', type=str, default='soft',
+                        choices=['soft', 'hard', 'none'],
+                        help='Mask mode: soft (bias=-lambda*deficit), hard (block), none.')
+    parser.add_argument('--action_mask_lambda_penalty', type=float, default=5.0,
+                        help='Soft mode penalty weight (default 5.0).')
+    parser.add_argument('--action_mask_large_negative', type=float, default=1e9,
+                        help='Hard mode block magnitude (default 1e9).')
+
     args = parser.parse_known_args(args=args)[0]
     return args

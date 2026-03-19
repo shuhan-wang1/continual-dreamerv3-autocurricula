@@ -48,6 +48,7 @@ GROUP_COLORS = {
     "C": ["#7f7f7f", "#bcbd22", "#17becf"],
     "D": ["#aec7e8", "#ffbb78", "#98df8a"],
     "E": ["#e6550d"],
+    "F": ["#17becf", "#e377c2", "#2ca02c", "#d62728"],
 }
 
 # Descriptive labels for groups
@@ -56,6 +57,7 @@ GROUP_LABELS = {
     "B": "Component Ablation",
     "D": "Replay Strategy (NLR)",
     "E": "Final Model (NLR + Intrinsic)",
+    "F": "Action Masking (Soft vs Hard)",
 }
 
 # ---------------------------------------------------------------------------
@@ -191,6 +193,29 @@ REPLAY_METRICS = [
     ("replay/buffer_size", "Replay Buffer Size"),
     ("replay/mean_td_error", "Replay Mean TD-Error"),
     ("replay/mean_episode_age", "Replay Mean Episode Age"),
+]
+
+# ---------------------------------------------------------------------------
+# Action mask metrics (logged per episode in online_metrics.jsonl)
+# ---------------------------------------------------------------------------
+MASK_OVERVIEW_METRICS = [
+    ("mask_penalty_mean", "Mean Mask Penalty"),
+    ("mask_infeasible_frac", "Infeasible Action Fraction"),
+    ("mask_blocked_frac", "Blocked Action Fraction (Hard Mode)"),
+]
+
+# Per-action rejection counts (from training metrics.jsonl)
+MASK_PER_ACTION_METRICS = [
+    ("mask/invalid_place_table_count", "PLACE_TABLE Rejections"),
+    ("mask/invalid_place_furnace_count", "PLACE_FURNACE Rejections"),
+    ("mask/invalid_make_wood_pickaxe_count", "MAKE_WOOD_PICKAXE Rejections"),
+    ("mask/invalid_make_stone_pickaxe_count", "MAKE_STONE_PICKAXE Rejections"),
+]
+
+# Probability shift for PLACE_TABLE (diagnostic: how much does the mask shift probs?)
+MASK_PROB_METRICS = [
+    ("mask/place_table_prob_before", "P(PLACE_TABLE) Before Mask"),
+    ("mask/place_table_prob_after", "P(PLACE_TABLE) After Mask"),
 ]
 
 
@@ -1638,6 +1663,233 @@ def print_numerical_summary(data: Dict, outdir: str):
 
 
 # ============================================================================
+# Action Mask Visualizations
+# ============================================================================
+
+def plot_mask_diagnostics(data: Dict, outdir: str, fmt: str = "png",
+                          smooth_window: int = 20):
+    """Generate comprehensive action mask diagnostic plots for Group F experiments.
+
+    Produces:
+      1. Overview panel: infeasible_frac, penalty_mean, blocked_frac over training
+      2. Soft vs Hard comparison bar chart (final values)
+      3. Per-action rejection rate comparison
+      4. Probability shift plot (PLACE_TABLE before/after masking)
+    """
+    # Collect all mask experiments (Group F) + baseline (A1) for comparison
+    mask_exps = OrderedDict()
+    baseline_exp = None
+    for eid, d in data.items():
+        if d["group"] == "F":
+            mask_exps[eid] = d
+        if eid.startswith("A1"):
+            baseline_exp = (eid, d)
+
+    if not mask_exps:
+        print("    No Group F (mask) experiments found, skipping mask diagnostics.")
+        return
+
+    os.makedirs(outdir, exist_ok=True)
+
+    # --- 1. Mask overview learning curves (infeasible frac, penalty, blocked) ---
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    for panel_idx, (mk, ml) in enumerate(MASK_OVERVIEW_METRICS):
+        ax = axes[panel_idx]
+        idx = 0
+        for exp_id, exp_data in mask_exps.items():
+            steps, mean, std = aggregate_across_seeds(
+                exp_data, mk, step_key="step", source="online"
+            )
+            if len(steps) == 0:
+                continue
+            color = get_exp_color(exp_id, "F", idx)
+            sm = smooth(mean, smooth_window)
+            ax.plot(steps, sm, color=color, linewidth=1.8, label=exp_id)
+            ax.fill_between(
+                steps, smooth(mean - std, smooth_window),
+                smooth(mean + std, smooth_window),
+                color=color, alpha=0.15,
+            )
+            idx += 1
+        ax.set_title(ml, fontsize=12)
+        ax.set_xlabel("Training Step", fontsize=10)
+        ax.set_ylabel(ml, fontsize=10)
+        ax.legend(fontsize=8, loc="best")
+        ax.grid(True, alpha=0.3)
+
+    fig.suptitle("Action Mask Diagnostics: Soft vs Hard", fontsize=14, y=1.02)
+    fig.tight_layout()
+    fig.savefig(os.path.join(outdir, f"mask_overview.{fmt}"), dpi=150,
+                bbox_inches="tight")
+    plt.close(fig)
+
+    # --- 2. Final-value bar chart: soft vs hard comparison ---
+    # Compare mask experiments + baseline on key metrics
+    compare_exps = OrderedDict()
+    if baseline_exp:
+        compare_exps[baseline_exp[0]] = baseline_exp[1]
+    compare_exps.update(mask_exps)
+
+    bar_metrics = [
+        ("score", "Episode Return"),
+        ("return_mean", "Windowed Mean Return"),
+        ("mask_infeasible_frac", "Infeasible Action Fraction"),
+        ("mask_penalty_mean", "Mean Mask Penalty"),
+    ]
+
+    n_metrics = len(bar_metrics)
+    fig, axes = plt.subplots(1, n_metrics, figsize=(5 * n_metrics, 5))
+    if n_metrics == 1:
+        axes = [axes]
+
+    for panel_idx, (mk, ml) in enumerate(bar_metrics):
+        ax = axes[panel_idx]
+        exp_ids, means, stds, colors = [], [], [], []
+        for idx, (eid, ed) in enumerate(compare_exps.items()):
+            seed_vals = []
+            for seed, records in ed["online"].items():
+                if not records:
+                    continue
+                # Use last 10% of records for final value
+                n = max(1, len(records) // 10)
+                tail = records[-n:]
+                vals = [safe_float(r.get(mk)) for r in tail
+                        if r.get(mk) is not None]
+                if vals:
+                    seed_vals.append(np.nanmean(vals))
+            if seed_vals:
+                exp_ids.append(eid)
+                means.append(np.mean(seed_vals))
+                stds.append(np.std(seed_vals))
+                grp = ed["group"]
+                colors.append(get_exp_color(eid, grp,
+                    list(compare_exps.keys()).index(eid)
+                    - (1 if baseline_exp else 0)))
+
+        if exp_ids:
+            x = np.arange(len(exp_ids))
+            bars = ax.bar(x, means, yerr=stds, capsize=4, color=colors,
+                          edgecolor="black", linewidth=0.5, alpha=0.85)
+            ax.set_xticks(x)
+            ax.set_xticklabels(exp_ids, rotation=30, ha="right", fontsize=8)
+            ax.set_ylabel(ml, fontsize=10)
+            ax.set_title(ml, fontsize=11)
+            ax.grid(True, alpha=0.2, axis="y")
+
+    fig.suptitle("Action Mask: Final Performance Comparison", fontsize=14, y=1.02)
+    fig.tight_layout()
+    fig.savefig(os.path.join(outdir, f"mask_bar_comparison.{fmt}"), dpi=150,
+                bbox_inches="tight")
+    plt.close(fig)
+
+    # --- 3. Per-action rejection rate curves ---
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    axes_flat = axes.flatten()
+    for panel_idx, (mk, ml) in enumerate(MASK_PER_ACTION_METRICS):
+        if panel_idx >= len(axes_flat):
+            break
+        ax = axes_flat[panel_idx]
+        idx = 0
+        for exp_id, exp_data in mask_exps.items():
+            steps, mean, std = aggregate_across_seeds(
+                exp_data, mk, step_key="step", source="training"
+            )
+            if len(steps) == 0:
+                continue
+            color = get_exp_color(exp_id, "F", idx)
+            sm = smooth(mean, max(1, smooth_window))
+            ax.plot(steps, sm, color=color, linewidth=1.5, label=exp_id)
+            ax.fill_between(
+                steps, smooth(mean - std, max(1, smooth_window)),
+                smooth(mean + std, max(1, smooth_window)),
+                color=color, alpha=0.12,
+            )
+            idx += 1
+        ax.set_title(ml, fontsize=11)
+        ax.set_xlabel("Training Step", fontsize=9)
+        ax.set_ylabel("Rejection Count", fontsize=9)
+        ax.legend(fontsize=7, loc="best")
+        ax.grid(True, alpha=0.3)
+
+    fig.suptitle("Per-Action Rejection Rates: Soft vs Hard Mask", fontsize=13)
+    fig.tight_layout()
+    fig.savefig(os.path.join(outdir, f"mask_per_action_rejections.{fmt}"),
+                dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    # --- 4. Probability shift: P(PLACE_TABLE) before vs after masking ---
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    for panel_idx, (mk, ml) in enumerate(MASK_PROB_METRICS):
+        ax = axes[panel_idx]
+        idx = 0
+        for exp_id, exp_data in mask_exps.items():
+            steps, mean, std = aggregate_across_seeds(
+                exp_data, mk, step_key="step", source="training"
+            )
+            if len(steps) == 0:
+                continue
+            color = get_exp_color(exp_id, "F", idx)
+            sm = smooth(mean, max(1, smooth_window))
+            ax.plot(steps, sm, color=color, linewidth=1.5, label=exp_id)
+            ax.fill_between(
+                steps, smooth(mean - std, max(1, smooth_window)),
+                smooth(mean + std, max(1, smooth_window)),
+                color=color, alpha=0.12,
+            )
+            idx += 1
+        ax.set_title(ml, fontsize=11)
+        ax.set_xlabel("Training Step", fontsize=9)
+        ax.set_ylabel("Probability", fontsize=9)
+        ax.legend(fontsize=8, loc="best")
+        ax.grid(True, alpha=0.3)
+
+    fig.suptitle("Mask Effect on Action Probabilities (PLACE_TABLE)", fontsize=13)
+    fig.tight_layout()
+    fig.savefig(os.path.join(outdir, f"mask_prob_shift.{fmt}"),
+                dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    # --- 5. Score + Achievement curves: mask vs baseline ---
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    for panel_idx, (mk, ml) in enumerate([
+        ("score", "Episode Return"),
+        ("return_mean", "Windowed Mean Return"),
+        ("aggregate_forgetting", "Aggregate Forgetting"),
+    ]):
+        ax = axes[panel_idx]
+        idx = 0
+        for exp_id, exp_data in compare_exps.items():
+            steps, mean, std = aggregate_across_seeds(
+                exp_data, mk, step_key="step", source="online"
+            )
+            if len(steps) == 0:
+                continue
+            grp = exp_data["group"]
+            color = get_exp_color(exp_id, grp, idx)
+            sm = smooth(mean, smooth_window)
+            ax.plot(steps, sm, color=color, linewidth=1.8, label=exp_id)
+            ax.fill_between(
+                steps, smooth(mean - std, smooth_window),
+                smooth(mean + std, smooth_window),
+                color=color, alpha=0.12,
+            )
+            idx += 1
+        ax.set_title(ml, fontsize=12)
+        ax.set_xlabel("Training Step", fontsize=10)
+        ax.set_ylabel(ml, fontsize=10)
+        ax.legend(fontsize=8, loc="best")
+        ax.grid(True, alpha=0.3)
+
+    fig.suptitle("Mask vs Baseline: Performance Comparison", fontsize=14, y=1.02)
+    fig.tight_layout()
+    fig.savefig(os.path.join(outdir, f"mask_vs_baseline.{fmt}"),
+                dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    print(f"    Mask diagnostic plots saved to: {outdir}")
+
+
+# ============================================================================
 # Main
 # ============================================================================
 
@@ -1806,6 +2058,14 @@ def main():
         plot_replay_metrics(data, outdir, fmt, smooth_window=50)
     else:
         print("  [8/9] Training losses skipped (--no_training_losses)")
+
+    # --- 8d. Action mask diagnostics (Group F) ---
+    has_mask_exps = any(d["group"] == "F" for d in data.values())
+    if has_mask_exps:
+        print("  [8d/9] Action mask diagnostics (Group F)...")
+        plot_mask_diagnostics(data, outdir, fmt, smooth_window=sw)
+    else:
+        print("  [8d/9] No Group F (mask) experiments found, skipping.")
 
     # --- 9. Numerical summary ---
     print("  [9/9] Numerical summary...")

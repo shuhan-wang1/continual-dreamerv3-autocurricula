@@ -12,6 +12,7 @@ Experiment groups:
   B  Component ablation     (spatial-only vs craft-only vs both)
   D  Replay strategy       (50:50, NLR, NLU — privileged & non-privileged)
   E  Final model           (NLR replay + Spatial+Craft intrinsic)
+  F  Action masking        (soft mask, hard mask — with and without intrinsic)
 
 Output directory structure:
   experiment_results/ablation/
@@ -189,6 +190,32 @@ EXPERIMENTS["E1_nlr_intrinsic"] = {
     },
 }
 
+# ---------- Group F: Action Masking ----------
+# Evaluates soft vs hard feasibility masking in isolation.
+# Uses FIFO replay (no NLR/NLU), no intrinsic rewards, no P2E.
+# This isolates the pure effect of action masking on exploration.
+EXPERIMENTS["F1_mask_soft"] = {
+    "group": "F",
+    "desc": "Soft action mask (lambda=5.0, FIFO replay, no intrinsic, no P2E)",
+    "args": {
+        "no_plan2explore": True,
+        "no_intrinsic_spatial": True,
+        "action_mask_enabled": True,
+        "action_mask_mode": "soft",
+        "action_mask_lambda_penalty": 5.0,
+    },
+}
+EXPERIMENTS["F2_mask_hard"] = {
+    "group": "F",
+    "desc": "Hard action mask (block infeasible, FIFO replay, no intrinsic, no P2E)",
+    "args": {
+        "no_plan2explore": True,
+        "no_intrinsic_spatial": True,
+        "action_mask_enabled": True,
+        "action_mask_mode": "hard",
+    },
+}
+
 
 # ============================================================================
 # Helpers
@@ -350,6 +377,7 @@ def print_experiment_table(experiments, seeds):
                 "B": "Component Ablation",
                 "D": "Replay Strategy Comparison",
                 "E": "Final Model (NLR + Intrinsic)",
+                "F": "Action Masking (Soft vs Hard)",
             }
             label = group_labels.get(current_group, current_group)
             print(f"  --- Group {current_group}: {label} ---")
