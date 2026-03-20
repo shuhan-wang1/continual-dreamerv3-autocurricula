@@ -204,18 +204,19 @@ MASK_OVERVIEW_METRICS = [
     ("mask_blocked_frac", "Blocked Action Fraction (Hard Mode)"),
 ]
 
-# Per-action rejection counts (from training metrics.jsonl)
+# Per-action rejection counts (from training metrics.jsonl, logged with episode/ prefix)
 MASK_PER_ACTION_METRICS = [
-    ("mask/invalid_place_table_count", "PLACE_TABLE Rejections"),
-    ("mask/invalid_place_furnace_count", "PLACE_FURNACE Rejections"),
-    ("mask/invalid_make_wood_pickaxe_count", "MAKE_WOOD_PICKAXE Rejections"),
-    ("mask/invalid_make_stone_pickaxe_count", "MAKE_STONE_PICKAXE Rejections"),
+    ("episode/mask/invalid_place_table_count", "PLACE_TABLE Rejections"),
+    ("episode/mask/invalid_place_furnace_count", "PLACE_FURNACE Rejections"),
+    ("episode/mask/invalid_make_wood_pickaxe_count", "MAKE_WOOD_PICKAXE Rejections"),
+    ("episode/mask/invalid_make_stone_pickaxe_count", "MAKE_STONE_PICKAXE Rejections"),
 ]
 
 # Probability shift for PLACE_TABLE (diagnostic: how much does the mask shift probs?)
+# Keys in metrics.jsonl have episode/ prefix from logger.add(..., prefix='episode')
 MASK_PROB_METRICS = [
-    ("mask/place_table_prob_before", "P(PLACE_TABLE) Before Mask"),
-    ("mask/place_table_prob_after", "P(PLACE_TABLE) After Mask"),
+    ("episode/mask/place_table_prob_before", "P(PLACE_TABLE) Before Mask"),
+    ("episode/mask/place_table_prob_after", "P(PLACE_TABLE) After Mask"),
 ]
 
 
