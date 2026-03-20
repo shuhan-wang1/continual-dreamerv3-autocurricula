@@ -857,12 +857,14 @@ class VectorCraftaxEnv:
     """
 
     def __init__(self, env_name='CraftaxSymbolic-v1', num_envs=16,
-                 embedding_dim=256, use_embedding=True, seed=42, track_achievements=True):
+                 embedding_dim=256, use_embedding=True, seed=42,
+                 track_achievements=True, use_action_mask=False):
         self._env_name = env_name
         self._num_envs = num_envs
         self._embedding_dim = embedding_dim
         self._use_embedding = use_embedding
         self._track_achievements = track_achievements
+        self._use_action_mask = use_action_mask
 
         # Create one Craftax env to get params / spaces
         if 'Classic' in env_name:
@@ -998,6 +1000,31 @@ class VectorCraftaxEnv:
             depths[i] = max_tier
         return depths
 
+    def _extract_mask_context_batch(self, states):
+        """Extract action mask context for all envs from vectorized JAX states.
+
+        Returns numpy array of shape (num_envs, CONTEXT_SIZE) as float32.
+        Falls back to zeros on error.
+        """
+        try:
+            from craftax_mask import extract_mask_context
+        except ImportError:
+            return np.zeros((self._num_envs, 44), dtype=np.float32)
+        try:
+            # De-vectorize: extract per-env state and compute context
+            # This is a small Python loop (44 floats × N envs), negligible vs GPU step
+            contexts = []
+            for i in range(self._num_envs):
+                env_state = jax.tree_util.tree_map(lambda x: x[i], states)
+                ctx = extract_mask_context(env_state)
+                contexts.append(np.asarray(ctx, dtype=np.float32))
+            return np.stack(contexts, axis=0)
+        except Exception as e:
+            if not hasattr(self, '_mask_ctx_warned'):
+                print(f'[VectorCraftaxEnv] mask context extraction failed: {e}')
+                self._mask_ctx_warned = True
+            return np.zeros((self._num_envs, 44), dtype=np.float32)
+
     @property
     def obs_space(self):
         spaces = {}
@@ -1018,6 +1045,10 @@ class VectorCraftaxEnv:
         if self._track_achievements:
             spaces['log/achievements'] = elements.Space(np.int32, (NUM_CRAFTAX_ACHIEVEMENTS,), 0, 2)
             spaces['log/achievement_depth'] = elements.Space(np.int32)
+        if self._use_action_mask:
+            from craftax_mask.rules import CONTEXT_SIZE
+            spaces['action_mask_context'] = elements.Space(
+                np.float32, (CONTEXT_SIZE,), -np.inf, np.inf)
         return spaces
 
     @property
@@ -1105,6 +1136,10 @@ class VectorCraftaxEnv:
             depths = self._compute_achievement_depths_batch(achievements)
             result['log/achievements'] = achievements
             result['log/achievement_depth'] = depths
+
+        # Action mask context: extracted from game state for feasibility masking
+        if self._use_action_mask:
+            result['action_mask_context'] = self._extract_mask_context_batch(self._states)
 
         return result
 
@@ -1671,7 +1706,8 @@ def train_single(make_env, config, args, env_name=None):
         vec_env = VectorCraftaxEnv(
             env_name=env_name, num_envs=num_envs,
             embedding_dim=embedding_dim, use_embedding=use_embedding,
-            seed=config.seed)
+            seed=config.seed,
+            use_action_mask=getattr(args, 'action_mask_enabled', False))
         driver = VectorDriver(vec_env)
         # Use a lightweight single env for agent space inference
         tmp_env = wrap_env(make_env(config.seed))
@@ -1824,6 +1860,9 @@ def train_single(make_env, config, args, env_name=None):
             td_error_mean = float(mets.get('adv', 0.0))
             td_error_max = float(mets.get('adv_mag', 0.0))
 
+            # Mask context loss (from dream masking head)
+            loss_mask_ctx = float(mets.get('loss/mask_ctx', 0.0))
+
             online.log_training_metrics(
                 step=current_step,
                 loss_obs=loss_obs,
@@ -1838,6 +1877,7 @@ def train_single(make_env, config, args, env_name=None):
                 ensemble_disagreement=ensemble_disagreement,
                 intrinsic_reward=intrinsic_reward,
                 extrinsic_reward=extrinsic_reward,
+                loss_mask_ctx=loss_mask_ctx,
             )
 
             # Log exploration diagnostics (dream accuracy)
@@ -2108,6 +2148,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
 
             td_error_mean = float(mets.get('adv', 0.0))
             td_error_max = float(mets.get('adv_mag', 0.0))
+            loss_mask_ctx = float(mets.get('loss/mask_ctx', 0.0))
 
             online.log_training_metrics(
                 step=current_step,
@@ -2124,6 +2165,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                 intrinsic_reward=intrinsic_reward,
                 extrinsic_reward=extrinsic_reward,
                 task_id=current_task_id,
+                loss_mask_ctx=loss_mask_ctx,
             )
 
             imagined_value = float(mets.get('val', 0.0))
@@ -2249,7 +2291,8 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                 vec_env = VectorCraftaxEnv(
                     env_name=task_env_name, num_envs=num_envs,
                     embedding_dim=embedding_dim, use_embedding=use_embedding,
-                    seed=config.seed)
+                    seed=config.seed,
+                    use_action_mask=getattr(args, 'action_mask_enabled', False))
                 driver = VectorDriver(vec_env)
             else:
                 env_fns = [lambda i=i, fn=make_task_env: wrap_env(fn(config.seed + i)) for i in range(num_envs)]
