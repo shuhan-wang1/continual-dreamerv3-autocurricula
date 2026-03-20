@@ -1,4 +1,5 @@
 import argparse
+import json
 
 def parse_minigrid_args(args=None):
     parser = argparse.ArgumentParser(description="Continual DV2 Minigrid")
@@ -7,7 +8,7 @@ def parse_minigrid_args(args=None):
                         help='Flag for continual learning loop.')
     parser.add_argument('--num_tasks', type=int, default=1)
     parser.add_argument('--num_task_repeats', type=int, default=1)
-    parser.add_argument('--steps', type=int, default=5e5)
+    parser.add_argument('--steps', type=int, default=500000)
     parser.add_argument('--env', type=int, default=0, help='picks the env for the single task dv2.')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--tag', type=str, default='', help='unique str to tag tb.')
@@ -29,17 +30,17 @@ def parse_minigrid_args(args=None):
     parser.add_argument('--embedding_dim', type=int, default=256,
                         help='Dimension of the embedding input.')
     # DV2
-    parser.add_argument('--replay_capacity', type=int, default=2e6)
+    parser.add_argument('--replay_capacity', type=int, default=2000000)
     parser.add_argument('--reservoir_sampling', default=True, action='store_true',
-                        help='Flag for using reservoir sampling.') 
+                        help='Flag for using reservoir sampling.')
     parser.add_argument('--recent_past_sampl_thres', type=float, default=0.5,
                         help="probability of triangle distribution, expected to be > 0 and <= 1. 0 denotes taking episodes always from uniform distribution.")
     parser.add_argument('--minlen', type=int, default=50,
                         help="minimal episode length of episodes stored in the replay buffer")
     parser.add_argument('--batch_size', type=int, default=16,
                         help="mini-batch size")
-    parser.add_argument('--unbalanced_steps', type=list, default=None,
-                        help="number of steps per each task")
+    parser.add_argument('--unbalanced_steps', type=str, default=None,
+                        help="number of steps per each task (JSON list, e.g. '[100000, 200000]')")
 
     # exploration
     parser.add_argument('--plan2explore', default=False, action='store_true',
@@ -69,7 +70,7 @@ def parse_minihack_args(args=None):
                         help='Flag to delete the training episodes after running the script to save storage space.')
     parser.add_argument('--num_tasks', type=int, default=1)
     parser.add_argument('--num_task_repeats', type=int, default=1)
-    parser.add_argument('--steps', type=int, default=5e5)
+    parser.add_argument('--steps', type=int, default=500000)
     parser.add_argument('--train_every', type=int, default=10, help="")
 
     parser.add_argument('--seed', type=int, default=42)
@@ -98,7 +99,7 @@ def parse_minihack_args(args=None):
     # DV2
     parser.add_argument('--beta', type=float, default=1.0)
     parser.add_argument('--eta', type=float, default=3e-3)
-    parser.add_argument('--replay_capacity', type=int, default=2e6)
+    parser.add_argument('--replay_capacity', type=int, default=2000000)
     parser.add_argument('--rssm_stoch', type=int, default=32,
                         help="number of different stochastic latent variables in the wm")
     parser.add_argument('--rssm_discrete', type=int, default=32,
@@ -117,18 +118,19 @@ def parse_minihack_args(args=None):
                         help='Flag for using reward sampling.')
     parser.add_argument('--coverage_sampling', default=False, action='store_true',
                         help='Flag for using coverage maximization.')
-    parser.add_argument('--coverage_sampling_args', default={"filters": 64, 
-                            "kernel_size": [3,3], 
-                            "number_of_comparisons": 1000, 
-                            "normalize_lstm_state": True, 
-                            "distance": "euclid"}, action='store_true',
-                        help='Coverage maximization arguments.')
+    parser.add_argument('--coverage_sampling_args', type=json.loads,
+                        default={"filters": 64,
+                            "kernel_size": [3, 3],
+                            "number_of_comparisons": 1000,
+                            "normalize_lstm_state": True,
+                            "distance": "euclid"},
+                        help='Coverage maximization arguments (JSON string).')
     parser.add_argument('--minlen', type=int, default=50,
                         help="minimal episode length of episodes stored in the replay buffer")
     parser.add_argument('--batch_size', type=int, default=16,
                         help="mini-batch size")
-    parser.add_argument('--unbalanced_steps', type=list, default=None,
-                        help="number of steps per each task")
+    parser.add_argument('--unbalanced_steps', type=str, default=None,
+                        help="number of steps per each task (JSON list, e.g. '[100000, 200000]')")
     parser.add_argument('--sep_ac', default=False, action='store_true',
                         help='Flag for using separate Actor-Critics per task.')
 
@@ -162,7 +164,7 @@ def parse_craftax_args(args=None):
                         help='Flag to delete the training episodes after running the script to save storage space.')
     parser.add_argument('--num_tasks', type=int, default=1)
     parser.add_argument('--num_task_repeats', type=int, default=1)
-    parser.add_argument('--steps', type=int, default=5e5)
+    parser.add_argument('--steps', type=int, default=500000)
 
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--env', type=int, default=0, help='picks the env for the single task training.')
@@ -185,7 +187,7 @@ def parse_craftax_args(args=None):
                         help='Dimension of the embedding input.')
 
     # Training
-    parser.add_argument('--replay_capacity', type=int, default=2e6)
+    parser.add_argument('--replay_capacity', type=int, default=2000000)
     parser.add_argument('--batch_size', type=int, default=16,
                         help="mini-batch size (default 16, increase for better GPU utilization)")
     parser.add_argument('--batch_length', type=int, default=64,
@@ -200,8 +202,8 @@ def parse_craftax_args(args=None):
                         help='Number of parallel environments (override config run.envs).')
     parser.add_argument('--eval_envs', type=int, default=None,
                         help='Number of evaluation environments (override config run.eval_envs).')
-    parser.add_argument('--unbalanced_steps', type=list, default=None,
-                        help="number of steps per each task")
+    parser.add_argument('--unbalanced_steps', type=str, default=None,
+                        help="number of steps per each task (JSON list, e.g. '[100000, 200000]')")
 
     # Replay eviction strategy (PDF Section 4.1)
     parser.add_argument('--reservoir_eviction', default=True, action='store_true',
@@ -376,7 +378,7 @@ def parse_navix_args(args=None):
                         help='Flag to delete the training episodes after running the script to save storage space.')
     parser.add_argument('--num_tasks', type=int, default=1)
     parser.add_argument('--num_task_repeats', type=int, default=1)
-    parser.add_argument('--steps', type=int, default=5e5)
+    parser.add_argument('--steps', type=int, default=500000)
     parser.add_argument('--max_steps', type=int, default=500,
                         help='Maximum steps per episode in NAVIX environment.')
 
@@ -415,11 +417,11 @@ def parse_navix_args(args=None):
                         help='Dimension of the embedding input.')
 
     # Training
-    parser.add_argument('--replay_capacity', type=int, default=2e6)
+    parser.add_argument('--replay_capacity', type=int, default=2000000)
     parser.add_argument('--batch_size', type=int, default=16,
                         help="mini-batch size")
-    parser.add_argument('--unbalanced_steps', type=list, default=None,
-                        help="number of steps per each task")
+    parser.add_argument('--unbalanced_steps', type=str, default=None,
+                        help="number of steps per each task (JSON list, e.g. '[100000, 200000]')")
 
     # Replay sampling strategies
     parser.add_argument('--reservoir_sampling', default=False, action='store_true',

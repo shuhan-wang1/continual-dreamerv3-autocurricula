@@ -64,7 +64,8 @@ import jax.numpy as jnp
 jax.config.update("jax_transfer_guard", "allow")
 
 # Performance: enable persistent compilation cache to avoid re-compiling JIT on restart
-jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
+import tempfile as _tempfile
+jax.config.update("jax_compilation_cache_dir", os.path.join(_tempfile.gettempdir(), "jax_cache"))
 jax.config.update("jax_persistent_cache_min_entry_size_bytes", 0)
 jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
 
@@ -142,7 +143,7 @@ class CraftaxMetrics:
         # Lifetime accumulators
         self._total_episodes = {i: 0 for i in range(num_tasks)}
         self._total_successes = {i: 0 for i in range(num_tasks)}
-        self._max_return = {i: 0.0 for i in range(num_tasks)}
+        self._max_return = {i: -float('inf') for i in range(num_tasks)}
         self._max_depth = {i: -1 for i in range(num_tasks)}
         self._sum_return = {i: 0.0 for i in range(num_tasks)}
         self._personal_best_depth = -1  # Global personal best
@@ -287,7 +288,7 @@ class CraftaxMetrics:
     ):
         """Log core training metrics."""
         self._latest_training_metrics = {
-            'step': int(step),
+            'train_step': int(step),
             'loss/obs': float(loss_obs),
             'loss/rew': float(loss_rew),
             'loss/con': float(loss_con),
@@ -594,7 +595,7 @@ class CraftaxWrapper(embodied.Env):
 
         # Achievement tracking for current episode
         self._episode_achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
-        self._cumulative_reward = 0.0
+
 
         # Use a base key and step counter for deterministic key generation
         # Pre-generate a batch of keys to avoid per-step host-to-device transfers
@@ -648,13 +649,13 @@ class CraftaxWrapper(embodied.Env):
         
         # Setup embedding projection on GPU and JIT the processing function
         if use_embedding:
-            np.random.seed(42)
+            rng = np.random.default_rng(42)
             flat_dim = int(np.prod(self._obs_shape))
-            projection_np = np.random.randn(flat_dim, embedding_dim).astype(np.float32)
+            projection_np = rng.standard_normal((flat_dim, embedding_dim)).astype(np.float32)
             projection_np /= np.sqrt(flat_dim)
             # Keep projection matrix on GPU
             self._projection = jax.device_put(jnp.array(projection_np))
-            
+
             # JIT compile the full obs->embedding pipeline on GPU
             @jax.jit
             def process_obs_jit(obs):
@@ -744,8 +745,10 @@ class CraftaxWrapper(embodied.Env):
                     padded[:len(achievements)] = achievements
                     return padded
                 return achievements
-        except Exception:
-            pass
+        except Exception as e:
+            if not hasattr(self, '_ach_extract_warned'):
+                print(f'[CraftaxWrapper] achievement extraction failed: {e}')
+                self._ach_extract_warned = True
         return np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.int32)
 
     def _compute_achievement_depth(self, achievements):
@@ -793,7 +796,7 @@ class CraftaxWrapper(embodied.Env):
             self._done = False
             # Reset episode achievement tracking
             self._episode_achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
-            self._cumulative_reward = 0.0
+    
             achievements = self._extract_achievements_from_state(self._state) if self._track_achievements else None
             mask_ctx = self._extract_mask_context() if self._use_action_mask else None
             return self._to_numpy_result(self._obs, 0.0, True, False, False, achievements, mask_ctx)
@@ -813,7 +816,6 @@ class CraftaxWrapper(embodied.Env):
         self._done = bool(done)
         # Transfer reward scalar to CPU
         reward_val = float(reward)
-        self._cumulative_reward += reward_val
 
         # Extract achievements from state
         achievements = None
@@ -896,9 +898,9 @@ class VectorCraftaxEnv:
 
         # Projection for embedding (on GPU)
         if use_embedding:
-            np.random.seed(42)
+            rng = np.random.default_rng(42)
             flat_dim = int(np.prod(self._obs_shape))
-            proj = np.random.randn(flat_dim, embedding_dim).astype(np.float32)
+            proj = rng.standard_normal((flat_dim, embedding_dim)).astype(np.float32)
             proj /= np.sqrt(flat_dim)
             self._projection = jax.device_put(jnp.array(proj))
 
@@ -914,23 +916,9 @@ class VectorCraftaxEnv:
                 return obs.astype(jnp.float32)
             self._process_obs = process_obs
 
-        # JIT the full step logic (reset + step + process) to avoid per-step syncs
-        # We'll use a wrapper that handles auto-reset inside JAX.
-        @jax.jit
-        def _batched_step(states, actions, dones, rng_keys, env_params, projection):
-            """Step all envs; auto-reset any that are done."""
-            # First handle resets for envs that are done
-            new_obs_reset, new_states_reset = self._env.reset(rng_keys[0], env_params)
-            # Then step all envs
-            obs_step, new_states_step, rewards, new_dones, infos = self._env.step(
-                rng_keys[0], states, actions, env_params)
-            return obs_step, new_states_step, rewards, new_dones
-        # ^ The above approach doesn't vectorize well; we'll use a simpler design.
-
         # RNG key management
         self._base_key = jax.random.PRNGKey(seed)
         self._step_count = 0
-        self._dones = jnp.ones(num_envs, dtype=jnp.bool_)  # all need reset initially
 
         # Do the initial reset properly
         self._obs_jax = self._extract_obs_batch(obs_batch)
@@ -976,8 +964,10 @@ class VectorCraftaxEnv:
                     padded[:, :achievements.shape[1]] = achievements
                     return padded
                 return achievements
-        except Exception:
-            pass
+        except Exception as e:
+            if not hasattr(self, '_ach_extract_warned'):
+                print(f'[VectorCraftaxEnv] achievement extraction failed: {e}')
+                self._ach_extract_warned = True
         return np.zeros((self._num_envs, NUM_CRAFTAX_ACHIEVEMENTS), dtype=np.int32)
 
     def _compute_achievement_depths_batch(self, achievements):
@@ -1756,6 +1746,7 @@ def train_single(make_env, config, args, env_name=None):
 
     # Shared state for training metrics
     training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0, 'latest_td_error': 0.0}
+    replay_diag_state = {'last_log_step': 0}  # independent throttle for replay diagnostics
     replay_keys = set(agent.spaces.keys())
 
     def replay_addfn(tran, worker):
@@ -1877,13 +1868,13 @@ def train_single(make_env, config, args, env_name=None):
                 ensemble_disagreement=ensemble_disagreement,
                 intrinsic_reward=intrinsic_reward,
                 extrinsic_reward=extrinsic_reward,
-                loss_mask_ctx=loss_mask_ctx,
+                **{'loss/mask_ctx': loss_mask_ctx},
             )
 
             # Log exploration diagnostics (dream accuracy)
             imagined_value = float(mets.get('val', 0.0))
             actual_value = float(mets.get('ret', 0.0))
-            dream_accuracy = 1.0 - abs(imagined_value - actual_value) / max(abs(actual_value), 1e-8) if actual_value != 0 else 0.0
+            dream_accuracy = 1.0 / (1.0 + abs(imagined_value - actual_value))
 
             intr_extr_ratio = 0.0
             if extrinsic_reward > 0:
@@ -1902,20 +1893,14 @@ def train_single(make_env, config, args, env_name=None):
         if online is None:
             return
         current_step = int(step_val)
-        if current_step - training_metrics_state['last_log_step'] >= training_metrics_state['log_every']:
+        if current_step - replay_diag_state['last_log_step'] >= training_metrics_state['log_every']:
+            replay_diag_state['last_log_step'] = current_step
             stats = replay_buffer.stats()
             buffer_size = stats.get('total_steps', len(replay_buffer))
-
-            # Compute depth distribution from recent samples if possible
-            # This is an approximation - actual implementation depends on buffer structure
-            depth_distribution = [0.0] * (NUM_ACHIEVEMENT_TIERS + 1)
 
             online.log_replay_diagnostics(
                 step=current_step,
                 buffer_size=buffer_size,
-                depth_distribution=depth_distribution,
-                mean_td_error=0.0,  # Would need to track priorities
-                mean_episode_age=0.0,  # Would need timestamp tracking
             )
 
     driver.on_step(lambda tran, _: step.increment())
@@ -2003,11 +1988,11 @@ def train_single(make_env, config, args, env_name=None):
             jax.clear_caches()  # force re-trace to pick up the flag
             print(f'[step {step.value}] Dream masking activated '
                   f'(warmup complete after {dream_mask_warmup_steps} steps)')
-        if step.value % 10000 < 10:
+        if step.value % 10000 < collect_steps:
             cp.save()
         # Periodically clear JAX caches to prevent memory accumulation
         # that causes CUDA_ERROR_ILLEGAL_ADDRESS after ~15k steps
-        if step.value % 5000 == 0 and step.value > 0:
+        if step.value % 5000 < collect_steps and step.value > 0:
             jax.clear_caches()
 
     cp.save()
@@ -2119,6 +2104,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
 
     # Shared state for training metrics logging
     training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0, 'latest_td_error': 0.0}
+    replay_diag_state = {'last_log_step': 0}  # independent throttle for replay diagnostics
 
     def log_training_metrics_fn(mets, step_val, current_task_id):
         """Log training metrics periodically."""
@@ -2165,12 +2151,12 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                 intrinsic_reward=intrinsic_reward,
                 extrinsic_reward=extrinsic_reward,
                 task_id=current_task_id,
-                loss_mask_ctx=loss_mask_ctx,
+                **{'loss/mask_ctx': loss_mask_ctx},
             )
 
             imagined_value = float(mets.get('val', 0.0))
             actual_value = float(mets.get('ret', 0.0))
-            dream_accuracy = 1.0 - abs(imagined_value - actual_value) / max(abs(actual_value), 1e-8) if actual_value != 0 else 0.0
+            dream_accuracy = 1.0 / (1.0 + abs(imagined_value - actual_value))
             intr_extr_ratio = intrinsic_reward / extrinsic_reward if extrinsic_reward > 0 else 0.0
 
             online.log_exploration_diagnostics(
@@ -2186,17 +2172,14 @@ def cl_train_loop(make_envs, config, args, env_names=None):
         if online is None:
             return
         current_step = int(step_val)
-        if current_step - training_metrics_state['last_log_step'] >= training_metrics_state['log_every']:
+        if current_step - replay_diag_state['last_log_step'] >= training_metrics_state['log_every']:
+            replay_diag_state['last_log_step'] = current_step
             stats = replay_buffer.stats()
             buffer_size = stats.get('total_steps', len(replay_buffer))
-            depth_distribution = [0.0] * (NUM_ACHIEVEMENT_TIERS + 1)
 
             online.log_replay_diagnostics(
                 step=current_step,
                 buffer_size=buffer_size,
-                depth_distribution=depth_distribution,
-                mean_td_error=0.0,
-                mean_episode_age=0.0,
             )
 
     while rep < args.num_task_repeats:
@@ -2355,10 +2338,10 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                     jax.clear_caches()
                     print(f'[step {total_step.value}] Dream masking activated '
                           f'(CL warmup complete)')
-                if step.value % 10000 < 10:
+                if step.value % 10000 < collect_steps:
                     cp.save()
                 # Periodically clear JAX caches to prevent memory accumulation
-                if total_step.value % 5000 == 0 and total_step.value > 0:
+                if total_step.value % 5000 < collect_steps and total_step.value > 0:
                     jax.clear_caches()
 
             driver.close()
@@ -2389,7 +2372,6 @@ def make_craftax(env_name, embedding_dim=256, use_embedding=True, seed=42, use_a
 
 def run_craftax(args):
     """Main entry point for Craftax training."""
-    tag = args.tag + str(args.seed)
     config, tag = load_config(args)
 
     unbalanced_steps = None
@@ -2474,9 +2456,7 @@ def run_craftax(args):
             use_action_mask=getattr(args, 'action_mask_enabled', False),
         )
 
-        # Use non-vectorized path when action mask enabled (VectorCraftaxEnv has no state access)
-        use_vec = env_name and not getattr(args, 'action_mask_enabled', False)
-        train_single(make_env, config, args, env_name=env_name if use_vec else None)
+        train_single(make_env, config, args, env_name=env_name)
 
     if args.del_exp_replay:
         shutil.rmtree(os.path.join(config.logdir, 'replay'), ignore_errors=True)

@@ -109,7 +109,7 @@ def extract_mask_context(state) -> np.ndarray:
 
     level = _scalar(getattr(state, 'player_level', 0))
     ctx[C.LEVEL] = level
-    level_idx = int(np.clip(level, 0, 8))
+    level_idx = int(np.clip(level, 0, 8))  # will be bounds-checked against map shape below
 
     ctx[C.DEXTERITY] = _scalar(getattr(state, 'player_dexterity', 1))
     ctx[C.STRENGTH] = _scalar(getattr(state, 'player_strength', 1))
@@ -137,6 +137,8 @@ def extract_mask_context(state) -> np.ndarray:
     if map_arr is not None:
         full_map = np.asarray(map_arr)
         if full_map.ndim >= 3:
+            if level_idx >= full_map.shape[0]:
+                level_idx = full_map.shape[0] - 1
             level_map = full_map[level_idx]
         elif full_map.ndim == 2:
             level_map = full_map
@@ -172,7 +174,7 @@ def extract_mask_context(state) -> np.ndarray:
                 facing_has_item = False
                 if item_map is not None:
                     im = np.asarray(item_map)
-                    if im.ndim >= 3:
+                    if im.ndim >= 3 and level_idx < im.shape[0]:
                         facing_has_item = int(im[level_idx, fr, fc]) != _ITEM_NONE
                     elif im.ndim == 2:
                         facing_has_item = int(im[fr, fc]) != _ITEM_NONE
@@ -188,7 +190,7 @@ def extract_mask_context(state) -> np.ndarray:
     item_map = getattr(state, 'item_map', None)
     if item_map is not None:
         im = np.asarray(item_map)
-        if im.ndim >= 3:
+        if im.ndim >= 3 and level_idx < im.shape[0]:
             item_at_player = int(im[level_idx, px, py])
         elif im.ndim == 2:
             item_at_player = int(im[px, py])

@@ -159,6 +159,8 @@ class Agent(embodied.jax.Agent):
 
   @property
   def policy_keys(self):
+    if self.action_mask_enabled:
+      return '^(enc|dyn|dec|pol|mask_ctx)/'
     return '^(enc|dyn|dec|pol)/'
 
   @property
@@ -353,10 +355,14 @@ class Agent(embodied.jax.Agent):
 
     # Mask context prediction loss (train head to predict action_mask_context
     # from RSSM features, enabling mask application during imagination).
-    if self.action_mask_enabled and 'action_mask_context' in obs:
-      mask_ctx_inp = sg(self.feat2tensor(repfeat))
-      mask_ctx_pred = self.mask_ctx_head(mask_ctx_inp, 2)
-      losses['mask_ctx'] = mask_ctx_pred.loss(obs['action_mask_context'])
+    if self.action_mask_enabled:
+      if 'action_mask_context' in obs:
+        mask_ctx_inp = sg(self.feat2tensor(repfeat))
+        mask_ctx_pred = self.mask_ctx_head(mask_ctx_inp, 2)
+        losses['mask_ctx'] = mask_ctx_pred.loss(obs['action_mask_context'])
+      else:
+        # Fallback: zero loss to keep losses/scales keys consistent
+        losses['mask_ctx'] = jnp.zeros((B, T))
 
     # Imagination
     K = min(self.config.imag_last or T, T)
@@ -581,9 +587,11 @@ class Agent(embodied.jax.Agent):
     if schedule == 'const':
       sched = optax.constant_schedule(lr)
     elif schedule == 'linear':
-      sched = optax.linear_schedule(lr, 0.1 * lr, anneal - warmup)
+      transition = max(1, anneal - warmup)
+      sched = optax.linear_schedule(lr, 0.1 * lr, transition)
     elif schedule == 'cosine':
-      sched = optax.cosine_decay_schedule(lr, anneal - warmup, 0.1 * lr)
+      transition = max(1, anneal - warmup)
+      sched = optax.cosine_decay_schedule(lr, transition, 0.1 * lr)
     else:
       raise NotImplementedError(schedule)
     if warmup:

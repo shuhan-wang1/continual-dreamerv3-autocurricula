@@ -91,9 +91,9 @@ class NavixWrapper(embodied.Env):
         
         # Setup embedding projection on GPU and JIT the processing function
         if use_embedding:
-            np.random.seed(42)
+            rng = np.random.default_rng(42)
             flat_dim = int(np.prod(self._obs_shape))
-            projection_np = np.random.randn(flat_dim, embedding_dim).astype(np.float32)
+            projection_np = rng.standard_normal((flat_dim, embedding_dim)).astype(np.float32)
             projection_np /= np.sqrt(flat_dim)
             # Keep projection matrix on GPU
             self._projection = jax.device_put(jnp.array(projection_np))
@@ -146,7 +146,7 @@ class NavixWrapper(embodied.Env):
                 try:
                     h, w = part.split('x')
                     height, width = int(h), int(w)
-                except:
+                except (ValueError, TypeError):
                     pass
         
         # Determine environment type
@@ -277,12 +277,14 @@ class NavixWrapper(embodied.Env):
             from dm_env import StepType
             done = self._timestep.step_type == StepType.LAST
         
+        # Distinguish true terminal (game over) from timeout (step limit)
+        is_terminal = done  # true game-over from environment
         if self._episode_step_count >= self._max_steps:
-            done = True
-        
+            done = True  # is_last includes timeout
+
         self._done = done
         return self._to_numpy_result(
-            self._timestep, reward, False, self._done, self._done
+            self._timestep, reward, False, self._done, is_terminal
         )
 
     def close(self):

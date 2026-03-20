@@ -405,10 +405,10 @@ def main():
                         help="Print commands without executing.")
     parser.add_argument("--only", type=str, default=None,
                         help="Run only these experiments (comma-separated IDs or group letters). "
-                             "E.g., --only A or --only A1_baseline,B2_craft_light")
+                             "E.g., --only A or --only A1_baseline,B2_craft_only")
     parser.add_argument("--skip", type=str, default=None,
                         help="Skip these experiments (comma-separated IDs or group letters). "
-                             "E.g., --skip D or --skip C1_low_intrinsic")
+                             "E.g., --skip D or --skip D1_nlr")
     parser.add_argument("--seeds", type=str, default="1,4,42",
                         help="Comma-separated seeds (default: 1,4,42).")
     parser.add_argument("--base_logdir", type=str, default=BASE_LOGDIR,
@@ -541,6 +541,7 @@ def main():
             save_manifest(manifest_path, manifest)
 
             # Execute
+            result = None
             try:
                 result = subprocess.run(
                     cmd,
@@ -583,7 +584,7 @@ def main():
                 "status": status,
                 "duration_s": round(run_duration, 1),
                 "finished": datetime.now().isoformat(),
-                "return_code": result.returncode if "result" in dir() else -1,
+                "return_code": result.returncode if result is not None else -1,
             })
             save_manifest(manifest_path, manifest)
 

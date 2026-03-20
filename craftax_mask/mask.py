@@ -131,6 +131,10 @@ def _evaluate_conditions(conditions, ctx, xp):
             idx = cond[1]
             deficit = deficit + xp.where(ctx[..., idx] < 5.0, 0.0, 1.0)
 
+        else:
+            import warnings
+            warnings.warn(f"Unknown condition tag '{tag}' in action mask rule — skipped", stacklevel=2)
+
     return deficit
 
 
