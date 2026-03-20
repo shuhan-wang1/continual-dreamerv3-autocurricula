@@ -33,6 +33,8 @@ def parse_minigrid_args(args=None):
     parser.add_argument('--replay_capacity', type=int, default=2000000)
     parser.add_argument('--reservoir_sampling', default=True, action='store_true',
                         help='Flag for using reservoir sampling.')
+    parser.add_argument('--no_reservoir_sampling', dest='reservoir_sampling', action='store_false',
+                        help='Disable reservoir sampling.')
     parser.add_argument('--recent_past_sampl_thres', type=float, default=0.5,
                         help="probability of triangle distribution, expected to be > 0 and <= 1. 0 denotes taking episodes always from uniform distribution.")
     parser.add_argument('--minlen', type=int, default=50,
@@ -196,7 +198,7 @@ def parse_craftax_args(args=None):
                         help="Training steps per env step (default: auto-scaled based on envs/batch_length)")
     parser.add_argument('--model_size', type=str, default='25m',
                         choices=['1m', '12m', '25m', '50m', '100m', '200m', '400m'],
-                        help="Model size preset (default 12m for Craftax). "
+                        help="Model size preset (default 25m). "
                              "12m~2GB, 25m~4GB, 50m~8GB, 100m~16GB, 200m~32GB+")
     parser.add_argument('--envs', type=int, default=None,
                         help='Number of parallel environments (override config run.envs).')
@@ -213,6 +215,8 @@ def parse_craftax_args(args=None):
     # Deprecated alias for backward compatibility
     parser.add_argument('--reservoir_sampling', default=None, action='store_true',
                         help='(DEPRECATED: use --reservoir_eviction) Alias for reservoir eviction.')
+    parser.add_argument('--no_reservoir_sampling', dest='reservoir_sampling', action='store_false',
+                        help='(DEPRECATED: use --no_reservoir_eviction) Disable reservoir eviction.')
 
     # Replay sampling strategies (PDF Section 4.1)
     parser.add_argument('--reward_sampling', default=False, action='store_true',
@@ -296,6 +300,8 @@ def parse_craftax_args(args=None):
                         help='Target for ensemble disagreement prediction (feat = deter + stoch).')
     parser.add_argument('--expl_intr_scale', type=float, default=0.9,
                         help="scale of the intrinsic reward (PDF Section 5.1: α_i=0.9).")
+    parser.add_argument('--expl_extr_scale', type=float, default=0.0,
+                        help="scale of the extrinsic reward for P2E explorer (0.0 = pure intrinsic).")
     parser.add_argument('--sep_exp_eval_policies', default=False, action='store_true',
                         help='Whether to use separate exploration and evaluation policies.')
     parser.add_argument('--rssm_full_recon', default=False, action='store_true',
@@ -319,6 +325,8 @@ def parse_craftax_args(args=None):
     # Online metrics
     parser.add_argument('--online_metrics', default=True, action='store_true',
                         help='Enable online continual-learning metrics logging.')
+    parser.add_argument('--no_online_metrics', dest='online_metrics', action='store_false',
+                        help='Disable online continual-learning metrics logging.')
     parser.add_argument('--ref_metrics_path', type=str, default=None,
                         help='Path to reference metrics JSON for forward transfer.')
     parser.add_argument('--ref_metrics_dir', type=str, default=None,
@@ -405,6 +413,8 @@ def parse_navix_args(args=None):
     # Online metrics
     parser.add_argument('--online_metrics', default=True, action='store_true',
                         help='Enable online continual-learning metrics logging.')
+    parser.add_argument('--no_online_metrics', dest='online_metrics', action='store_false',
+                        help='Disable online continual-learning metrics logging.')
     parser.add_argument('--ref_metrics_path', type=str, default=None,
                         help='Path to reference metrics JSON for forward transfer.')
     parser.add_argument('--ref_metrics_dir', type=str, default=None,

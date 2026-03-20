@@ -86,7 +86,7 @@ class Agent(embodied.jax.Agent):
     if self.action_mask_enabled:
       print(f'Action mask enabled: mode={self._action_mask_mode}, '
             f'lambda={self._action_mask_lambda}, large_neg={self._action_mask_large_neg}')
-      # Mask context prediction head: predicts action_mask_context (44-dim)
+      # Mask context prediction head: predicts action_mask_context (46-dim)
       # from RSSM features so masks can be applied during imagination.
       from craftax_mask.rules import CONTEXT_SIZE
       mask_ctx_space = elements.Space(np.float32, (CONTEXT_SIZE,))
@@ -200,7 +200,8 @@ class Agent(embodied.jax.Agent):
     if bias.ndim < logits.ndim:
       bias = jnp.broadcast_to(bias, logits.shape)
     adj_logits = logits + bias
-    # Use unimix=0.0 to match the original Head.categorical() which passes no unimix
+    # unimix=0.0 is correct: logits already have unimix baked in from the
+    # original distribution's __init__, so re-applying would double-mix.
     if isinstance(raw, outs.OneHot):
       new_dist = outs.OneHot(adj_logits, 0.0)
     else:
@@ -275,7 +276,6 @@ class Agent(embodied.jax.Agent):
         self.loss, carry, obs, prevact, training=True, has_aux=True)
     metrics.update(mets)
     self.slowval.update()
-    outs = {}
     if self.config.replay_context:
       updates = elements.tree.flatdict(dict(
           stepid=stepid, enc=entries[0], dyn=entries[1], dec=entries[2]))
@@ -346,12 +346,9 @@ class Agent(embodied.jax.Agent):
         # Use .loss() instead of .log_prob() - returns negative log prob
         disag_loss = disag_loss + pred.loss(disag_tgt)
       disag_loss = disag_loss / self._disag_models
-      # Normalize by target dimension so disag loss magnitude is comparable
-      # to other per-element losses (dyn, rep, etc.)
-      disag_loss = disag_loss / max(1, self._disag_target_dim)
-      # Pad to [B, T] to match other losses (pad last timestep with zeros)
+      # Pad to [B, T] by repeating last valid timestep (avoids loss dilution)
       losses['disag'] = jnp.concatenate(
-          [disag_loss, jnp.zeros((B, 1))], axis=1)
+          [disag_loss, disag_loss[:, -1:]], axis=1)
 
     # Mask context prediction loss (train head to predict action_mask_context
     # from RSSM features, enabling mask application during imagination).

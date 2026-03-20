@@ -7,6 +7,11 @@ from .rules import ACTION_RULES, CONTEXT_SIZE, C
 from .mask import compute_logit_bias, compute_mask_details
 
 
+# Helper: look up action_id from ACTION_RULES by rule name
+def _aid(rule_name):
+    return ACTION_RULES[rule_name]["action_id"]
+
+
 def _ctx(**overrides) -> np.ndarray:
     """Create a context array with all zeros except overrides."""
     c = np.zeros(CONTEXT_SIZE, dtype=np.float32)
@@ -23,225 +28,259 @@ def _bias(ctx, mode="soft", **kw):
 # --- Placement actions ---
 
 def test_place_table():
+    aid = _aid("PLACE_TABLE")
     # Need wood >= 2 AND facing placeable
     b = _bias(_ctx(WOOD=1, FACING_PLACEABLE=1))
-    assert b[8] < 0, "wood<2 should penalize PLACE_TABLE"
+    assert b[aid] < 0, "wood<2 should penalize PLACE_TABLE"
     b = _bias(_ctx(WOOD=2, FACING_PLACEABLE=1))
-    assert b[8] == 0, "wood>=2 + placeable should allow PLACE_TABLE"
+    assert b[aid] == 0, "wood>=2 + placeable should allow PLACE_TABLE"
     b = _bias(_ctx(WOOD=5, FACING_PLACEABLE=0))
-    assert b[8] < 0, "facing non-placeable should penalize PLACE_TABLE"
+    assert b[aid] < 0, "facing non-placeable should penalize PLACE_TABLE"
     print("test_place_table: OK")
 
 
 def test_place_furnace():
+    aid = _aid("PLACE_FURNACE")
     b = _bias(_ctx(STONE=0, FACING_PLACEABLE=1))
-    assert b[9] < 0
+    assert b[aid] < 0
     b = _bias(_ctx(STONE=1, FACING_PLACEABLE=1))
-    assert b[9] == 0
+    assert b[aid] == 0
     print("test_place_furnace: OK")
 
 
 def test_place_plant():
+    aid = _aid("PLACE_PLANT")
     b = _bias(_ctx(SAPLING=1, FACING_GRASS=1))
-    assert b[10] == 0
+    assert b[aid] == 0
     b = _bias(_ctx(SAPLING=0, FACING_GRASS=1))
-    assert b[10] < 0
+    assert b[aid] < 0
     b = _bias(_ctx(SAPLING=1, FACING_GRASS=0))
-    assert b[10] < 0
+    assert b[aid] < 0
     print("test_place_plant: OK")
 
 
 # --- Pickaxe crafting with equipment level checks ---
 
 def test_make_wood_pickaxe():
+    aid = _aid("MAKE_WOOD_PICKAXE")
     # Need wood>=1, near_table, pickaxe<1
     b = _bias(_ctx(WOOD=1, NEAR_TABLE=1, PICKAXE=0))
-    assert b[11] == 0, "all conditions met"
+    assert b[aid] == 0, "all conditions met"
     b = _bias(_ctx(WOOD=1, NEAR_TABLE=1, PICKAXE=1))
-    assert b[11] < 0, "already have pickaxe: should penalize"
+    assert b[aid] < 0, "already have pickaxe: should penalize"
     b = _bias(_ctx(WOOD=0, NEAR_TABLE=1, PICKAXE=0))
-    assert b[11] < 0, "no wood"
+    assert b[aid] < 0, "no wood"
     b = _bias(_ctx(WOOD=1, NEAR_TABLE=0, PICKAXE=0))
-    assert b[11] < 0, "no table"
+    assert b[aid] < 0, "no table"
     print("test_make_wood_pickaxe: OK")
 
 
 def test_make_stone_pickaxe():
+    aid = _aid("MAKE_STONE_PICKAXE")
     b = _bias(_ctx(WOOD=1, STONE=1, NEAR_TABLE=1, PICKAXE=1))
-    assert b[12] == 0, "pickaxe=1 < 2, should be allowed"
+    assert b[aid] == 0, "pickaxe=1 < 2, should be allowed"
     b = _bias(_ctx(WOOD=1, STONE=1, NEAR_TABLE=1, PICKAXE=2))
-    assert b[12] < 0, "pickaxe=2 >= 2, should penalize"
+    assert b[aid] < 0, "pickaxe=2 >= 2, should penalize"
     print("test_make_stone_pickaxe: OK")
 
 
 def test_make_iron_pickaxe():
+    aid = _aid("MAKE_IRON_PICKAXE")
     b = _bias(_ctx(WOOD=1, STONE=1, IRON=1, COAL=1,
                    NEAR_TABLE=1, NEAR_FURNACE=1, PICKAXE=2))
-    assert b[13] == 0
+    assert b[aid] == 0
     b = _bias(_ctx(WOOD=1, STONE=1, IRON=1, COAL=1,
                    NEAR_TABLE=1, NEAR_FURNACE=0, PICKAXE=2))
-    assert b[13] < 0, "no furnace"
+    assert b[aid] < 0, "no furnace"
     b = _bias(_ctx(WOOD=1, STONE=1, IRON=1, COAL=1,
                    NEAR_TABLE=1, NEAR_FURNACE=1, PICKAXE=3))
-    assert b[13] < 0, "already have iron pickaxe"
+    assert b[aid] < 0, "already have iron pickaxe"
     print("test_make_iron_pickaxe: OK")
 
 
 # --- Sword crafting ---
 
 def test_make_wood_sword():
+    aid = _aid("MAKE_WOOD_SWORD")
     b = _bias(_ctx(WOOD=1, NEAR_TABLE=1, SWORD=0))
-    assert b[14] == 0
+    assert b[aid] == 0
     b = _bias(_ctx(WOOD=1, NEAR_TABLE=1, SWORD=1))
-    assert b[14] < 0, "already have sword"
+    assert b[aid] < 0, "already have sword"
     print("test_make_wood_sword: OK")
 
 
 # --- Armour crafting ---
 
 def test_make_iron_armour():
+    aid = _aid("MAKE_IRON_ARMOUR")
     # Need iron>=3, coal>=3, near_table+furnace, any armour slot < 1
     ctx = _ctx(IRON=3, COAL=3, NEAR_TABLE=1, NEAR_FURNACE=1)
     # All armour slots are 0 (< 1), so should pass
     b = _bias(ctx)
-    assert b[22] == 0
+    assert b[aid] == 0
     # Set all armour to 1 -> no slot available
     ctx[C.ARMOUR_0:C.ARMOUR_3+1] = 1.0
     b = _bias(ctx)
-    assert b[22] < 0, "all slots full"
+    assert b[aid] < 0, "all slots full"
     print("test_make_iron_armour: OK")
 
 
 def test_make_diamond_armour():
+    aid = _aid("MAKE_DIAMOND_ARMOUR")
     ctx = _ctx(DIAMOND=3, NEAR_TABLE=1)
     ctx[C.ARMOUR_0] = 1.0  # one slot has iron, < 2 -> upgradeable
     b = _bias(ctx)
-    assert b[23] == 0
+    assert b[aid] == 0
     ctx[C.ARMOUR_0:C.ARMOUR_3+1] = 2.0  # all diamond
     b = _bias(ctx)
-    assert b[23] < 0
+    assert b[aid] < 0
     print("test_make_diamond_armour: OK")
 
 
 # --- Potions ---
 
 def test_potions():
-    for i in range(6):
+    potion_rules = [
+        "DRINK_POTION_RED", "DRINK_POTION_GREEN", "DRINK_POTION_BLUE",
+        "DRINK_POTION_PINK", "DRINK_POTION_YELLOW", "DRINK_POTION_RAINBOW",
+    ]
+    for i, rule_name in enumerate(potion_rules):
+        if rule_name not in ACTION_RULES:
+            continue
+        aid = _aid(rule_name)
         ctx = _ctx()
-        action_id = 29 + i
         ctx[C.POTION_0 + i] = 1.0
         b = _bias(ctx)
-        assert b[action_id] == 0, f"potion {i} should be allowed"
+        assert b[aid] == 0, f"potion {i} should be allowed"
         ctx[C.POTION_0 + i] = 0.0
         b = _bias(ctx)
-        assert b[action_id] < 0, f"potion {i} should be penalized when empty"
+        assert b[aid] < 0, f"potion {i} should be penalized when empty"
     print("test_potions: OK")
 
 
 # --- Spells ---
 
 def test_cast_fireball():
+    aid = _aid("CAST_FIREBALL")
     b = _bias(_ctx(MANA=2, SPELL_FIREBALL=1, PROJECTILE_SLOTS=1))
-    assert b[26] == 0
+    assert b[aid] == 0
     b = _bias(_ctx(MANA=1, SPELL_FIREBALL=1, PROJECTILE_SLOTS=1))
-    assert b[26] < 0, "not enough mana"
+    assert b[aid] < 0, "not enough mana"
     b = _bias(_ctx(MANA=2, SPELL_FIREBALL=0, PROJECTILE_SLOTS=1))
-    assert b[26] < 0, "spell not learned"
+    assert b[aid] < 0, "spell not learned"
     print("test_cast_fireball: OK")
 
 
 # --- Enchanting ---
 
 def test_enchant_sword():
-    b = _bias(_ctx(FACING_ENCHANT_TABLE=1, MANA=9, RUBY=1, SWORD=1))
-    assert b[36] == 0
-    b = _bias(_ctx(FACING_ENCHANT_TABLE=1, MANA=9, SAPPHIRE=1, SWORD=1))
-    assert b[36] == 0, "sapphire should also work"
-    b = _bias(_ctx(FACING_ENCHANT_TABLE=1, MANA=9, RUBY=0, SAPPHIRE=0, SWORD=1))
-    assert b[36] < 0, "no gem"
+    aid = _aid("ENCHANT_SWORD")
+    # Fire table + ruby = allowed
+    b = _bias(_ctx(FACING_ENCHANT_TABLE=1, FACING_FIRE_TABLE=1, MANA=9, RUBY=1, SWORD=1))
+    assert b[aid] == 0, "fire table + ruby should allow"
+    # Ice table + sapphire = allowed
+    b = _bias(_ctx(FACING_ENCHANT_TABLE=1, FACING_ICE_TABLE=1, MANA=9, SAPPHIRE=1, SWORD=1))
+    assert b[aid] == 0, "ice table + sapphire should allow"
+    # Fire table + sapphire only (wrong gem) = penalized
+    b = _bias(_ctx(FACING_ENCHANT_TABLE=1, FACING_FIRE_TABLE=1, MANA=9, SAPPHIRE=1, RUBY=0, SWORD=1))
+    assert b[aid] < 0, "fire table + sapphire (wrong gem) should penalize"
+    # Ice table + ruby only (wrong gem) = penalized
+    b = _bias(_ctx(FACING_ENCHANT_TABLE=1, FACING_ICE_TABLE=1, MANA=9, RUBY=1, SAPPHIRE=0, SWORD=1))
+    assert b[aid] < 0, "ice table + ruby (wrong gem) should penalize"
+    # No gems at all = penalized
+    b = _bias(_ctx(FACING_ENCHANT_TABLE=1, FACING_FIRE_TABLE=1, MANA=9, RUBY=0, SAPPHIRE=0, SWORD=1))
+    assert b[aid] < 0, "no gem"
+    # Not facing enchant table = penalized
     b = _bias(_ctx(FACING_ENCHANT_TABLE=0, MANA=9, RUBY=1, SWORD=1))
-    assert b[36] < 0, "not facing enchant table"
+    assert b[aid] < 0, "not facing enchant table"
     print("test_enchant_sword: OK")
 
 
 # --- Floor transitions ---
 
 def test_descend():
+    aid = _aid("DESCEND")
     b = _bias(_ctx(ON_LADDER_DOWN=1, LEVEL_CLEARED=1, LEVEL=3))
-    assert b[18] == 0
+    assert b[aid] == 0
     b = _bias(_ctx(ON_LADDER_DOWN=0, LEVEL_CLEARED=1, LEVEL=3))
-    assert b[18] < 0, "not on ladder"
+    assert b[aid] < 0, "not on ladder"
     b = _bias(_ctx(ON_LADDER_DOWN=1, LEVEL_CLEARED=0, LEVEL=3))
-    assert b[18] < 0, "level not cleared"
+    assert b[aid] < 0, "level not cleared"
     b = _bias(_ctx(ON_LADDER_DOWN=1, LEVEL_CLEARED=1, LEVEL=8))
-    assert b[18] < 0, "already at max level"
+    assert b[aid] < 0, "already at max level"
     print("test_descend: OK")
 
 
 def test_ascend():
+    aid = _aid("ASCEND")
     b = _bias(_ctx(ON_LADDER_UP=1, LEVEL=1))
-    assert b[19] == 0
+    assert b[aid] == 0
     b = _bias(_ctx(ON_LADDER_UP=1, LEVEL=0))
-    assert b[19] < 0, "already at level 0"
+    assert b[aid] < 0, "already at level 0"
     print("test_ascend: OK")
 
 
 # --- Level-up ---
 
 def test_level_up():
+    aid = _aid("LEVEL_UP_DEX")
     b = _bias(_ctx(XP=1, DEXTERITY=4))
-    assert b[39] == 0, "dex<5, xp>=1"
+    assert b[aid] == 0, "dex<5, xp>=1"
     b = _bias(_ctx(XP=1, DEXTERITY=5))
-    assert b[39] < 0, "dex=5 (maxed)"
+    assert b[aid] < 0, "dex=5 (maxed)"
     b = _bias(_ctx(XP=0, DEXTERITY=1))
-    assert b[39] < 0, "no xp"
+    assert b[aid] < 0, "no xp"
     print("test_level_up: OK")
 
 
 # --- Sleep / Rest ---
 
 def test_sleep():
+    aid = _aid("SLEEP")
     # energy < max_energy (7 + 2*dex)
     # dex=1 -> max=9, energy=8 < 9 -> allowed
     b = _bias(_ctx(ENERGY=8, DEXTERITY=1))
-    assert b[6] == 0
+    assert b[aid] == 0
     # energy=9 >= max=9 -> penalized
     b = _bias(_ctx(ENERGY=9, DEXTERITY=1))
-    assert b[6] < 0
+    assert b[aid] < 0
     print("test_sleep: OK")
 
 
 def test_rest():
+    aid = _aid("REST")
     # health < max_health (8 + str)
     # str=1 -> max=9, health=8 < 9 -> allowed
     b = _bias(_ctx(HEALTH=8, STRENGTH=1))
-    assert b[17] == 0
+    assert b[aid] == 0
     b = _bias(_ctx(HEALTH=9, STRENGTH=1))
-    assert b[17] < 0
+    assert b[aid] < 0
     print("test_rest: OK")
 
 
 # --- Hard mode ---
 
 def test_hard_mode():
+    aid = _aid("PLACE_TABLE")
     b = _bias(_ctx(WOOD=0), mode="hard", large_negative=1e9)
-    assert b[8] < -1e8, "PLACE_TABLE hard blocked"
+    assert b[aid] < -1e8, "PLACE_TABLE hard blocked"
     b = _bias(_ctx(WOOD=5, FACING_PLACEABLE=1), mode="hard")
-    assert b[8] == 0.0
+    assert b[aid] == 0.0
     print("test_hard_mode: OK")
 
 
 # --- Batch ---
 
 def test_batched():
+    aid = _aid("PLACE_TABLE")
     ctx = np.stack([
         _ctx(WOOD=0, NEAR_TABLE=1, FACING_PLACEABLE=1),
         _ctx(WOOD=5, NEAR_TABLE=1, FACING_PLACEABLE=1),
     ])
     b = _bias(ctx)
     assert b.shape == (2, 43)
-    assert b[0, 8] < 0, "batch[0] wood=0"
-    assert b[1, 8] == 0, "batch[1] wood=5"
+    assert b[0, aid] < 0, "batch[0] wood=0"
+    assert b[1, aid] == 0, "batch[1] wood=5"
     print("test_batched: OK")
 
 

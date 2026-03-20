@@ -183,6 +183,12 @@ def extract_mask_context(state) -> np.ndarray:
                 ctx[C.FACING_GRASS] = float(
                     _GRASS_ID is not None and facing_block == _GRASS_ID and not facing_has_item)
                 ctx[C.FACING_ENCHANT_TABLE] = float(facing_block in _ENCHANT_TABLE_IDS)
+                ctx[C.FACING_FIRE_TABLE] = float(
+                    'ENCHANTMENT_TABLE_FIRE' in _BLOCK_IDS
+                    and facing_block == _BLOCK_IDS['ENCHANTMENT_TABLE_FIRE'])
+                ctx[C.FACING_ICE_TABLE] = float(
+                    'ENCHANTMENT_TABLE_ICE' in _BLOCK_IDS
+                    and facing_block == _BLOCK_IDS['ENCHANTMENT_TABLE_ICE'])
                 ctx[C.FACING_TORCH_PLACEABLE] = float(
                     facing_block in _CAN_PLACE_ITEM_SET and not facing_has_item)
 
@@ -190,12 +196,13 @@ def extract_mask_context(state) -> np.ndarray:
     item_map = getattr(state, 'item_map', None)
     if item_map is not None:
         im = np.asarray(item_map)
+        item_at_player = _ITEM_NONE
         if im.ndim >= 3 and level_idx < im.shape[0]:
-            item_at_player = int(im[level_idx, px, py])
+            if 0 <= px < im.shape[1] and 0 <= py < im.shape[2]:
+                item_at_player = int(im[level_idx, px, py])
         elif im.ndim == 2:
-            item_at_player = int(im[px, py])
-        else:
-            item_at_player = _ITEM_NONE
+            if 0 <= px < im.shape[0] and 0 <= py < im.shape[1]:
+                item_at_player = int(im[px, py])
         ctx[C.ON_LADDER_DOWN] = float(item_at_player == _ITEM_LADDER_DOWN)
         ctx[C.ON_LADDER_UP] = float(item_at_player == _ITEM_LADDER_UP)
 

@@ -1,3 +1,6 @@
+# DEPRECATED: This module is dead code — never imported, and its Plan2Explore
+# class API is incompatible with the inline P2E in agent.py. Kept for reference
+# only. Do not import or use.
 """
 Exploration behaviors for DreamerV3.
 Implements Plan2Explore and other exploration strategies.

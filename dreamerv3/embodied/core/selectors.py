@@ -1,4 +1,5 @@
 import collections
+import heapq
 import threading
 
 import numpy as np
@@ -70,7 +71,7 @@ class ReservoirSelector:
     with self.lock:
       if key not in self.indices:
         return
-      assert 2 <= len(self), len(self)
+      assert 1 <= len(self), len(self)
       index = self.indices.pop(key)
       last = self.keys.pop()
       if index != len(self.keys):
@@ -104,7 +105,7 @@ class Uniform:
 
   def __delitem__(self, key):
     with self.lock:
-      assert 2 <= len(self), len(self)
+      assert 1 <= len(self), len(self)
       index = self.indices.pop(key)
       last = self.keys.pop()
       if index != len(self.keys):
@@ -337,7 +338,7 @@ class RewardWeighted:
     with self.lock:
       if key not in self.indices:
         return
-      assert 2 <= len(self), len(self)
+      assert 1 <= len(self), len(self)
       index = self.indices.pop(key)
       last_key = self.keys.pop()
       last_reward = self.rewards.pop()
@@ -436,6 +437,9 @@ class PrivilegedNoveltyLearnabilityRecency:
     self._learn_cache_probs = None
 
     self._insert_counter = 0
+
+    # ---- Deque for O(window) recent sampling instead of O(n) heapq ----
+    self._recent_deque = collections.deque(maxlen=recent_window * 2)
 
   def _invalidate_novel_cache(self):
     self._novel_cache_keys = None
@@ -618,13 +622,14 @@ class PrivilegedNoveltyLearnabilityRecency:
       self.keys.append(key)
       self._insert_counter += 1
       self.insertion_order[key] = self._insert_counter
+      self._recent_deque.append(key)
 
   def __delitem__(self, key):
     """Remove an evicted item from all pools."""
     with self.lock:
       if key not in self.indices:
         return
-      assert 2 <= len(self), len(self)
+      assert 1 <= len(self), len(self)
 
       # Remove from main list
       idx = self.indices.pop(key)
@@ -682,17 +687,20 @@ class PrivilegedNoveltyLearnabilityRecency:
   def _sample_recent(self):
     """Sample from recent items with triangular weighting.
 
-    Uses insertion_order dict to determine true recency, since the keys
-    list may have its order disturbed by swap-and-pop deletions.
+    Uses deque for O(window) sampling instead of O(n) heapq.
     """
     n = len(self.keys)
     if n == 0:
       raise IndexError('Privileged NLR selector is empty (recent)')
-    window = min(n, self.recent_window)
-    # Sort keys by insertion order (descending) and take most recent `window`
-    sorted_keys = sorted(
-        self.keys, key=lambda k: self.insertion_order.get(k, 0), reverse=True)
-    recent_keys = sorted_keys[:window]
+    # Build valid recent keys from deque (skip evicted items)
+    recent_keys = []
+    for key in reversed(self._recent_deque):
+      if key in self.indices:
+        recent_keys.append(key)
+        if len(recent_keys) >= self.recent_window:
+          break
+    if not recent_keys:
+      return self.keys[self.rng.integers(0, n).item()]
     weights = np.linspace(1.0, 0.0, len(recent_keys), endpoint=False)
     total = weights.sum()
     if total <= 0:
@@ -702,10 +710,13 @@ class PrivilegedNoveltyLearnabilityRecency:
     return recent_keys[idx]
 
   def get_pool_utilization(self):
-    """Return actual pool sampling distribution (for logging)."""
+    """Return actual pool sampling distribution (for logging).
+
+    Returns windowed metrics and resets counters to match Replay.stats().
+    """
     with self.lock:
       total = self._total_samples or 1
-      return {
+      result = {
           'novel_actual_frac': self._sample_counts['novel'] / total,
           'learnable_actual_frac': self._sample_counts['learnable'] / total,
           'recent_actual_frac': self._sample_counts['recent'] / total,
@@ -714,6 +725,10 @@ class PrivilegedNoveltyLearnabilityRecency:
           'total_pool_size': len(self.keys),
           'total_samples': self._total_samples,
       }
+      # Reset counters for windowed metrics (consistent with Replay.stats())
+      self._sample_counts = {'novel': 0, 'learnable': 0, 'recent': 0}
+      self._total_samples = 0
+      return result
 
 
 class PrivilegedNoveltyLearnabilityUniform(PrivilegedNoveltyLearnabilityRecency):
@@ -815,6 +830,9 @@ class NoveltyLearnabilityRecency:
     self._novel_cache_probs = None  # np.ndarray of sampling probs
     self._learn_cache_keys = None
     self._learn_cache_probs = None
+
+    # ---- Deque for O(window) recent sampling instead of O(n) heapq ----
+    self._recent_deque = collections.deque(maxlen=recent_window * 2)
 
     # ---- Reward baseline (EMA) ----
     self.reward_ema_decay = reward_ema_decay
@@ -1092,13 +1110,14 @@ class NoveltyLearnabilityRecency:
       self.keys.append(key)
       self._insert_counter += 1
       self.insertion_order[key] = self._insert_counter
+      self._recent_deque.append(key)
 
   def __delitem__(self, key):
     """Remove an evicted item from all pools."""
     with self.lock:
       if key not in self.indices:
         return
-      assert 2 <= len(self), len(self)
+      assert 1 <= len(self), len(self)
 
       idx = self.indices.pop(key)
 
@@ -1162,17 +1181,20 @@ class NoveltyLearnabilityRecency:
   def _sample_recent(self):
     """Sample from recent items with triangular weighting.
 
-    Uses insertion_order dict to determine true recency, since the keys
-    list may have its order disturbed by swap-and-pop deletions.
+    Uses deque for O(window) sampling instead of O(n) heapq.
     """
     n = len(self.keys)
     if n == 0:
       raise IndexError('NLR selector is empty (recent)')
-    window = min(n, self.recent_window)
-    # Sort keys by insertion order (descending) and take most recent `window`
-    sorted_keys = sorted(
-        self.keys, key=lambda k: self.insertion_order.get(k, 0), reverse=True)
-    recent_keys = sorted_keys[:window]
+    # Build valid recent keys from deque (skip evicted items)
+    recent_keys = []
+    for key in reversed(self._recent_deque):
+      if key in self.indices:
+        recent_keys.append(key)
+        if len(recent_keys) >= self.recent_window:
+          break
+    if not recent_keys:
+      return self.keys[self.rng.integers(0, n).item()]
     weights = np.linspace(1.0, 0.0, len(recent_keys), endpoint=False)
     total = weights.sum()
     if total <= 0:
@@ -1182,10 +1204,13 @@ class NoveltyLearnabilityRecency:
     return recent_keys[idx]
 
   def get_pool_utilization(self):
-    """Return actual pool sampling distribution (for logging)."""
+    """Return actual pool sampling distribution (for logging).
+
+    Returns windowed metrics and resets counters to match Replay.stats().
+    """
     with self.lock:
       total = self._total_samples or 1
-      return {
+      result = {
           'novel_actual_frac': self._sample_counts['novel'] / total,
           'learnable_actual_frac': self._sample_counts['learnable'] / total,
           'recent_actual_frac': self._sample_counts['recent'] / total,
@@ -1194,6 +1219,10 @@ class NoveltyLearnabilityRecency:
           'total_pool_size': len(self.keys),
           'total_samples': self._total_samples,
       }
+      # Reset counters for windowed metrics (consistent with Replay.stats())
+      self._sample_counts = {'novel': 0, 'learnable': 0, 'recent': 0}
+      self._total_samples = 0
+      return result
 
   def get_grid_stats(self):
     """Return grid statistics for logging."""

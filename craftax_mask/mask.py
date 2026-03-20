@@ -41,7 +41,7 @@ def compute_mask_details(context, rules, num_actions, lambda_penalty=5.0,
         rules: ACTION_RULES dict from rules.py.
         num_actions: number of discrete actions.
     """
-    xp = _array_module()
+    xp = _array_module(context if not isinstance(context, dict) else None)
     ctx = _ensure_context_array(context, xp)
     batch_shape = ctx.shape[:-1]  # () for unbatched, (B,) for batched
     bias = xp.zeros(batch_shape + (num_actions,), dtype=xp.float32)
@@ -122,9 +122,15 @@ def _evaluate_conditions(conditions, ctx, xp):
             deficit = deficit + xp.where(health < max_health, 0.0, 1.0)
 
         elif tag == "gem_check":
-            # ruby >= 1 OR sapphire >= 1
-            has_gem = (ctx[..., C.RUBY] >= 1) | (ctx[..., C.SAPPHIRE] >= 1)
-            deficit = deficit + xp.where(has_gem, 0.0, 1.0)
+            # Check correct gem for the enchant table being faced:
+            # fire table needs ruby, ice table needs sapphire
+            facing_fire = ctx[..., C.FACING_FIRE_TABLE] > 0.5
+            facing_ice = ctx[..., C.FACING_ICE_TABLE] > 0.5
+            has_correct_gem = (
+                (facing_fire & (ctx[..., C.RUBY] >= 1)) |
+                (facing_ice & (ctx[..., C.SAPPHIRE] >= 1))
+            )
+            deficit = deficit + xp.where(has_correct_gem, 0.0, 1.0)
 
         elif tag == "attr_below_max":
             # context[idx] < 5 (max_attribute)
@@ -141,8 +147,8 @@ def _evaluate_conditions(conditions, ctx, xp):
 def compute_mask_logging_stats(details, rules, raw_logits=None,
                                adjusted_logits=None, large_negative=1e9):
     """Summarize mask diagnostics for logging."""
-    xp = _array_module()
     bias = details["bias"]
+    xp = _array_module(bias)
     batch_shape = bias.shape[:-1]
     penalty = -xp.minimum(bias, 0.0)
     infeasible = (bias < 0.0).astype(xp.float32)
@@ -200,6 +206,12 @@ def _ensure_context_array(context, xp):
     """Convert dict-format context (legacy) to flat array, or pass through."""
     if isinstance(context, dict):
         # Legacy dict format — pack into array with zeros for missing fields
+        import warnings
+        warnings.warn(
+            "_ensure_context_array: dict-format context only populates 6 of 46 fields "
+            "(wood, stone, coal, iron, near_table, near_furnace). "
+            "Use a full numpy array for correct masking.",
+            DeprecationWarning, stacklevel=2)
         from .rules import CONTEXT_SIZE
         wood = xp.asarray(context.get("wood", 0), dtype=xp.float32)
         batch_shape = wood.shape
@@ -217,19 +229,24 @@ def _ensure_context_array(context, xp):
 
 
 def _set_last_axis(array, index, value, xp):
+    """Set array[..., index] = value, returning the (possibly new) array."""
     if _HAS_JAX and xp is jnp:
         return array.at[..., index].set(value)
-    result = np.array(array, copy=True)
-    result[..., index] = value
-    return result
+    array[..., index] = value
+    return array
 
 
-def _array_module():
+def _array_module(arr=None):
+    """Return the appropriate array module for the given array, or default."""
+    if arr is not None:
+        if _HAS_JAX and isinstance(arr, jnp.ndarray):
+            return jnp
+        return np
     return jnp if _HAS_JAX else np
 
 
 def _softmax(logits):
-    xp = _array_module()
+    xp = _array_module(logits)
     shifted = logits - logits.max(-1, keepdims=True)
     exp = xp.exp(shifted)
     return exp / exp.sum(-1, keepdims=True)

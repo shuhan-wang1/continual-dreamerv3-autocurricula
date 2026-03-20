@@ -316,7 +316,7 @@ class CraftaxMetrics:
     ):
         """Log replay buffer diagnostic metrics."""
         self._latest_replay_diagnostics = {
-            'step': int(step),
+            'replay/step': int(step),
             'replay/buffer_size': int(buffer_size),
             'replay/depth_distribution': depth_distribution or [],
             'replay/mean_td_error': float(mean_td_error),
@@ -336,7 +336,7 @@ class CraftaxMetrics:
     ):
         """Log exploration diagnostic metrics."""
         self._latest_exploration_diagnostics = {
-            'step': int(step),
+            'explore_step': int(step),
             'explore/imagined_value': float(imagined_value),
             'explore/actual_value': float(actual_value),
             'explore/dream_accuracy': float(dream_accuracy),
@@ -825,9 +825,21 @@ class CraftaxWrapper(embodied.Env):
             self._episode_achievements = np.logical_or(self._episode_achievements, achievements)
 
         mask_ctx = self._extract_mask_context() if self._use_action_mask else None
+        # Distinguish terminal (death) from truncation (timeout):
+        # is_terminal=True only when the agent actually died (health <= 0),
+        # not on time limit truncation where we should bootstrap value.
+        is_terminal = self._done and self._is_truly_terminal()
         return self._to_numpy_result(
-            self._obs, reward_val, False, self._done, self._done, achievements, mask_ctx
+            self._obs, reward_val, False, self._done, is_terminal, achievements, mask_ctx
         )
+
+    def _is_truly_terminal(self):
+        """Check if episode ended due to death (not timeout truncation)."""
+        try:
+            health = float(self._state.player_health)
+            return health <= 0
+        except Exception:
+            return True  # conservative: assume terminal if can't determine
 
     def _extract_mask_context(self):
         """Extract action mask context array from current state."""
@@ -970,6 +982,19 @@ class VectorCraftaxEnv:
                 self._ach_extract_warned = True
         return np.zeros((self._num_envs, NUM_CRAFTAX_ACHIEVEMENTS), dtype=np.int32)
 
+    # Precomputed tier lookup for vectorized depth computation
+    _TIER_LOOKUP = None
+
+    @staticmethod
+    def _get_tier_lookup():
+        if VectorCraftaxEnv._TIER_LOOKUP is None:
+            lookup = np.full(NUM_CRAFTAX_ACHIEVEMENTS, -1, dtype=np.int32)
+            for j, name in enumerate(CRAFTAX_ACHIEVEMENT_NAMES):
+                if name in ACHIEVEMENT_TIERS:
+                    lookup[j] = ACHIEVEMENT_TIERS[name]
+            VectorCraftaxEnv._TIER_LOOKUP = lookup
+        return VectorCraftaxEnv._TIER_LOOKUP
+
     def _compute_achievement_depths_batch(self, achievements):
         """Compute achievement depths for a batch of achievement vectors.
 
@@ -979,16 +1004,11 @@ class VectorCraftaxEnv:
         Returns:
             numpy array of shape (num_envs,) with achievement depths.
         """
-        depths = np.full(achievements.shape[0], -1, dtype=np.int32)
-        for i, ach in enumerate(achievements):
-            max_tier = -1
-            for j, achieved in enumerate(ach):
-                if achieved and j < len(CRAFTAX_ACHIEVEMENT_NAMES):
-                    name = CRAFTAX_ACHIEVEMENT_NAMES[j]
-                    if name in ACHIEVEMENT_TIERS:
-                        max_tier = max(max_tier, ACHIEVEMENT_TIERS[name])
-            depths[i] = max_tier
-        return depths
+        tier_lookup = self._get_tier_lookup()
+        n_ach = min(achievements.shape[1], len(tier_lookup))
+        achieved_tiers = np.where(
+            achievements[:, :n_ach].astype(bool), tier_lookup[:n_ach], -1)
+        return achieved_tiers.max(axis=1).astype(np.int32)
 
     def _extract_mask_context_batch(self, states):
         """Extract action mask context for all envs from vectorized JAX states.
@@ -999,10 +1019,12 @@ class VectorCraftaxEnv:
         try:
             from craftax_mask import extract_mask_context
         except ImportError:
-            return np.zeros((self._num_envs, 44), dtype=np.float32)
+            from craftax_mask.rules import CONTEXT_SIZE as _CS
+            return np.zeros((self._num_envs, _CS), dtype=np.float32)
         try:
             # De-vectorize: extract per-env state and compute context
-            # This is a small Python loop (44 floats × N envs), negligible vs GPU step
+            # TODO: consider vectorizing this loop (e.g. via jax.vmap) for large N
+            # This is a small Python loop (46 floats × N envs), negligible vs GPU step
             contexts = []
             for i in range(self._num_envs):
                 env_state = jax.tree_util.tree_map(lambda x: x[i], states)
@@ -1013,7 +1035,8 @@ class VectorCraftaxEnv:
             if not hasattr(self, '_mask_ctx_warned'):
                 print(f'[VectorCraftaxEnv] mask context extraction failed: {e}')
                 self._mask_ctx_warned = True
-            return np.zeros((self._num_envs, 44), dtype=np.float32)
+            from craftax_mask.rules import CONTEXT_SIZE as _CS
+            return np.zeros((self._num_envs, _CS), dtype=np.float32)
 
     @property
     def obs_space(self):
@@ -1075,7 +1098,7 @@ class VectorCraftaxEnv:
                 lambda full, part: full.at[reset_idx].set(part),
                 self._states, r_states)
 
-        # Step all envs  (on GPU, single vmap call)
+        # Note: steps all envs including just-reset ones; jnp.where below ensures correctness.
         step_keys = self._get_keys(self._num_envs)
         obs_new, new_states, rewards, dones, _info = self._v_step(
             step_keys, self._states, acts, self._env_params)
@@ -1084,9 +1107,6 @@ class VectorCraftaxEnv:
         # For reset envs, the observation is from the reset, reward=0
         reset_jnp = jnp.asarray(reset_mask)
         # Where reset happened, keep the already-written reset obs
-        obs_final = jnp.where(
-            reset_jnp[:, None] if obs_raw.ndim == 2 else reset_jnp.reshape(-1, *([1]*(obs_raw.ndim-1))),
-            self._obs_jax, obs_raw)
         rewards_final = jnp.where(reset_jnp, 0.0, rewards)
         dones_final = jnp.where(reset_jnp, False, dones)
 
@@ -1105,11 +1125,15 @@ class VectorCraftaxEnv:
         processed = self._process_obs(self._obs_jax)
 
         # === Single batched GPU→CPU transfer ===
-        result_jax = (processed, rewards_final, dones_final)
-        processed_np, rewards_np, dones_np = jax.device_get(result_jax)
+        # Include player_health for terminal/truncation distinction
+        health = self._states.player_health
+        result_jax = (processed, rewards_final, dones_final, health)
+        processed_np, rewards_np, dones_np, health_np = jax.device_get(result_jax)
 
         is_first = np.asarray(reset_mask, dtype=bool)
         is_last = np.asarray(dones_np, dtype=bool)
+        # Terminal = died (health <= 0); truncated = timeout (should bootstrap)
+        is_terminal = is_last & (np.asarray(health_np, dtype=np.float32) <= 0)
 
         key = 'embedding' if self._use_embedding else 'image'
         result = {
@@ -1117,7 +1141,7 @@ class VectorCraftaxEnv:
             'reward': np.asarray(rewards_np, dtype=np.float32),
             'is_first': is_first,
             'is_last': is_last,
-            'is_terminal': is_last.copy(),
+            'is_terminal': is_terminal,
         }
 
         # Add achievement tracking (prefixed with log/ to exclude from agent training)
@@ -1333,6 +1357,7 @@ def make_selector(args, capacity, seed=0):
             novelty_eps=getattr(args, 'nlr_novelty_eps', 0.01),
             novelty_temp=getattr(args, 'nlr_novelty_temp', 1.0),
             learnability_temp=getattr(args, 'nlr_learnability_temp', 1.0),
+            recompute_interval=getattr(args, 'nlr_recompute_interval', 500),
             seed=seed,
         )
         if use_nlu_priv:
@@ -1462,7 +1487,7 @@ def make_replay(config, directory, args=None):
         if args is not None:
             selector = make_selector(args, capacity, seed=config.seed)
             # Use reservoir eviction if flag is set
-            if getattr(args, 'reservoir_sampling', False):
+            if getattr(args, 'reservoir_eviction', False):
                 eviction = 'reservoir'
 
         replay_kwargs['selector'] = selector
@@ -1496,7 +1521,6 @@ MASK_LOG_SPECS = (
     ('log/mask/invalid_place_furnace_count', 'mask/invalid_place_furnace_count', 'sum'),
     ('log/mask/invalid_make_wood_pickaxe_count', 'mask/invalid_make_wood_pickaxe_count', 'sum'),
     ('log/mask/invalid_make_stone_pickaxe_count', 'mask/invalid_make_stone_pickaxe_count', 'sum'),
-    ('log/mask/mean_bias_place_table', 'mask/mean_bias_place_table', 'mean'),
     ('log/mask/place_table_prob_before', 'mask/place_table_prob_before', 'mean'),
     ('log/mask/place_table_prob_after', 'mask/place_table_prob_after', 'mean'),
 )
@@ -1526,7 +1550,6 @@ def _zero_mask_logs(batch_size):
         'log/mask/invalid_place_furnace_count': zeros,
         'log/mask/invalid_make_wood_pickaxe_count': zeros,
         'log/mask/invalid_make_stone_pickaxe_count': zeros,
-        'log/mask/mean_bias_place_table': zeros,
         'log/mask/place_table_prob_before': zeros,
         'log/mask/place_table_prob_after': zeros,
     }
@@ -1745,7 +1768,7 @@ def train_single(make_env, config, args, env_name=None):
     _prev_inserted_id = {}           # per-worker tracking to avoid cross-worker misattribution
 
     # Shared state for training metrics
-    training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0, 'latest_td_error': 0.0}
+    training_metrics_state = {'log_every': 1000, 'last_log_step': 0, 'latest_td_error': 0.0}
     replay_diag_state = {'last_log_step': 0}  # independent throttle for replay diagnostics
     replay_keys = set(agent.spaces.keys())
 
@@ -1767,7 +1790,7 @@ def train_single(make_env, config, args, env_name=None):
 
         # NLR: track newly inserted item keys for this worker's episode
         if nlr_active and worker in episode_item_keys:
-            cur_id = replay.last_inserted_itemid
+            cur_id = replay.get_last_inserted_by_worker(worker)
             if cur_id is not None and cur_id != _prev_inserted_id.get(worker):
                 episode_item_keys[worker].append(cur_id)
                 _prev_inserted_id[worker] = cur_id
@@ -1981,9 +2004,9 @@ def train_single(make_env, config, args, env_name=None):
                 log_replay_diagnostics_fn(replay, step.value)
         # Activate dream masking after warmup
         if (not dream_mask_activated
-                and getattr(agent, '_dream_mask_active', None) is not None
+                and getattr(agent.model, '_dream_mask_active', None) is not None
                 and step.value >= dream_mask_warmup_steps):
-            agent._dream_mask_active = True
+            agent.model._dream_mask_active = True
             dream_mask_activated = True
             jax.clear_caches()  # force re-trace to pick up the flag
             print(f'[step {step.value}] Dream masking activated '
@@ -1992,7 +2015,7 @@ def train_single(make_env, config, args, env_name=None):
             cp.save()
         # Periodically clear JAX caches to prevent memory accumulation
         # that causes CUDA_ERROR_ILLEGAL_ADDRESS after ~15k steps
-        if step.value % 5000 < collect_steps and step.value > 0:
+        if step.value % 50000 < collect_steps and step.value > 0:
             jax.clear_caches()
 
     cp.save()
@@ -2036,6 +2059,8 @@ def cl_train_loop(make_envs, config, args, env_names=None):
     env0 = wrap_env(make_envs[0](config.seed))
 
     agent = make_agent(config, env0, args)
+    env0.close()  # Free GPU memory; env0 is only needed for space definitions
+
     replay = make_replay(config, logdir / 'replay', args)
 
     total_step = elements.Counter()
@@ -2072,7 +2097,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
     cp.save()
 
     stats = replay.stats()
-    total_steps_done = stats.get('total_steps', 0)
+    total_steps_done = int(total_step.value)
     steps_per_task = int(args.steps)
     num_tasks = len(make_envs)
 
@@ -2103,7 +2128,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
         collect_steps = max(num_envs * 4, 64)
 
     # Shared state for training metrics logging
-    training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0, 'latest_td_error': 0.0}
+    training_metrics_state = {'log_every': 1000, 'last_log_step': 0, 'latest_td_error': 0.0}
     replay_diag_state = {'last_log_step': 0}  # independent throttle for replay diagnostics
 
     def log_training_metrics_fn(mets, step_val, current_task_id):
@@ -2214,7 +2239,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
 
                 # NLR: track newly inserted item keys for this worker's episode
                 if cl_nlr_active and worker in cl_episode_item_keys:
-                    cur_id = replay.last_inserted_itemid
+                    cur_id = replay.get_last_inserted_by_worker(worker)
                     if cur_id is not None and cur_id != cl_prev_inserted_id.get(worker):
                         cl_episode_item_keys[worker].append(cur_id)
                         cl_prev_inserted_id[worker] = cur_id
@@ -2308,6 +2333,8 @@ def cl_train_loop(make_envs, config, args, env_names=None):
             driver.reset(agent.init_policy)
 
             if unbalanced_steps is not None:
+                assert len(unbalanced_steps) == num_tasks, \
+                    f'unbalanced_steps length {len(unbalanced_steps)} != num_tasks {num_tasks}'
                 steps_limit = int(unbalanced_steps[task_id])
             else:
                 steps_limit = steps_per_task
@@ -2331,9 +2358,9 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                         log_replay_diagnostics_fn(replay, total_step.value)
                 # Activate dream masking after warmup
                 if (not cl_dream_mask_activated
-                        and getattr(agent, '_dream_mask_active', None) is not None
+                        and getattr(agent.model, '_dream_mask_active', None) is not None
                         and total_step.value >= cl_dream_mask_warmup):
-                    agent._dream_mask_active = True
+                    agent.model._dream_mask_active = True
                     cl_dream_mask_activated = True
                     jax.clear_caches()
                     print(f'[step {total_step.value}] Dream masking activated '
@@ -2341,7 +2368,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                 if step.value % 10000 < collect_steps:
                     cp.save()
                 # Periodically clear JAX caches to prevent memory accumulation
-                if total_step.value % 5000 < collect_steps and total_step.value > 0:
+                if total_step.value % 50000 < collect_steps and total_step.value > 0:
                     jax.clear_caches()
 
             driver.close()

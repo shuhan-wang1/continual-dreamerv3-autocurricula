@@ -1,6 +1,6 @@
 """Craftax action feasibility rules for all maskable actions (6-42).
 
-Context array schema (CONTEXT_SIZE = 44 float32 values):
+Context array schema (CONTEXT_SIZE = 46 float32 values):
   Indices  0-13: inventory [wood, stone, coal, iron, diamond, sapling,
                             pickaxe, sword, bow, arrows, torches, books,
                             ruby, sapphire]
@@ -18,7 +18,7 @@ Context array schema (CONTEXT_SIZE = 44 float32 values):
 
 from __future__ import annotations
 
-CONTEXT_SIZE = 44
+CONTEXT_SIZE = 46
 
 # --- Named indices into the context array ---
 class C:
@@ -37,6 +37,7 @@ class C:
     FACING_ENCHANT_TABLE = 38; FACING_TORCH_PLACEABLE = 39
     ON_LADDER_DOWN = 40; ON_LADDER_UP = 41
     LEVEL_CLEARED = 42; PROJECTILE_SLOTS = 43
+    FACING_FIRE_TABLE = 44; FACING_ICE_TABLE = 45
 
 
 def _resolve_action_id(name: str, default: int) -> int:
@@ -59,7 +60,7 @@ def _resolve_action_id(name: str, default: int) -> int:
 #   ("sum_pos", start, end)             sum(context[start:end]) > 0
 #   ("max_energy_check",)               energy < 7 + 2*dexterity
 #   ("max_health_check",)               health < 8 + strength
-#   ("gem_check",)                      ruby >= 1 OR sapphire >= 1
+#   ("gem_check",)                      correct gem for the enchant table being faced
 #   ("attr_below_max", ctx_index)       context[idx] < 5 (max_attribute)
 
 ACTION_RULES = {
@@ -192,6 +193,8 @@ ACTION_RULES = {
     },
 
     # --- Other crafting ---
+    # NOTE: MAKE_BOW removed — bows are only obtainable from chests in Craftax,
+    # and its action_id=29 collided with DRINK_POTION_RED.
     "MAKE_ARROW": {
         "action_id": _resolve_action_id("MAKE_ARROW", 25),
         "metric_suffix": "make_arrow",

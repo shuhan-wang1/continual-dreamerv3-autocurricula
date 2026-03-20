@@ -75,6 +75,9 @@ class Prefetch(base.Stream):
         data = self.transform(data)
         state = self._getstate()
         self.queue.put((data, state))
+    except StopIteration:
+      self.queue.put('StopIteration: source exhausted')
+      return
     except Exception as e:
       self.queue.put(str(e))
       raise
@@ -207,7 +210,7 @@ class Mixer(base.Stream):
   def __init__(self, sources, weights, seed=0):
     assert sources.keys() == weights.keys(), (sources, weights)
     self.keys = sorted(sources.keys())
-    self.iterators = [iter(sources[k]) for k in self.keys]
+    self.iterators = {k: iter(sources[k]) for k in self.keys}
     weights = np.array([weights[k] for k in self.keys], np.float32)
     self.probs = weights / weights.sum()
     self.seed = seed
@@ -216,20 +219,23 @@ class Mixer(base.Stream):
 
   def __iter__(self):
     assert not self.started
+    self.started = True
     return self
 
   def __next__(self):
     assert self.started
-    rng = np.ranodm.default_rng(seed=[self.seed, self.step])
+    if not hasattr(self, '_rng'):
+      self._rng = np.random.default_rng(seed=[self.seed, self.step])
+    self._rng = np.random.default_rng(seed=[self.seed, self.step])
     self.step += 1
-    index = rng.choice(len(self.keys), p=self.probs)
-    return next(self.iterators[index])
+    index = self._rng.choice(len(self.keys), p=self.probs)
+    return next(self.iterators[self.keys[index]])
 
   def save(self):
     return {
         'step': self.step,
         'seed': self.seed,
-        'sources': {k: it.save() for k, it in zip(self.keys, self.iterators)},
+        'sources': {k: it.save() for k, it in self.iterators.items()},
     }
 
   def load(self, data):

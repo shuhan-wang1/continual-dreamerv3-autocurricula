@@ -45,6 +45,7 @@ class Replay:
     self.items = {}
     self.fifo = deque()  # Used for FIFO eviction
     self.item_keys = []  # Used for reservoir eviction (random access)
+    self._itemkey_positions = {}  # itemid -> index in item_keys (O(1) lookup)
     self.itemid = 0
     self.total_seen = 0  # For reservoir sampling probability
     self._eviction_rng = np.random.default_rng(seed + 1000)  # Separate RNG for eviction
@@ -71,6 +72,10 @@ class Replay:
     self.last_inserted_itemid = None  # Track last inserted item for NLR
     self._last_inserted_by_worker = {}  # Per-worker last inserted item ID
 
+  def get_last_inserted_by_worker(self, worker):
+    """Return the last inserted item ID for a given worker."""
+    return self._last_inserted_by_worker.get(worker)
+
   def __len__(self):
     return len(self.items)
 
@@ -91,6 +96,7 @@ class Replay:
     # Add pool utilization if sampler supports it
     if hasattr(self.sampler, 'get_pool_utilization'):
       stats.update(self.sampler.get_pool_utilization())
+    # Note: metrics are per-window (reset after each stats() call), not cumulative
     for key in self.metrics:
       self.metrics[key] = 0
     return stats
@@ -98,7 +104,7 @@ class Replay:
   @elements.timer.section('replay_add')
   def add(self, step, worker=0):
     step = {k: v for k, v in step.items() if not k.startswith('log/')}
-    with self.rwlock.reading:
+    with self.rwlock.writing:
       step = {k: np.asarray(v) for k, v in step.items()}
 
       if worker not in self.current:
@@ -162,10 +168,10 @@ class Replay:
           stepid.reshape((-1, stepid.shape[-1])),
           priority.flatten())
     if data:
-      for i, stepid in enumerate(stepid):
-        stepid = stepid[0].tobytes()
-        chunkid = elements.UUID(stepid[:-4])
-        index = int.from_bytes(stepid[-4:], 'big')
+      for i, sid in enumerate(stepid):
+        sid_bytes = sid[0].tobytes()
+        chunkid = elements.UUID(sid_bytes[:-4])
+        index = int.from_bytes(sid_bytes[-4:], 'big')
         values = {k: v[i] for k, v in data.items()}
         try:
           self._setseq(chunkid, index, values)
@@ -205,6 +211,9 @@ class Replay:
         return
       # Accept: remove a random existing item and add this one
       self._remove_random(j)
+      # Defensive: ensure sampler is below capacity after eviction (prevents double eviction)
+      assert not hasattr(self.sampler, 'capacity') or len(self.sampler) < self.sampler.capacity, \
+          "Sampler at capacity after eviction — possible double eviction bug"
     elif self.capacity and len(self.items) >= self.capacity:
       # FIFO eviction
       self._remove()
@@ -215,6 +224,7 @@ class Replay:
     stepids = self._getseq(chunkid, index, ['stepid'])['stepid']
     self.sampler[itemid] = stepids
     self.fifo.append(itemid)
+    self._itemkey_positions[itemid] = len(self.item_keys)
     self.item_keys.append(itemid)
     self.last_inserted_itemid = itemid
 
@@ -222,15 +232,28 @@ class Replay:
     """Remove the oldest item (FIFO eviction)."""
     itemid = self.fifo.popleft()
     self._remove_item(itemid)
+    # Swap-and-pop for O(1) removal from item_keys
+    idx = self._itemkey_positions.pop(itemid, None)
+    if idx is not None and len(self.item_keys) > 0:
+      last = self.item_keys[-1]
+      if idx < len(self.item_keys) - 1:
+        self.item_keys[idx] = last
+        self._itemkey_positions[last] = idx
+      self.item_keys.pop()
 
   def _remove_random(self, index):
     """Remove item at random index (reservoir eviction)."""
     if index >= len(self.item_keys):
-      index = self._eviction_rng.integers(0, len(self.item_keys))
+      index = index % max(1, len(self.item_keys))
     itemid = self.item_keys[index]
     self._remove_item(itemid)
-    # Remove from item_keys and fifo
-    self.item_keys.remove(itemid)
+    # Swap-and-pop for O(1) removal from item_keys
+    self._itemkey_positions.pop(itemid, None)
+    last = self.item_keys[-1]
+    if index < len(self.item_keys) - 1:
+      self.item_keys[index] = last
+      self._itemkey_positions[last] = index
+    self.item_keys.pop()
     try:
       self.fifo.remove(itemid)
     except ValueError:
@@ -430,7 +453,7 @@ class Replay:
   def _numitems(self, chunks):
     chunks = [x.filename if hasattr(x, 'filename') else x for x in chunks]
     if not chunks:
-      return 0
+      return {}
     chunks = list(reversed(sorted([elements.Path(x).stem for x in chunks])))
     times, uuids, succs, lengths = zip(*[x.split('-') for x in chunks])
     uuids = [elements.UUID(x) for x in uuids]

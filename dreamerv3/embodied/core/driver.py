@@ -128,7 +128,7 @@ class Driver:
     except ConnectionResetError:
       print('Connection to driver lost')
     except Exception as e:
-      pipe.send(('error', e))
+      pipe.send(('error', str(e)))
       raise
     finally:
       try:
