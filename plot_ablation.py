@@ -204,19 +204,18 @@ MASK_OVERVIEW_METRICS = [
     ("mask_blocked_frac", "Blocked Action Fraction (Hard Mode)"),
 ]
 
-# Per-action rejection counts (from training metrics.jsonl, logged with episode/ prefix)
+# Per-action rejection counts (from training metrics.jsonl)
 MASK_PER_ACTION_METRICS = [
-    ("episode/mask/invalid_place_table_count", "PLACE_TABLE Rejections"),
-    ("episode/mask/invalid_place_furnace_count", "PLACE_FURNACE Rejections"),
-    ("episode/mask/invalid_make_wood_pickaxe_count", "MAKE_WOOD_PICKAXE Rejections"),
-    ("episode/mask/invalid_make_stone_pickaxe_count", "MAKE_STONE_PICKAXE Rejections"),
+    ("mask/invalid_place_table_count", "PLACE_TABLE Rejections"),
+    ("mask/invalid_place_furnace_count", "PLACE_FURNACE Rejections"),
+    ("mask/invalid_make_wood_pickaxe_count", "MAKE_WOOD_PICKAXE Rejections"),
+    ("mask/invalid_make_stone_pickaxe_count", "MAKE_STONE_PICKAXE Rejections"),
 ]
 
 # Probability shift for PLACE_TABLE (diagnostic: how much does the mask shift probs?)
-# Keys in metrics.jsonl have episode/ prefix from logger.add(..., prefix='episode')
 MASK_PROB_METRICS = [
-    ("episode/mask/place_table_prob_before", "P(PLACE_TABLE) Before Mask"),
-    ("episode/mask/place_table_prob_after", "P(PLACE_TABLE) After Mask"),
+    ("mask/place_table_prob_before", "P(PLACE_TABLE) Before Mask"),
+    ("mask/place_table_prob_after", "P(PLACE_TABLE) After Mask"),
 ]
 
 
@@ -1667,6 +1666,50 @@ def print_numerical_summary(data: Dict, outdir: str):
 # Action Mask Visualizations
 # ============================================================================
 
+def _resolve_mask_metric(exp_data: Dict, base_key: str,
+                         preferred_source: str = "training",
+                         ) -> Tuple[str, str]:
+    """Auto-detect the actual metric key and source for a mask metric.
+
+    The elements.Logger may or may not prepend 'episode/' depending on how
+    logger.add(..., prefix='episode') flattens keys.  We also fall back to
+    trying the 'online' source if 'training' has nothing.
+
+    Returns (resolved_key, resolved_source) or (base_key, preferred_source)
+    as fallback.
+    """
+    candidates = [base_key, f"episode/{base_key}"]
+    sources = [preferred_source]
+    if preferred_source != "online":
+        sources.append("online")
+
+    for src in sources:
+        records = []
+        for seed_records in exp_data[src].values():
+            if seed_records:
+                records = seed_records
+                break
+        if not records:
+            continue
+        sample = records[:min(100, len(records))]
+        for candidate in candidates:
+            if any(candidate in r and r[candidate] is not None for r in sample):
+                return candidate, src
+    return base_key, preferred_source
+
+
+def _aggregate_mask_metric(exp_data: Dict, base_key: str,
+                           preferred_source: str = "training",
+                           step_key: str = "step", n_points: int = 500,
+                           ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Aggregate a mask metric across seeds with auto-detection of key/source."""
+    resolved_key, resolved_source = _resolve_mask_metric(
+        exp_data, base_key, preferred_source)
+    return aggregate_across_seeds(
+        exp_data, resolved_key, step_key=step_key,
+        source=resolved_source, n_points=n_points)
+
+
 def plot_mask_diagnostics(data: Dict, outdir: str, fmt: str = "png",
                           smooth_window: int = 20):
     """Generate comprehensive action mask diagnostic plots for Group F experiments.
@@ -1698,9 +1741,8 @@ def plot_mask_diagnostics(data: Dict, outdir: str, fmt: str = "png",
         ax = axes[panel_idx]
         idx = 0
         for exp_id, exp_data in mask_exps.items():
-            steps, mean, std = aggregate_across_seeds(
-                exp_data, mk, step_key="step", source="online"
-            )
+            steps, mean, std = _aggregate_mask_metric(
+                exp_data, mk, preferred_source="online")
             if len(steps) == 0:
                 continue
             color = get_exp_color(exp_id, "F", idx)
@@ -1725,7 +1767,6 @@ def plot_mask_diagnostics(data: Dict, outdir: str, fmt: str = "png",
     plt.close(fig)
 
     # --- 2. Final-value bar chart: soft vs hard comparison ---
-    # Compare mask experiments + baseline on key metrics
     compare_exps = OrderedDict()
     if baseline_exp:
         compare_exps[baseline_exp[0]] = baseline_exp[1]
@@ -1748,14 +1789,24 @@ def plot_mask_diagnostics(data: Dict, outdir: str, fmt: str = "png",
         exp_ids, means, stds, colors = [], [], [], []
         for idx, (eid, ed) in enumerate(compare_exps.items()):
             seed_vals = []
+            # Auto-detect key: try base and episode/-prefixed in online records
+            actual_key = mk
+            for seed, records in ed["online"].items():
+                if records:
+                    sample = records[:50]
+                    for candidate in [mk, f"episode/{mk}"]:
+                        if any(candidate in r and r[candidate] is not None
+                               for r in sample):
+                            actual_key = candidate
+                            break
+                    break
             for seed, records in ed["online"].items():
                 if not records:
                     continue
-                # Use last 10% of records for final value
                 n = max(1, len(records) // 10)
                 tail = records[-n:]
-                vals = [safe_float(r.get(mk)) for r in tail
-                        if r.get(mk) is not None]
+                vals = [safe_float(r.get(actual_key)) for r in tail
+                        if r.get(actual_key) is not None]
                 if vals:
                     seed_vals.append(np.nanmean(vals))
             if seed_vals:
@@ -1792,9 +1843,8 @@ def plot_mask_diagnostics(data: Dict, outdir: str, fmt: str = "png",
         ax = axes_flat[panel_idx]
         idx = 0
         for exp_id, exp_data in mask_exps.items():
-            steps, mean, std = aggregate_across_seeds(
-                exp_data, mk, step_key="step", source="training"
-            )
+            steps, mean, std = _aggregate_mask_metric(
+                exp_data, mk, preferred_source="training")
             if len(steps) == 0:
                 continue
             color = get_exp_color(exp_id, "F", idx)
@@ -1824,9 +1874,8 @@ def plot_mask_diagnostics(data: Dict, outdir: str, fmt: str = "png",
         ax = axes[panel_idx]
         idx = 0
         for exp_id, exp_data in mask_exps.items():
-            steps, mean, std = aggregate_across_seeds(
-                exp_data, mk, step_key="step", source="training"
-            )
+            steps, mean, std = _aggregate_mask_metric(
+                exp_data, mk, preferred_source="training")
             if len(steps) == 0:
                 continue
             color = get_exp_color(exp_id, "F", idx)

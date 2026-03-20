@@ -86,6 +86,16 @@ class Agent(embodied.jax.Agent):
     if self.action_mask_enabled:
       print(f'Action mask enabled: mode={self._action_mask_mode}, '
             f'lambda={self._action_mask_lambda}, large_neg={self._action_mask_large_neg}')
+      # Mask context prediction head: predicts action_mask_context (44-dim)
+      # from RSSM features so masks can be applied during imagination.
+      from craftax_mask.rules import CONTEXT_SIZE
+      mask_ctx_space = elements.Space(np.float32, (CONTEXT_SIZE,))
+      self.mask_ctx_head = embodied.jax.MLPHead(
+          mask_ctx_space, 'normal_logstd',
+          layers=2, units=config.value.units,
+          act='silu', norm='rms', outscale=1.0,
+          winit='trunc_normal_in',
+          name='mask_ctx')
 
     # Plan2Explore (P2E) ensemble for intrinsic exploration reward
     self.p2e_enabled = getattr(config, 'plan2explore', False)
@@ -124,6 +134,8 @@ class Agent(embodied.jax.Agent):
 
     self.modules = [
         self.dyn, self.enc, self.dec, self.rew, self.con, self.pol, self.val]
+    if self.action_mask_enabled:
+      self.modules.append(self.mask_ctx_head)
     if self.p2e_enabled:
       self.modules.extend(self.p2e_ensemble)
     self.opt = embodied.jax.Optimizer(
@@ -133,6 +145,8 @@ class Agent(embodied.jax.Agent):
     scales = self.config.loss_scales.copy()
     rec = scales.pop('rec')
     scales.update({k: rec for k in dec_space})
+    if self.action_mask_enabled:
+      scales['mask_ctx'] = 1.0
     if self.p2e_enabled:
       scales['disag'] = 1.0
     self.scales = scales
@@ -331,11 +345,26 @@ class Agent(embodied.jax.Agent):
       losses['disag'] = jnp.concatenate(
           [disag_loss, jnp.zeros((B, 1))], axis=1)
 
+    # Mask context prediction loss (train head to predict action_mask_context
+    # from RSSM features, enabling mask application during imagination).
+    if self.action_mask_enabled and 'action_mask_context' in obs:
+      mask_ctx_inp = sg(self.feat2tensor(repfeat))
+      mask_ctx_pred = self.mask_ctx_head(mask_ctx_inp, 2)
+      losses['mask_ctx'] = mask_ctx_pred.loss(obs['action_mask_context'])
+
     # Imagination
     K = min(self.config.imag_last or T, T)
     H = self.config.imag_length
     starts = self.dyn.starts(dyn_entries, dyn_carry, K)
-    policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
+    if self.action_mask_enabled:
+      def policyfn(feat):
+        ft = self.feat2tensor(feat)
+        pol = self.pol(ft, 1)
+        ctx = self.mask_ctx_head(ft, 1).pred()
+        pol, _ = self._apply_action_mask(pol, ctx)
+        return sample(pol)
+    else:
+      policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
     _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training)
     first = jax.tree.map(
         lambda x: x[:, -K:].reshape((B * K, 1, *x.shape[2:])), repfeat)
@@ -370,11 +399,17 @@ class Agent(embodied.jax.Agent):
     else:
       combined_rew = extr_rew
 
+    # Apply mask to imagined policy for consistent actor-critic loss
+    img_pol = self.pol(inp, 2)
+    if self.action_mask_enabled:
+      img_ctx = self.mask_ctx_head(sg(inp), 2).pred()
+      img_pol, _ = self._apply_action_mask(img_pol, img_ctx)
+
     los, imgloss_out, mets = imag_loss(
         imgact,
         combined_rew,
         self.con(inp, 2).prob(1),
-        self.pol(inp, 2),
+        img_pol,
         self.val(inp, 2),
         self.slowval(inp, 2),
         self.retnorm, self.valnorm, self.advnorm,
