@@ -96,6 +96,12 @@ class Agent(embodied.jax.Agent):
           act='silu', norm='rms', outscale=1.0,
           winit='trunc_normal_in',
           name='mask_ctx')
+      # Dream mask warmup: the head trains from step 0, but its predictions
+      # are only used in imagination after warmup. This flag is set by the
+      # training loop once enough steps have passed. The periodic
+      # jax.clear_caches() call causes re-tracing so the flag change is
+      # picked up.
+      self._dream_mask_active = False
 
     # Plan2Explore (P2E) ensemble for intrinsic exploration reward
     self.p2e_enabled = getattr(config, 'plan2explore', False)
@@ -356,7 +362,10 @@ class Agent(embodied.jax.Agent):
     K = min(self.config.imag_last or T, T)
     H = self.config.imag_length
     starts = self.dyn.starts(dyn_entries, dyn_carry, K)
-    if self.action_mask_enabled:
+    # Dream masking: only apply after warmup (self._dream_mask_active is set
+    # by the training loop; jax.clear_caches() triggers re-trace so this
+    # Python-level flag is picked up).
+    if self.action_mask_enabled and self._dream_mask_active:
       def policyfn(feat):
         ft = self.feat2tensor(feat)
         pol = self.pol(ft, 1)
@@ -401,7 +410,7 @@ class Agent(embodied.jax.Agent):
 
     # Apply mask to imagined policy for consistent actor-critic loss
     img_pol = self.pol(inp, 2)
-    if self.action_mask_enabled:
+    if self.action_mask_enabled and self._dream_mask_active:
       img_ctx = self.mask_ctx_head(sg(inp), 2).pred()
       img_pol, _ = self._apply_action_mask(img_pol, img_ctx)
 

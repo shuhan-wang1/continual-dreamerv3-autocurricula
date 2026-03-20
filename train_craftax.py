@@ -1936,6 +1936,12 @@ def train_single(make_env, config, args, env_name=None):
     else:
         collect_steps = max(num_envs * 4, 64)
 
+    # Dream mask warmup: mask_ctx_head trains from step 0, but its predictions
+    # are only used in imagination after prefill + warmup_steps.  The periodic
+    # jax.clear_caches() below triggers re-trace so the flag change is picked up.
+    dream_mask_warmup_steps = prefill + 40000  # 10k prefill + 40k warmup
+    dream_mask_activated = False
+
     total_steps = int(config.run.steps)
     while step < total_steps:
         driver(policy, steps=collect_steps)
@@ -1948,6 +1954,15 @@ def train_single(make_env, config, args, env_name=None):
                 # Log training and exploration metrics
                 log_training_metrics_fn(mets, step.value)
                 log_replay_diagnostics_fn(replay, step.value)
+        # Activate dream masking after warmup
+        if (not dream_mask_activated
+                and getattr(agent, '_dream_mask_active', None) is not None
+                and step.value >= dream_mask_warmup_steps):
+            agent._dream_mask_active = True
+            dream_mask_activated = True
+            jax.clear_caches()  # force re-trace to pick up the flag
+            print(f'[step {step.value}] Dream masking activated '
+                  f'(warmup complete after {dream_mask_warmup_steps} steps)')
         if step.value % 10000 < 10:
             cp.save()
         # Periodically clear JAX caches to prevent memory accumulation
@@ -2273,6 +2288,10 @@ def cl_train_loop(make_envs, config, args, env_names=None):
 
             print(f'Training for {steps_limit} steps on task {task_id}')
 
+            # Dream mask warmup for CL loop
+            cl_dream_mask_warmup = prefill + 40000
+            cl_dream_mask_activated = getattr(agent, '_dream_mask_active', False)
+
             while step < steps_limit:
                 driver(policy, steps=collect_steps)
                 if len(replay) >= batch_size * batch_length:
@@ -2284,6 +2303,15 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                         # Log training and exploration metrics
                         log_training_metrics_fn(mets, total_step.value, current_task)
                         log_replay_diagnostics_fn(replay, total_step.value)
+                # Activate dream masking after warmup
+                if (not cl_dream_mask_activated
+                        and getattr(agent, '_dream_mask_active', None) is not None
+                        and total_step.value >= cl_dream_mask_warmup):
+                    agent._dream_mask_active = True
+                    cl_dream_mask_activated = True
+                    jax.clear_caches()
+                    print(f'[step {total_step.value}] Dream masking activated '
+                          f'(CL warmup complete)')
                 if step.value % 10000 < 10:
                     cp.save()
                 # Periodically clear JAX caches to prevent memory accumulation
