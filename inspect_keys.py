@@ -41,6 +41,9 @@ if __name__ == "__main__":
     if os.path.isfile(logdir):
         logdir = os.path.dirname(logdir)
     # Find nested craftax_ dir
+    if not os.path.isdir(logdir):
+        print(f"ERROR: {logdir} is not a valid directory")
+        sys.exit(1)
     for entry in os.listdir(logdir):
         sub = os.path.join(logdir, entry)
         if os.path.isdir(sub) and entry.startswith("craftax_"):

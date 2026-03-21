@@ -121,10 +121,10 @@ def train_eval(
     cp.save()
     print('Start training loop (fresh start, no checkpoint loaded)')
   else:
-    loaded = cp.load()
-    if loaded:
-      print(f'Resumed from checkpoint at step {step.value}')
-    else:
+    try:
+      cp.load()
+      print(f'Resumed from checkpoint at step {int(step)}')
+    except FileNotFoundError:
       if hasattr(args, 'from_checkpoint') and args.from_checkpoint:
         elements.checkpoint.load(args.from_checkpoint, dict(
             agent=bind(agent.load, regex=args.from_checkpoint_regex)))

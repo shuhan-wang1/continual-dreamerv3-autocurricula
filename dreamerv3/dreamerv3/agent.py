@@ -346,9 +346,9 @@ class Agent(embodied.jax.Agent):
         # Use .loss() instead of .log_prob() - returns negative log prob
         disag_loss = disag_loss + pred.loss(disag_tgt)
       disag_loss = disag_loss / self._disag_models
-      # Pad to [B, T] by repeating last valid timestep (avoids loss dilution)
+      # Pad to [B, T] with zeros (avoids giving last timestep 2x weight)
       losses['disag'] = jnp.concatenate(
-          [disag_loss, disag_loss[:, -1:]], axis=1)
+          [disag_loss, jnp.zeros_like(disag_loss[:, :1])], axis=1)
 
     # Mask context prediction loss (train head to predict action_mask_context
     # from RSSM features, enabling mask application during imagination).
@@ -480,7 +480,7 @@ class Agent(embodied.jax.Agent):
     if self.config.report_gradnorms:
       for key in self.scales:
         try:
-          lossfn = lambda data, carry: self.loss(
+          lossfn = lambda _data, carry: self.loss(
               carry, obs, prevact, training=False)[1][2]['losses'][key].mean()
           grad = nj.grad(lossfn, self.modules)(data, carry)[-1]
           metrics[f'gradnorm/{key}'] = optax.global_norm(grad)
@@ -519,8 +519,8 @@ class Agent(embodied.jax.Agent):
       video = jnp.where(mask, video, border[None, :, None, None, :])
       video = jnp.concatenate([video, 0 * video[:, :10]], 1)
 
-      B, T, H, W, C = video.shape
-      grid = video.transpose((1, 2, 0, 3, 4)).reshape((T, H, B * W, C))
+      Bv, Tv, H, W, C = video.shape
+      grid = video.transpose((1, 2, 0, 3, 4)).reshape((Tv, H, Bv * W, C))
       metrics[f'openloop/{key}'] = grid
 
     carry = (*new_carry, {k: data[k][:, -1] for k in self.act_space})

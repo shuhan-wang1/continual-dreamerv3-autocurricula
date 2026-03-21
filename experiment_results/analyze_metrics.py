@@ -576,7 +576,9 @@ def interpolate_to_common_grid(all_steps, all_vals, n_points=INTERP_STEPS):
     grid = np.linspace(lo, hi, n_points)
     interped = []
     for s, v in zip(all_steps, all_vals):
-        interped.append(np.interp(grid, s, v))
+        # Use NaN for extrapolated regions to avoid silent flat extrapolation
+        # when the fallback range extends beyond a curve's actual data range.
+        interped.append(np.interp(grid, s, v, left=np.nan, right=np.nan))
     return grid, np.array(interped)
 
 

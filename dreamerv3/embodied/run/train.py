@@ -88,8 +88,11 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   if not getattr(args, 'fresh_start', True):
     try:
       cp.load()
-      print(f'Resumed from checkpoint at step {step.value}')
-    except Exception:
+      print(f'Resumed from checkpoint at step {int(step)}')
+    except FileNotFoundError:
+      if hasattr(args, 'from_checkpoint') and args.from_checkpoint:
+        elements.checkpoint.load(args.from_checkpoint, dict(
+            agent=bind(agent.load, regex=args.from_checkpoint_regex)))
       print('No checkpoint found, starting fresh')
       cp.save()
   else:

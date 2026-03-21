@@ -58,8 +58,12 @@ def performance(
                 dataset['s{}'.format(j)] = smooth(dataset['s{}'.format(j)].to_numpy(), smoothing_factor)
             p_i_T = dataset.tail(1).to_numpy()[0, 1:]
 
-        # minihack levels can be negative so let's scale up to 0
-        p_i_T[p_i_T <= 0] = 0
+        # NOTE: Negative performance values are kept rather than hard-clipped to 0.
+        # Hard clipping masks forgetting: if a task drops from positive to negative
+        # performance, clamping both to 0 hides the regression. Use a small floor
+        # only to avoid numerical issues with extremely negative outliers.
+        _floor = -1e6
+        p_i_T = np.maximum(p_i_T, _floor)
         p_T += p_i_T
         if verbose:
             print("Task {0}, Performance {1}".format(i + 1, p_i_T))
@@ -190,9 +194,9 @@ def fwd_transfer(
             cl_perf = dones[key]
             ref_auc = integrate(ref_perf, num_seeds, num_steps, task=None, aggregate=aggregate_ref_auc)
             if full_range:
-                cl_auc = integrate(cl_perf, num_seeds, num_steps * num_tasks, task=None, aggregate=False)
+                cl_auc = integrate(cl_perf, num_seeds, num_steps * num_tasks, task=None, aggregate=aggregate_ref_auc)
             else:
-                cl_auc = integrate(cl_perf, num_seeds, num_steps, task=i + 1, aggregate=False)
+                cl_auc = integrate(cl_perf, num_seeds, num_steps, task=i + 1, aggregate=aggregate_ref_auc)
             denom = np.where(np.abs(1 - cl_auc) < 1e-12, 1e-12, 1 - cl_auc)
             ft_i = (cl_auc - ref_auc) / denom
             ft += ft_i

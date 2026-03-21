@@ -102,6 +102,8 @@ class LocalClock:
     self.first = first
 
   def __call__(self, step=None, skip=None):
+    # Note: `step` is accepted for interface compatibility with GlobalClock
+    # but intentionally unused — LocalClock decisions are purely time-based.
     if skip:
       return False
     if self.every == 0:  # Zero means off

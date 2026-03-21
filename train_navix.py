@@ -102,8 +102,10 @@ class NavixWrapper(embodied.Env):
             @jax.jit
             def process_obs_jit(obs):
                 obs_f = obs.astype(jnp.float32)
-                # Normalize if needed (values > 1.0 treated as [0,255])
-                obs_f = jnp.where(obs_f.max() > 1.0, obs_f / 255.0, obs_f)
+                # Normalize uint8-range observations to [0,1].
+                # Using > 1.5 avoids a false-negative when the image is
+                # nearly black (max pixel ~1.0) yet still in [0,255] range.
+                obs_f = jnp.where(obs_f.max() > 1.5, obs_f / 255.0, obs_f)
                 obs_flat = obs_f.reshape(-1)
                 return jnp.dot(obs_flat, self._projection)
             self._process_obs_jit = process_obs_jit
@@ -111,7 +113,7 @@ class NavixWrapper(embodied.Env):
             @jax.jit
             def process_obs_jit(obs):
                 obs_f = obs.astype(jnp.float32)
-                return jnp.where(obs_f.max() > 1.0, obs_f / 255.0, obs_f)
+                return jnp.where(obs_f.max() > 1.5, obs_f / 255.0, obs_f)
             self._process_obs_jit = process_obs_jit
         
         # Number of actions (NAVIX typically has 6 or 7 actions)
@@ -135,19 +137,6 @@ class NavixWrapper(embodied.Env):
         """Create a NAVIX environment based on name."""
         # Parse environment name to get configuration
         # Format: Navix{EnvType}-{Size}-v0 or custom names
-        
-        # Default parameters
-        height, width = 8, 8
-        
-        # Try to parse size from name
-        parts = env_name.split('-')
-        for part in parts:
-            if 'x' in part:
-                try:
-                    h, w = part.split('x')
-                    height, width = int(h), int(w)
-                except (ValueError, TypeError):
-                    pass
         
         # Determine environment type
         env_name_lower = env_name.lower()
@@ -674,6 +663,13 @@ def cl_train_loop(make_envs, config, args):
     # Never load checkpoint - always start fresh
     cp.save()
 
+    # NOTE: Resumption position is inferred from replay buffer stats, not a
+    # persisted step counter.  This is fragile -- if the replay is pruned or
+    # its bookkeeping diverges from actual env steps the task_id/rep will be
+    # wrong.  The checkpoint stores `total_step` (elements.Counter) but it is
+    # currently never reloaded (see "Never load checkpoint" above).  If
+    # checkpoint loading is enabled in the future, prefer
+    # `total_steps_done = int(total_step.value)` for an authoritative count.
     stats = replay.stats()
     total_steps_done = stats.get('total_steps', 0)
     steps_per_task = int(args.steps)
@@ -794,7 +790,6 @@ def make_navix(env_name, embedding_dim=256, use_embedding=True, seed=42, max_ste
 
 def run_navix(args):
     """Main entry point for NAVIX training."""
-    tag = args.tag + str(args.seed)
     config, tag = load_config(args)
 
     unbalanced_steps = None

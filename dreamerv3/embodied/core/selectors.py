@@ -53,19 +53,9 @@ class ReservoirSelector:
   def __setitem__(self, key, stepids):
     with self.lock:
       self.total_seen += 1
-      if len(self.keys) < self.capacity:
-        # Buffer not full yet, just add
-        self.indices[key] = len(self.keys)
-        self.keys.append(key)
-      else:
-        # Reservoir sampling: randomly decide whether to include
-        j = self.rng.integers(0, self.total_seen)
-        if j < self.capacity:
-          # Replace item at position j
-          old_key = self.keys[j]
-          del self.indices[old_key]
-          self.keys[j] = key
-          self.indices[key] = j
+      # Only track the key; Replay manages eviction decisions.
+      self.indices[key] = len(self.keys)
+      self.keys.append(key)
 
   def __delitem__(self, key):
     with self.lock:
@@ -599,7 +589,7 @@ class PrivilegedNoveltyLearnabilityRecency:
       self._total_samples += 1
       novel_avail = self.novel_frac if len(self.novel_pool) > 0 else 0.0
       learn_avail = self.learnable_frac if len(self.learn_pool) > 0 else 0.0
-      recent_avail = 1.0 - self.novel_frac - self.learnable_frac
+      recent_avail = 1.0 - novel_avail - learn_avail
       total_avail = novel_avail + learn_avail + recent_avail
       if total_avail <= 0:
         total_avail = 1.0
@@ -658,31 +648,43 @@ class PrivilegedNoveltyLearnabilityRecency:
   # ------------------------------------------------------------------
   def _sample_novel(self):
     """Sample from the novel pool, weighted by novelty score (cached)."""
-    if self._novel_cache_keys is None:
-      keys = list(self.novel_pool.keys())
-      scores = np.array(list(self.novel_pool.values()), dtype=np.float64)
-      scores = scores ** (1.0 / self.novelty_temp)
-      total = scores.sum()
-      if total <= 0:
-        return self._sample_recent()
-      self._novel_cache_keys = keys
-      self._novel_cache_probs = scores / total
-    idx = self.rng.choice(len(self._novel_cache_keys), p=self._novel_cache_probs)
-    return self._novel_cache_keys[idx]
+    for _retry in range(3):
+      if self._novel_cache_keys is None:
+        keys = list(self.novel_pool.keys())
+        scores = np.array(list(self.novel_pool.values()), dtype=np.float64)
+        scores = scores ** (1.0 / self.novelty_temp)
+        total = scores.sum()
+        if total <= 0:
+          return self._sample_recent()
+        self._novel_cache_keys = keys
+        self._novel_cache_probs = scores / total
+      idx = self.rng.choice(len(self._novel_cache_keys), p=self._novel_cache_probs)
+      key = self._novel_cache_keys[idx]
+      if key in self.indices:
+        return key
+      # Key was evicted since cache was built; invalidate and retry.
+      self._invalidate_novel_cache()
+    return self._sample_recent()
 
   def _sample_learnable(self):
     """Sample from the learnable pool, weighted by advantage (cached)."""
-    if self._learn_cache_keys is None:
-      keys = list(self.learn_pool.keys())
-      scores = np.array(list(self.learn_pool.values()), dtype=np.float64)
-      scores = scores ** (1.0 / self.learnability_temp)
-      total = scores.sum()
-      if total <= 0:
-        return self._sample_recent()
-      self._learn_cache_keys = keys
-      self._learn_cache_probs = scores / total
-    idx = self.rng.choice(len(self._learn_cache_keys), p=self._learn_cache_probs)
-    return self._learn_cache_keys[idx]
+    for _retry in range(3):
+      if self._learn_cache_keys is None:
+        keys = list(self.learn_pool.keys())
+        scores = np.array(list(self.learn_pool.values()), dtype=np.float64)
+        scores = scores ** (1.0 / self.learnability_temp)
+        total = scores.sum()
+        if total <= 0:
+          return self._sample_recent()
+        self._learn_cache_keys = keys
+        self._learn_cache_probs = scores / total
+      idx = self.rng.choice(len(self._learn_cache_keys), p=self._learn_cache_probs)
+      key = self._learn_cache_keys[idx]
+      if key in self.indices:
+        return key
+      # Key was evicted since cache was built; invalidate and retry.
+      self._invalidate_learn_cache()
+    return self._sample_recent()
 
   def _sample_recent(self):
     """Sample from recent items with triangular weighting.
@@ -1087,7 +1089,7 @@ class NoveltyLearnabilityRecency:
       self._total_samples += 1
       novel_avail = self.novel_frac if len(self.novel_pool) > 0 else 0.0
       learn_avail = self.learnable_frac if len(self.learn_pool) > 0 else 0.0
-      recent_avail = 1.0 - self.novel_frac - self.learnable_frac
+      recent_avail = 1.0 - novel_avail - learn_avail
       total_avail = novel_avail + learn_avail + recent_avail
       if total_avail <= 0:
         total_avail = 1.0
@@ -1152,31 +1154,43 @@ class NoveltyLearnabilityRecency:
   # ------------------------------------------------------------------
   def _sample_novel(self):
     """Sample from the novel pool, weighted by novelty score (cached)."""
-    if self._novel_cache_keys is None:
-      keys = list(self.novel_pool.keys())
-      scores = np.array(list(self.novel_pool.values()), dtype=np.float64)
-      scores = scores ** (1.0 / self.novelty_temp)
-      total = scores.sum()
-      if total <= 0:
-        return self._sample_recent()
-      self._novel_cache_keys = keys
-      self._novel_cache_probs = scores / total
-    idx = self.rng.choice(len(self._novel_cache_keys), p=self._novel_cache_probs)
-    return self._novel_cache_keys[idx]
+    for _retry in range(3):
+      if self._novel_cache_keys is None:
+        keys = list(self.novel_pool.keys())
+        scores = np.array(list(self.novel_pool.values()), dtype=np.float64)
+        scores = scores ** (1.0 / self.novelty_temp)
+        total = scores.sum()
+        if total <= 0:
+          return self._sample_recent()
+        self._novel_cache_keys = keys
+        self._novel_cache_probs = scores / total
+      idx = self.rng.choice(len(self._novel_cache_keys), p=self._novel_cache_probs)
+      key = self._novel_cache_keys[idx]
+      if key in self.indices:
+        return key
+      # Key was evicted since cache was built; invalidate and retry.
+      self._invalidate_novel_cache()
+    return self._sample_recent()
 
   def _sample_learnable(self):
     """Sample from the learnable pool, weighted by advantage (cached)."""
-    if self._learn_cache_keys is None:
-      keys = list(self.learn_pool.keys())
-      scores = np.array(list(self.learn_pool.values()), dtype=np.float64)
-      scores = scores ** (1.0 / self.learnability_temp)
-      total = scores.sum()
-      if total <= 0:
-        return self._sample_recent()
-      self._learn_cache_keys = keys
-      self._learn_cache_probs = scores / total
-    idx = self.rng.choice(len(self._learn_cache_keys), p=self._learn_cache_probs)
-    return self._learn_cache_keys[idx]
+    for _retry in range(3):
+      if self._learn_cache_keys is None:
+        keys = list(self.learn_pool.keys())
+        scores = np.array(list(self.learn_pool.values()), dtype=np.float64)
+        scores = scores ** (1.0 / self.learnability_temp)
+        total = scores.sum()
+        if total <= 0:
+          return self._sample_recent()
+        self._learn_cache_keys = keys
+        self._learn_cache_probs = scores / total
+      idx = self.rng.choice(len(self._learn_cache_keys), p=self._learn_cache_probs)
+      key = self._learn_cache_keys[idx]
+      if key in self.indices:
+        return key
+      # Key was evicted since cache was built; invalidate and retry.
+      self._invalidate_learn_cache()
+    return self._sample_recent()
 
   def _sample_recent(self):
     """Sample from recent items with triangular weighting.

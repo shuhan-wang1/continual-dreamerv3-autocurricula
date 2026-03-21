@@ -144,17 +144,26 @@ def test_potions():
         "DRINK_POTION_RED", "DRINK_POTION_GREEN", "DRINK_POTION_BLUE",
         "DRINK_POTION_PINK", "DRINK_POTION_YELLOW", "DRINK_POTION_RAINBOW",
     ]
-    for i, rule_name in enumerate(potion_rules):
-        if rule_name not in ACTION_RULES:
-            continue
-        aid = _aid(rule_name)
+    # Filter to only rules that exist, then extract the correct slot index
+    # from each rule's conditions to avoid index misalignment when rules are missing.
+    valid_potions = [(name, ACTION_RULES[name]) for name in potion_rules
+                     if name in ACTION_RULES]
+    for rule_name, rule in valid_potions:
+        aid = rule["action_id"]
+        # Extract the potion slot index from the rule's conditions
+        slot_idx = None
+        for cond in rule["conditions"]:
+            if cond[0] == "min" and C.POTION_0 <= cond[1] <= C.POTION_5:
+                slot_idx = cond[1]
+                break
+        assert slot_idx is not None, f"Could not find potion slot for {rule_name}"
         ctx = _ctx()
-        ctx[C.POTION_0 + i] = 1.0
+        ctx[slot_idx] = 1.0
         b = _bias(ctx)
-        assert b[aid] == 0, f"potion {i} should be allowed"
-        ctx[C.POTION_0 + i] = 0.0
+        assert b[aid] == 0, f"{rule_name} should be allowed"
+        ctx[slot_idx] = 0.0
         b = _bias(ctx)
-        assert b[aid] < 0, f"potion {i} should be penalized when empty"
+        assert b[aid] < 0, f"{rule_name} should be penalized when empty"
     print("test_potions: OK")
 
 
@@ -223,7 +232,7 @@ def test_ascend():
 # --- Level-up ---
 
 def test_level_up():
-    aid = _aid("LEVEL_UP_DEX")
+    aid = _aid("LEVEL_UP_DEXTERITY")
     b = _bias(_ctx(XP=1, DEXTERITY=4))
     assert b[aid] == 0, "dex<5, xp>=1"
     b = _bias(_ctx(XP=1, DEXTERITY=5))

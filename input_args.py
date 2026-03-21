@@ -31,7 +31,7 @@ def parse_minigrid_args(args=None):
                         help='Dimension of the embedding input.')
     # DV2
     parser.add_argument('--replay_capacity', type=int, default=2000000)
-    parser.add_argument('--reservoir_sampling', default=True, action='store_true',
+    parser.add_argument('--reservoir_sampling', default=False, action='store_true',
                         help='Flag for using reservoir sampling.')
     parser.add_argument('--no_reservoir_sampling', dest='reservoir_sampling', action='store_false',
                         help='Disable reservoir sampling.')
@@ -208,7 +208,7 @@ def parse_craftax_args(args=None):
                         help="number of steps per each task (JSON list, e.g. '[100000, 200000]')")
 
     # Replay eviction strategy (PDF Section 4.1)
-    parser.add_argument('--reservoir_eviction', default=True, action='store_true',
+    parser.add_argument('--reservoir_eviction', default=False, action='store_true',
                         help='Use reservoir eviction (random item removal) instead of FIFO. PDF Section 4.1: Vitter 1985.')
     parser.add_argument('--no_reservoir_eviction', dest='reservoir_eviction', action='store_false',
                         help='Use FIFO eviction instead of reservoir.')
@@ -323,7 +323,7 @@ def parse_craftax_args(args=None):
                         help='Extrinsic reward scale alpha_e (default 1.0).')
 
     # Online metrics
-    parser.add_argument('--online_metrics', default=True, action='store_true',
+    parser.add_argument('--online_metrics', default=True,
                         help='Enable online continual-learning metrics logging.')
     parser.add_argument('--no_online_metrics', dest='online_metrics', action='store_false',
                         help='Disable online continual-learning metrics logging.')
@@ -411,7 +411,7 @@ def parse_navix_args(args=None):
                         help='Number of evaluation environments (override config run.eval_envs).')
 
     # Online metrics
-    parser.add_argument('--online_metrics', default=True, action='store_true',
+    parser.add_argument('--online_metrics', default=True,
                         help='Enable online continual-learning metrics logging.')
     parser.add_argument('--no_online_metrics', dest='online_metrics', action='store_false',
                         help='Disable online continual-learning metrics logging.')

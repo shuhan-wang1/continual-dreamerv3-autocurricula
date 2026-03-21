@@ -218,9 +218,9 @@ def diag_mask_ctx_convergence(train_records, outdir, fmt):
     rolling_mean = np.convolve(v, np.ones(window)/window, mode="valid")
     rolling_std = np.array([np.std(v[max(0,i-window):i+1]) for i in range(len(v))])
     ax.plot(s[:len(rolling_mean)], rolling_mean, color="tab:red", label="rolling mean")
-    ax.fill_between(s[:len(rolling_std)],
-                    smooth(v - rolling_std, 50),
-                    smooth(v + rolling_std, 50),
+    ax.fill_between(s[:len(rolling_mean)],
+                    smooth(v[:len(rolling_mean)] - rolling_std[:len(rolling_mean)], 50),
+                    smooth(v[:len(rolling_mean)] + rolling_std[:len(rolling_mean)], 50),
                     alpha=0.15, color="tab:red", label="±1 std")
     ax.set_title("Rolling Statistics", fontsize=12)
     ax.set_xlabel("Step")

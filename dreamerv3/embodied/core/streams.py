@@ -224,8 +224,6 @@ class Mixer(base.Stream):
 
   def __next__(self):
     assert self.started
-    if not hasattr(self, '_rng'):
-      self._rng = np.random.default_rng(seed=[self.seed, self.step])
     self._rng = np.random.default_rng(seed=[self.seed, self.step])
     self.step += 1
     index = self._rng.choice(len(self.keys), p=self.probs)

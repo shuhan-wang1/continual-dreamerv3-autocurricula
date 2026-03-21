@@ -36,34 +36,24 @@ class SamplesPerInsert:
     self.avail = data['avail']
 
   def want_insert(self):
-    # if self.samples_per_insert <= 0 or self.size < self.minsize:
-    #   return True, 'ok'
-    # if self.avail >= self.max_avail:
-    #   return False, f'rate limited: {self.avail:.3f} >= {self.max_avail:.3f}'
-    # return True, 'ok'
-
-    if self.size < self.minsize:
-      return True
-    if self.samples_per_insert <= 0:
-      return True
-    if self.avail < self.max_avail:
-      return True
-    return False
+    with self.lock:
+      if self.size < self.minsize:
+        return True
+      if self.samples_per_insert <= 0:
+        return True
+      if self.avail < self.max_avail:
+        return True
+      return False
 
   def want_sample(self):
-    # if self.size < self.minsize:
-    #   return False, f'too empty: {self.size} < {self.minsize}'
-    # if self.samples_per_insert > 0 and self.avail <= self.min_avail:
-    #   return False, f'rate limited: {self.avail:.3f} <= {self.min_avail:.3f}'
-    # return True, 'ok'
-
-    if self.size < self.minsize:
+    with self.lock:
+      if self.size < self.minsize:
+        return False
+      if self.samples_per_insert <= 0:
+        return True
+      if self.min_avail < self.avail:
+        return True
       return False
-    if self.samples_per_insert <= 0:
-      return True
-    if self.min_avail < self.avail:
-      return True
-    return False
 
   def insert(self):
     with self.lock:

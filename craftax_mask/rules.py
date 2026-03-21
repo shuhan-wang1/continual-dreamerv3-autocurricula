@@ -335,4 +335,4 @@ ACTION_RULES = {
 }
 
 # Backward compatibility alias
-BASIC_ACTION_RULES = ACTION_RULES
+BASIC_ACTION_RULES = dict(ACTION_RULES)

@@ -496,12 +496,3 @@ class Agent(embodied.Agent):
       return ''.join(f'  {line}\n' for line in lines)
     except (TypeError, AttributeError, KeyError):
       return 'Not available'
-
-def init(fun, **jit_kwargs):
-  if not getattr(fun, '_is_pure', False):
-    fun = nj.pure(fun)
-  def wrapper(*args, **kwargs):
-    state, out = fun(*args, create=True, modify=True, ignore=True, **kwargs)
-    del out
-    return state, ()
-  return wrapper

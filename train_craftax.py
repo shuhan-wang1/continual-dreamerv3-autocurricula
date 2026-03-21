@@ -27,22 +27,39 @@ os.environ.setdefault('XLA_PYTHON_CLIENT_MEM_FRACTION', '0.85')
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Reduce TF logging noise
 # Do NOT set XLA_PYTHON_CLIENT_ALLOCATOR='platform' — it causes memory fragmentation
 
-# Parse arguments early to determine which DreamerV3 version to use
+# Determine which DreamerV3 version to use and set up sys.path accordingly.
 root = pathlib.Path(__file__).parent
-# Import input_args before setting dreamerv3 path (it doesn't depend on dreamerv3)
 sys.path.insert(0, str(root))
 from input_args import parse_craftax_args
-_args = parse_craftax_args()
 
-# Add dreamerv3 to path based on --use_original_dreamer flag
-if _args.use_original_dreamer:
-    print("Using ORIGINAL DreamerV3 from dreamerv3-main/")
-    sys.path.insert(0, str(root / 'dreamerv3-main'))
-    sys.path.insert(0, str(root / 'dreamerv3-main' / 'dreamerv3'))
-else:
-    print("Using CONTINUOUS ENHANCED DreamerV3 from dreamerv3/")
-    sys.path.insert(0, str(root / 'dreamerv3'))
-    sys.path.insert(0, str(root / 'dreamerv3' / 'dreamerv3'))
+
+def _setup_dreamerv3_path():
+    """Parse args to determine DreamerV3 version and add it to sys.path.
+
+    When this module is imported (e.g. ``from train_craftax import run_craftax``),
+    calling ``parse_craftax_args()`` at module level would re-parse sys.argv and
+    fail on flags the caller's own parser already consumed.  Instead we only
+    parse when running as the main script; importers set up the path themselves
+    or rely on the default (enhanced) version.
+    """
+    if __name__ == '__main__':
+        _args = parse_craftax_args()
+        use_original = _args.use_original_dreamer
+    else:
+        # Imported by another entry-point – use the default (enhanced) version.
+        use_original = False
+
+    if use_original:
+        print("Using ORIGINAL DreamerV3 from dreamerv3-main/")
+        sys.path.insert(0, str(root / 'dreamerv3-main'))
+        sys.path.insert(0, str(root / 'dreamerv3-main' / 'dreamerv3'))
+    else:
+        print("Using CONTINUOUS ENHANCED DreamerV3 from dreamerv3/")
+        sys.path.insert(0, str(root / 'dreamerv3'))
+        sys.path.insert(0, str(root / 'dreamerv3' / 'dreamerv3'))
+
+
+_setup_dreamerv3_path()
 
 import ast
 import elements
@@ -1252,7 +1269,7 @@ def make_agent(config, env, args=None):
             'disag_models': getattr(args, 'disag_models', 10),
             'disag_target': getattr(args, 'disag_target', 'feat'),
             'expl_intr_scale': getattr(args, 'expl_intr_scale', 0.9),
-            'expl_extr_scale': getattr(args, 'expl_extr_scale', 0.9),
+            'expl_extr_scale': getattr(args, 'expl_extr_scale', 0.0),
         }
     # Action mask config (Craftax feasibility prior)
     action_mask_config = {}
@@ -2343,7 +2360,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
 
             # Dream mask warmup for CL loop
             cl_dream_mask_warmup = prefill + 40000
-            cl_dream_mask_activated = getattr(agent, '_dream_mask_active', False)
+            cl_dream_mask_activated = getattr(agent.model, '_dream_mask_active', False)
 
             while step < steps_limit:
                 driver(policy, steps=collect_steps)

@@ -151,32 +151,34 @@ class Replay:
   def sample(self, batch, mode='train'):
     message = f'Replay buffer {self.name} is empty'
     limiters.wait(lambda: len(self.sampler), message)
-    seqs, is_online = zip(*[self._sample(mode) for _ in range(batch)])
-    data = self._assemble_batch(seqs, 0, self.length)
-    data = self._annotate_batch(data, is_online, True)
+    with self.rwlock.reading:
+      seqs, is_online = zip(*[self._sample(mode) for _ in range(batch)])
+      data = self._assemble_batch(seqs, 0, self.length)
+      data = self._annotate_batch(data, is_online, True)
     return data
 
   @elements.timer.section('replay_update')
   def update(self, data):
-    stepid = data.pop('stepid')
-    priority = data.pop('priority', None)
-    assert stepid.ndim == 3, stepid.shape
-    self.metrics['updates'] += int(np.prod(stepid.shape[:-1]))
-    if priority is not None:
-      assert priority.ndim == 2, priority.shape
-      self.sampler.prioritize(
-          stepid.reshape((-1, stepid.shape[-1])),
-          priority.flatten())
-    if data:
-      for i, sid in enumerate(stepid):
-        sid_bytes = sid[0].tobytes()
-        chunkid = elements.UUID(sid_bytes[:-4])
-        index = int.from_bytes(sid_bytes[-4:], 'big')
-        values = {k: v[i] for k, v in data.items()}
-        try:
-          self._setseq(chunkid, index, values)
-        except KeyError:
-          pass
+    with self.rwlock.writing:
+      stepid = data.pop('stepid')
+      priority = data.pop('priority', None)
+      assert stepid.ndim == 3, stepid.shape
+      self.metrics['updates'] += int(np.prod(stepid.shape[:-1]))
+      if priority is not None:
+        assert priority.ndim == 2, priority.shape
+        self.sampler.prioritize(
+            stepid.reshape((-1, stepid.shape[-1])),
+            priority.flatten())
+      if data:
+        for i, sid in enumerate(stepid):
+          sid_bytes = sid[0].tobytes()
+          chunkid = elements.UUID(sid_bytes[:-4])
+          index = int.from_bytes(sid_bytes[-4:], 'big')
+          values = {k: v[i] for k, v in data.items()}
+          try:
+            self._setseq(chunkid, index, values)
+          except KeyError:
+            pass
 
   def _sample(self, mode):
     assert mode in ('train', 'report', 'eval'), mode
@@ -244,7 +246,7 @@ class Replay:
   def _remove_random(self, index):
     """Remove item at random index (reservoir eviction)."""
     if index >= len(self.item_keys):
-      index = index % max(1, len(self.item_keys))
+      index = min(index, len(self.item_keys) - 1)
     itemid = self.item_keys[index]
     self._remove_item(itemid)
     # Swap-and-pop for O(1) removal from item_keys
@@ -268,7 +270,7 @@ class Replay:
       if self.refs[chunkid] < 1:
         del self.refs[chunkid]
         chunk = self.chunks.pop(chunkid)
-        if chunk.succ in self.refs:
+        if chunk.succ in self.refs and self.refs[chunk.succ] > 0:
           self.refs[chunk.succ] -= 1
 
   def _getseq(self, chunkid, index, keys=None, concat=True):

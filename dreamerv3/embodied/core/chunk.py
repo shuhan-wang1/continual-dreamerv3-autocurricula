@@ -34,13 +34,13 @@ class Chunk:
 
   @property
   def nbytes(self):
-    if not self.data:
+    if self.data is None:
       return 0
     return sum(x.nbytes for x in self.data.values())
 
   def append(self, step):
     assert self.length < self.size
-    if not self.data:
+    if self.data is None:
       example = step
       self.data = {
           k: np.empty((self.size, *v.shape), v.dtype)
@@ -90,7 +90,7 @@ class Chunk:
       else:
         return None
     chunk = cls(length)
-    chunk.time = time
+    chunk.time = float(time)
     chunk.uuid = elements.UUID(uuid)
     chunk.succ = elements.UUID(succ)
     chunk.length = length
