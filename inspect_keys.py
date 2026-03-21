@@ -33,7 +33,7 @@ def inspect(path):
         if group:
             print(f"    [{label}] ({len(group)} keys)")
             for k, cnt in sorted(group.items()):
-                pct = cnt / n * 100
+                pct = cnt / n * 100 if n > 0 else 0.0
                 print(f"      {k:<55} {cnt:>6} records ({pct:>5.1f}%)")
 
 if __name__ == "__main__":

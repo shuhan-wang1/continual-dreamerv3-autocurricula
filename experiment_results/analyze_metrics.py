@@ -336,15 +336,31 @@ SIGNIFICANCE_LEVEL = 0.05
 OUTPUT_DIR = pathlib.Path("figures")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# Correct ordering: matches Craftax Achievement enum values 0-21
+# Full 67 achievements in Craftax enum order (synced with Craftax 1.x)
 ACHIEVEMENT_NAMES = [
-    "collect_wood", "place_table", "eat_cow", "collect_sapling",       # 0-3
-    "collect_drink", "make_wood_pickaxe", "make_wood_sword",           # 4-6
-    "place_plant", "defeat_zombie", "collect_stone", "place_stone",    # 7-10
-    "eat_plant", "defeat_skeleton", "make_stone_pickaxe",              # 11-13
-    "make_stone_sword", "wake_up", "place_furnace", "collect_coal",    # 14-17
-    "collect_iron", "collect_diamond", "make_iron_pickaxe",            # 18-20
-    "make_iron_sword",                                                 # 21
+    "collect_wood", "place_table", "eat_cow", "collect_sapling",
+    "collect_drink", "make_wood_pickaxe", "make_wood_sword",
+    "place_plant", "defeat_zombie", "collect_stone", "place_stone",
+    "eat_plant", "defeat_skeleton", "collect_coal", "make_stone_pickaxe",
+    "make_stone_sword", "wake_up", "place_furnace", "collect_iron",
+    "make_iron_pickaxe", "make_iron_sword", "collect_diamond",
+    "make_diamond_pickaxe", "make_diamond_sword",
+    "make_iron_armour", "make_diamond_armour",
+    "make_arrow", "make_torch", "place_torch",
+    "eat_bat", "eat_snail", "find_bow", "fire_bow",
+    "collect_sapphire", "collect_ruby",
+    "enter_gnomish_mines", "enter_dungeon", "enter_sewers",
+    "enter_vault", "enter_troll_mines",
+    "defeat_gnome_warrior", "defeat_gnome_archer",
+    "defeat_orc_solider", "defeat_orc_mage",
+    "defeat_lizard", "defeat_kobold",
+    "learn_fireball", "cast_fireball", "learn_iceball", "cast_iceball",
+    "open_chest", "drink_potion", "enchant_sword", "enchant_armour",
+    "enter_fire_realm", "enter_ice_realm", "enter_graveyard",
+    "defeat_troll", "defeat_deep_thing", "defeat_pigman",
+    "defeat_fire_elemental", "defeat_frost_troll", "defeat_ice_elemental",
+    "defeat_knight", "defeat_archer",
+    "damage_necromancer", "defeat_necromancer",
 ]
 
 

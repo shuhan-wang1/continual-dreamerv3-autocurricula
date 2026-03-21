@@ -346,9 +346,9 @@ class Agent(embodied.jax.Agent):
         # Use .loss() instead of .log_prob() - returns negative log prob
         disag_loss = disag_loss + pred.loss(disag_tgt)
       disag_loss = disag_loss / self._disag_models
-      # Pad to [B, T] with zeros (avoids giving last timestep 2x weight)
+      # Repeat last valid value to [B, T] (avoids diluting mean with zeros)
       losses['disag'] = jnp.concatenate(
-          [disag_loss, jnp.zeros_like(disag_loss[:, :1])], axis=1)
+          [disag_loss, disag_loss[:, -1:]], axis=1)
 
     # Mask context prediction loss (train head to predict action_mask_context
     # from RSSM features, enabling mask application during imagination).

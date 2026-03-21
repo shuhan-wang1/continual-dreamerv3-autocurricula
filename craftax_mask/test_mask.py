@@ -142,7 +142,7 @@ def test_make_diamond_armour():
 def test_potions():
     potion_rules = [
         "DRINK_POTION_RED", "DRINK_POTION_GREEN", "DRINK_POTION_BLUE",
-        "DRINK_POTION_PINK", "DRINK_POTION_YELLOW", "DRINK_POTION_RAINBOW",
+        "DRINK_POTION_PINK", "DRINK_POTION_CYAN", "DRINK_POTION_YELLOW",
     ]
     # Filter to only rules that exist, then extract the correct slot index
     # from each rule's conditions to avoid index misalignment when rules are missing.

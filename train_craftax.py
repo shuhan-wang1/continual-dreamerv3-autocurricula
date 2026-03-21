@@ -83,7 +83,7 @@ jax.config.update("jax_transfer_guard", "allow")
 # Performance: enable persistent compilation cache to avoid re-compiling JIT on restart
 import tempfile as _tempfile
 jax.config.update("jax_compilation_cache_dir", os.path.join(_tempfile.gettempdir(), "jax_cache"))
-jax.config.update("jax_persistent_cache_min_entry_size_bytes", 0)
+jax.config.update("jax_persistent_cache_min_entry_size_bytes", 1024)
 jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
 
 # Disable debug checks for speed
@@ -2032,7 +2032,8 @@ def train_single(make_env, config, args, env_name=None):
             cp.save()
         # Periodically clear JAX caches to prevent memory accumulation
         # that causes CUDA_ERROR_ILLEGAL_ADDRESS after ~15k steps
-        if step.value % 50000 < collect_steps and step.value > 0:
+        _cache_interval = getattr(args, 'jax_cache_clear_interval', 0) or 50000
+        if step.value % _cache_interval < collect_steps and step.value > 0:
             jax.clear_caches()
 
     cp.save()
@@ -2120,7 +2121,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
 
     if unbalanced_steps is not None:
         tot_steps_after_task = np.cumsum(unbalanced_steps)
-        task_id = next((i for i, j in enumerate(total_steps_done < tot_steps_after_task) if j), 0)
+        task_id = next((i for i, j in enumerate(total_steps_done < tot_steps_after_task) if j), len(unbalanced_steps) - 1)
         rep = int(total_steps_done // np.sum(unbalanced_steps))
     else:
         task_id = int(total_steps_done // steps_per_task) % num_tasks
@@ -2385,7 +2386,8 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                 if step.value % 10000 < collect_steps:
                     cp.save()
                 # Periodically clear JAX caches to prevent memory accumulation
-                if total_step.value % 50000 < collect_steps and total_step.value > 0:
+                _cache_interval = getattr(args, 'jax_cache_clear_interval', 0) or 50000
+                if total_step.value % _cache_interval < collect_steps and total_step.value > 0:
                     jax.clear_caches()
 
             driver.close()

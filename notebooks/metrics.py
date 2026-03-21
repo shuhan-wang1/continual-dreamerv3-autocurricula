@@ -22,9 +22,9 @@ def smooth(
 def performance(
     data: Dict[int, np.array],
     num_tasks: int=8,
-    num_steps: int=1e6,
+    num_steps: int=1000000,
     num_seeds: int=10,
-    smoothing_factor: bool=None,
+    smoothing_factor: float=None,
     verbose: bool=False,
 ) -> np.array:
     """
@@ -72,7 +72,7 @@ def performance(
 def forgetting(
     data: Dict[int, np.array],
     num_tasks: int=8,
-    num_steps: int=1e6,
+    num_steps: int=1000000,
     num_seeds: int=10,
     smoothing_factor: float=None,
     verbose: bool=False,
@@ -114,9 +114,10 @@ def forgetting(
 
         f_T = dataset.tail(1).to_numpy()[0, 1:]
 
-        # minihack levels can be negative so let's scale up to 0
-        f_T[f_T <= 0] = 0
-        f_i[f_i <= 0] = 0
+        # Floor at a large negative to avoid -inf but preserve negative scores
+        _floor = -1e6
+        f_T = np.maximum(f_T, _floor)
+        f_i = np.maximum(f_i, _floor)
         f += (f_i - f_T)
         if verbose:
             print("Task {0}".format(i+1))
@@ -126,7 +127,7 @@ def forgetting(
 def integrate(
     dataset: np.array,
     num_seeds: int,
-    num_steps: int,
+    num_steps: int,  # steps per task: used as integration interval width AND normalization divisor
     task: int=None,
     aggregate: bool=False,
 ) -> np.array:
@@ -160,7 +161,7 @@ def fwd_transfer(
     num_tasks: int=8,
     num_seeds: int=10,
     envs: List = None,
-    num_steps: int=1e6,
+    num_steps: int=1000000,
     full_range: bool=False,
     verbose: bool=False,
     aggregate_ref_auc: bool=False,
@@ -207,7 +208,9 @@ def fwd_transfer(
 
 
 def _clip_perf(value: float) -> float:
-    return float(value) if value > 0 else 0.0
+    """Convert to float without clipping. Negative scores are preserved
+    to avoid inflating AUC and masking forgetting."""
+    return float(value)
 
 
 def _ensure_dir(path: str) -> None:

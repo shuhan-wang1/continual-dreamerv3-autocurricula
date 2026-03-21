@@ -307,23 +307,8 @@ def parse_craftax_args(args=None):
     parser.add_argument('--rssm_full_recon', default=False, action='store_true',
                         help='Whether to have the WM reconstruct the obs, discount and rewards.')
 
-    # Spatial-counting + Craft-novelty intrinsic reward (PDF Section 4.2, Eq.10-13)
-    parser.add_argument('--intrinsic_spatial', default=False, action='store_true',
-                        help='Enable spatial-counting + craft-novelty intrinsic reward (Eq.10-12).')
-    parser.add_argument('--no_intrinsic_spatial', dest='intrinsic_spatial', action='store_false',
-                        help='Disable spatial-counting + craft-novelty intrinsic reward.')
-    parser.add_argument('--alpha_spatial', type=float, default=0.1,
-                        help='Spatial novelty weight (default 0.1). After independent adaptive '
-                             'normalization each component is scaled to match |r_extr|, so this '
-                             'is the true relative importance weight.')
-    parser.add_argument('--alpha_craft', type=float, default=0.3,
-                        help='Craft novelty weight (default 0.3). Independently normalized, so '
-                             'rare craft events get a proportionally larger scale factor.')
-    parser.add_argument('--alpha_e', type=float, default=1.0,
-                        help='Extrinsic reward scale alpha_e (default 1.0).')
-
     # Online metrics
-    parser.add_argument('--online_metrics', default=True,
+    parser.add_argument('--online_metrics', default=True, action='store_true',
                         help='Enable online continual-learning metrics logging.')
     parser.add_argument('--no_online_metrics', dest='online_metrics', action='store_false',
                         help='Disable online continual-learning metrics logging.')
@@ -411,7 +396,7 @@ def parse_navix_args(args=None):
                         help='Number of evaluation environments (override config run.eval_envs).')
 
     # Online metrics
-    parser.add_argument('--online_metrics', default=True,
+    parser.add_argument('--online_metrics', default=True, action='store_true',
                         help='Enable online continual-learning metrics logging.')
     parser.add_argument('--no_online_metrics', dest='online_metrics', action='store_false',
                         help='Disable online continual-learning metrics logging.')

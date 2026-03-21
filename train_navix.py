@@ -640,7 +640,7 @@ def cl_train_loop(make_envs, config, args):
     logger = make_logger(config, total_step)
     online = None
     if getattr(args, 'online_metrics', True):
-        steps_per_task = unbalanced_steps if unbalanced_steps is not None else int(args.steps)
+        steps_per_task = unbalanced_steps if unbalanced_steps is not None else int(args.steps)  # may be list or int
         online = OnlineMetrics(
             logdir=str(logdir),
             num_tasks=len(make_envs),
@@ -795,16 +795,6 @@ def run_navix(args):
     unbalanced_steps = None
     if args.unbalanced_steps not in [None, 'None', 'none']:
         unbalanced_steps = ast.literal_eval(str(args.unbalanced_steps))
-
-    # Available NAVIX environments (similar to MiniGrid)
-    all_envs = [
-        'Navix-Empty-8x8-v0',
-        'Navix-DoorKey-6x6-v0',
-        'Navix-LavaCrossing-9x9-v0',
-        'Navix-KeyCorridor-S3R1-v0',
-        'Navix-Dynamic-Obstacles-6x6-v0',
-        'Navix-MultiRoom-N2S4-v0',
-    ]
 
     use_embedding = (args.input_type == 'embedding')
 

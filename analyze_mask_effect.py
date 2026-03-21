@@ -216,7 +216,7 @@ def diag_mask_ctx_convergence(train_records, outdir, fmt):
     ax = axes[1]
     window = max(50, n // 20)
     rolling_mean = np.convolve(v, np.ones(window)/window, mode="valid")
-    rolling_std = np.array([np.std(v[max(0,i-window):i+1]) for i in range(len(v))])
+    rolling_std = np.array([np.std(v[i:i+window]) for i in range(len(rolling_mean))])
     ax.plot(s[:len(rolling_mean)], rolling_mean, color="tab:red", label="rolling mean")
     ax.fill_between(s[:len(rolling_mean)],
                     smooth(v[:len(rolling_mean)] - rolling_std[:len(rolling_mean)], 50),
@@ -301,7 +301,7 @@ def diag_mask_activity(online_records, outdir, fmt):
     lines = ["=" * 70, "  DIAGNOSTIC 3: Mask Activity", "=" * 70]
     if "Infeasible Fraction" in found:
         s, v, _ = found["Infeasible Fraction"]
-        total_actions = 42
+        total_actions = 42  # Craftax full action space size
         early = v[:max(1, len(v)//10)]
         late = v[max(0, len(v) - len(v)//10):]
         lines.append(f"  Total actions: {total_actions}")

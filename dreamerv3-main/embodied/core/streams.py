@@ -220,7 +220,7 @@ class Mixer(base.Stream):
 
   def __next__(self):
     assert self.started
-    rng = np.ranodm.default_rng(seed=[self.seed, self.step])
+    rng = np.random.default_rng(seed=[self.seed, self.step])
     self.step += 1
     index = rng.choice(len(self.keys), p=self.probs)
     return next(self.iterators[index])
@@ -238,4 +238,4 @@ class Mixer(base.Stream):
     assert sorted(data['sources'].keys()) == self.keys, (
         data['sources'], self.keys)
     for key in self.keys:
-      self.iterators[key].load(data['sources'][key])
+      self.iterators[self.keys.index(key)].load(data['sources'][key])
