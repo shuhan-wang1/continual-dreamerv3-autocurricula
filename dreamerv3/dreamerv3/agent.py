@@ -35,7 +35,7 @@ class Agent(embodied.jax.Agent):
     self.act_space = act_space
     self.config = config
 
-    exclude = ('is_first', 'is_last', 'is_terminal', 'reward')
+    exclude = ('is_first', 'is_last', 'is_terminal', 'reward', 'action_mask_context')
     enc_space = {k: v for k, v in obs_space.items() if k not in exclude}
     dec_space = {k: v for k, v in obs_space.items() if k not in exclude}
     self.enc = {
@@ -71,17 +71,49 @@ class Agent(embodied.jax.Agent):
     self.valnorm = embodied.jax.Normalize(**config.valnorm, name='valnorm')
     self.advnorm = embodied.jax.Normalize(**config.advnorm, name='advnorm')
 
+    # Action mask (Craftax feasibility prior)
+    mask_cfg = getattr(config, 'action_mask', None)
+    self.action_mask_enabled = bool(getattr(
+        mask_cfg, 'enabled', getattr(config, 'action_mask_enabled', False)))
+    self._action_mask_mode = getattr(
+        mask_cfg, 'mode', getattr(config, 'action_mask_mode', 'soft'))
+    self._action_mask_lambda = getattr(
+        mask_cfg, 'lambda_penalty',
+        getattr(config, 'action_mask_lambda_penalty', 5.0))
+    self._action_mask_large_neg = getattr(
+        mask_cfg, 'large_negative',
+        getattr(config, 'action_mask_large_negative', 1e9))
+    if self.action_mask_enabled:
+      print(f'Action mask enabled: mode={self._action_mask_mode}, '
+            f'lambda={self._action_mask_lambda}, large_neg={self._action_mask_large_neg}')
+      # Mask context prediction head: predicts action_mask_context (46-dim)
+      # from RSSM features so masks can be applied during imagination.
+      from craftax_mask.rules import CONTEXT_SIZE
+      mask_ctx_space = elements.Space(np.float32, (CONTEXT_SIZE,))
+      self.mask_ctx_head = embodied.jax.MLPHead(
+          mask_ctx_space, 'normal_logstd',
+          layers=2, units=config.value.units,
+          act='silu', norm='rms', outscale=1.0,
+          winit='trunc_normal_in',
+          name='mask_ctx')
+      # WARNING: _dream_mask_active controls whether the mask is applied during
+      # imagination. Because self.loss() is JIT-compiled, this Python-level
+      # boolean is baked into the traced graph. Changing it has NO effect
+      # until jax.clear_caches() is called to force re-tracing. The training
+      # loop (train_craftax.py) is responsible for:
+      #   1. Setting agent.model._dream_mask_active = True
+      #   2. Immediately calling jax.clear_caches()
+      # If you modify this mechanism, ensure both steps always happen together.
+      self._dream_mask_active = False
+
     # Plan2Explore (P2E) ensemble for intrinsic exploration reward
     self.p2e_enabled = getattr(config, 'plan2explore', False)
-    # When the env reward already contains intrinsic shaping (e.g. spatial-
-    # counting + craft-novelty), the world model predicts the shaped reward.
-    # In that case, don't re-scale it with expl_extr_scale to avoid double-
-    # counting the intrinsic component.
     self.p2e_ensemble = []
     if self.p2e_enabled:
       self._disag_models = getattr(config, 'disag_models', 10)
       self._disag_target = getattr(config, 'disag_target', 'feat')
       self._expl_intr_scale = getattr(config, 'expl_intr_scale', 0.9)
+      self._expl_extr_scale = getattr(config, 'expl_extr_scale', 0.0)
       # Determine target dimension based on disag_target
       rssm_cfg = config.dyn.rssm
       if self._disag_target == 'stoch':
@@ -90,21 +122,10 @@ class Agent(embodied.jax.Agent):
         self._disag_target_dim = rssm_cfg.deter
       else:  # 'feat' = deter + stoch*classes
         self._disag_target_dim = rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes
-      # Compute action dimension for (state, action) conditioning
-      self._act2tensor_fn = nn.DictConcat(act_space, 1)
-      # DictConcat one-hots discrete actions; compute output dim
-      self._act_dim = 0
-      for k in sorted(act_space.keys()):
-        s = act_space[k]
-        if s.discrete:
-          classes = np.asarray(s.classes).flatten()
-          self._act_dim += int(classes[0]) * int(np.prod(s.shape)) if len(s.shape) > 0 else int(classes[0])
-        else:
-          self._act_dim += int(np.prod(s.shape))
-      feat_dim = rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes
-      # Input dimension = features + action (state-action conditioning)
-      self._disag_inp_dim = feat_dim + self._act_dim
-      # Create ensemble of MLP heads that predict the next-step target
+      # Input dimension = full feat tensor (deter + stoch*classes)
+      self._disag_inp_dim = rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes
+      # Create ensemble of MLP heads that predict the target
+      # Use 'normal_logstd' for probabilistic prediction (outputs mean + logstd)
       disag_out_space = elements.Space(
           np.float32, (self._disag_target_dim,))
       for i in range(self._disag_models):
@@ -116,12 +137,14 @@ class Agent(embodied.jax.Agent):
             name=f'disag_{i}')
         self.p2e_ensemble.append(head)
       print(f'Plan2Explore enabled: {self._disag_models} ensemble heads, '
-            f'target={self._disag_target}, act_dim={self._act_dim}, '
+            f'target={self._disag_target}, '
             f'intr_scale={self._expl_intr_scale}, '
-            f'extr_scale=1.0 (always full)')
+            f'extr_scale={self._expl_extr_scale}')
 
     self.modules = [
         self.dyn, self.enc, self.dec, self.rew, self.con, self.pol, self.val]
+    if self.action_mask_enabled:
+      self.modules.append(self.mask_ctx_head)
     if self.p2e_enabled:
       self.modules.extend(self.p2e_ensemble)
     self.opt = embodied.jax.Optimizer(
@@ -131,12 +154,16 @@ class Agent(embodied.jax.Agent):
     scales = self.config.loss_scales.copy()
     rec = scales.pop('rec')
     scales.update({k: rec for k in dec_space})
+    if self.action_mask_enabled:
+      scales['mask_ctx'] = 1.0
     if self.p2e_enabled:
       scales['disag'] = 1.0
     self.scales = scales
 
   @property
   def policy_keys(self):
+    if self.action_mask_enabled:
+      return '^(enc|dyn|dec|pol|mask_ctx)/'
     return '^(enc|dyn|dec|pol)/'
 
   @property
@@ -150,6 +177,49 @@ class Agent(embodied.jax.Agent):
           dyn=self.dyn.entry_space,
           dec=self.dec.entry_space)))
     return spaces
+
+  def _apply_action_mask(self, policy, ctx_arr):
+    """Apply feasibility bias to action logits. ctx_arr: float32 (CONTEXT_SIZE,) or (B, CONTEXT_SIZE)."""
+    import embodied.jax.outs as outs
+    from craftax_mask import (
+        ACTION_RULES,
+        compute_mask_details,
+        compute_mask_logging_stats,
+    )
+    raw = policy['action']
+    # Extract logits from distribution (OneHot wraps .dist, Categorical is bare)
+    if isinstance(raw, outs.OneHot):
+      logits = raw.dist.logits
+    else:
+      logits = raw.logits
+    num_actions = logits.shape[-1]
+    details = compute_mask_details(
+        ctx_arr, ACTION_RULES, num_actions,
+        lambda_penalty=self._action_mask_lambda,
+        large_negative=self._action_mask_large_neg,
+        mode=self._action_mask_mode,
+    )
+    bias = jnp.asarray(details['bias'])
+    if bias.ndim < logits.ndim:
+      bias = jnp.broadcast_to(bias, logits.shape)
+    adj_logits = logits + bias
+    # unimix=0.0 is correct: logits already have unimix baked in from the
+    # original distribution's __init__, so re-applying would double-mix.
+    if isinstance(raw, outs.OneHot):
+      new_dist = outs.OneHot(adj_logits, 0.0)
+    else:
+      new_dist = outs.Categorical(adj_logits, 0.0)
+    # Preserve minent/maxent from original distribution for entropy reporting
+    if hasattr(raw, 'minent'):
+      new_dist.minent = raw.minent
+      new_dist.maxent = raw.maxent
+    stats = compute_mask_logging_stats(
+        details, ACTION_RULES,
+        raw_logits=logits, adjusted_logits=adj_logits,
+        large_negative=self._action_mask_large_neg,
+    )
+    stats = {k: jnp.asarray(v, dtype=f32) for k, v in stats.items()}
+    return ({**policy, 'action': new_dist}, stats)
 
   def init_policy(self, batch_size):
     zeros = lambda x: jnp.zeros((batch_size, *x.shape), x.dtype)
@@ -176,8 +246,24 @@ class Agent(embodied.jax.Agent):
     if dec_carry:
       dec_carry, dec_entry, recons = self.dec(dec_carry, feat, reset, **kw)
     policy = self.pol(self.feat2tensor(feat), bdims=1)
-    act = sample(policy)
     out = {}
+    mask_stats = None
+    # Apply action mask if enabled (Craftax feasibility prior).
+    # New key is `action_mask_context`; old `log/action_mask_context` kept
+    # for backward compatibility with old logs/checkpoints.
+    if self.action_mask_enabled:
+      if 'action_mask_context' in obs:
+        policy, mask_stats = self._apply_action_mask(policy, obs['action_mask_context'])
+      elif 'log/action_mask_context' in obs:
+        policy, mask_stats = self._apply_action_mask(policy, obs['log/action_mask_context'])
+
+    act = sample(policy)
+    if mask_stats is not None:
+      out.update({f'log/{k}': v for k, v in mask_stats.items()})
+    elif self.action_mask_enabled:
+      from craftax_mask import ACTION_RULES, empty_mask_logging_stats
+      stats = empty_mask_logging_stats(reset.shape, ACTION_RULES, context_missing=True)
+      out.update({f'log/{k}': jnp.asarray(v, dtype=f32) for k, v in stats.items()})
     out['finite'] = elements.tree.flatdict(jax.tree.map(
         lambda x: jnp.isfinite(x).all(range(1, x.ndim)),
         dict(obs=obs, carry=carry, tokens=tokens, feat=feat, act=act)))
@@ -193,7 +279,6 @@ class Agent(embodied.jax.Agent):
         self.loss, carry, obs, prevact, training=True, has_aux=True)
     metrics.update(mets)
     self.slowval.update()
-    outs = {}
     if self.config.replay_context:
       updates = elements.tree.flatdict(dict(
           stepid=stepid, enc=entries[0], dyn=entries[1], dec=entries[2]))
@@ -243,8 +328,9 @@ class Agent(embodied.jax.Agent):
     shapes = {k: v.shape for k, v in losses.items()}
     assert all(x == (B, T) for x in shapes.values()), ((B, T), shapes)
 
-    # Plan2Explore: train ensemble on (state, action) to predict next-step target
+    # Plan2Explore: train ensemble on real features to predict next-step target
     if self.p2e_enabled:
+      # Build ensemble training targets from real observed features
       feat_tensor = sg(self.feat2tensor(repfeat))  # [B, T, D]
       if self._disag_target == 'stoch':
         disag_target = sg(repfeat['stoch'].reshape(
@@ -253,30 +339,50 @@ class Agent(embodied.jax.Agent):
         disag_target = sg(nn.cast(repfeat['deter']))  # [B, T, deter]
       else:  # 'feat'
         disag_target = feat_tensor  # [B, T, deter + stoch*classes]
-      # Condition on (state_t, action_t) pairs for next-step prediction.
-      # prevact[:, t] is the action taken at step t-1 to arrive at step t,
-      # so prevact[:, t+1] = action_t.  Use act_tensor[:, 1:] to align.
-      act_tensor = self._act2tensor_fn(prevact)  # [B, T, act_dim]
-      disag_inp = jnp.concatenate(
-          [feat_tensor[:, :-1], act_tensor[:, 1:]], axis=-1)  # [B, T-1, D+act_dim]
+      # Ensemble loss: each head predicts next-step target from current features
+      # Use t to predict t+1 target (shifted by 1 step)
+      disag_inp = feat_tensor[:, :-1]    # [B, T-1, D]
       disag_tgt = disag_target[:, 1:]    # [B, T-1, target_dim]
       disag_loss = jnp.zeros((B, T - 1))
       for head in self.p2e_ensemble:
         pred = head(disag_inp, 2)
+        # Use .loss() instead of .log_prob() - returns negative log prob
         disag_loss = disag_loss + pred.loss(disag_tgt)
       disag_loss = disag_loss / self._disag_models
-      # Normalize by target dimension so disag loss magnitude is comparable
-      # to other per-element losses (dyn, rep, etc.).  Without this, the
-      # 3840-dim log-prob sum overwhelms the optimizer.
-      disag_loss = disag_loss / max(1, self._disag_target_dim)
+      # Pad to [B, T] with the batch-wise mean of disag_loss so that the
+      # padded value neither biases toward the last timestep (old behaviour)
+      # nor dilutes the mean with zeros.
+      pad_val = disag_loss.mean(axis=1, keepdims=True)  # [B, 1]
       losses['disag'] = jnp.concatenate(
-          [disag_loss, jnp.zeros((B, 1))], axis=1)
+          [disag_loss, pad_val], axis=1)
+
+    # Mask context prediction loss (train head to predict action_mask_context
+    # from RSSM features, enabling mask application during imagination).
+    if self.action_mask_enabled:
+      if 'action_mask_context' in obs:
+        mask_ctx_inp = sg(self.feat2tensor(repfeat))
+        mask_ctx_pred = self.mask_ctx_head(mask_ctx_inp, 2)
+        losses['mask_ctx'] = mask_ctx_pred.loss(obs['action_mask_context'])
+      else:
+        # Fallback: zero loss to keep losses/scales keys consistent
+        losses['mask_ctx'] = jnp.zeros((B, T))
 
     # Imagination
     K = min(self.config.imag_last or T, T)
     H = self.config.imag_length
     starts = self.dyn.starts(dyn_entries, dyn_carry, K)
-    policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
+    # Dream masking: only apply after warmup. WARNING: _dream_mask_active is
+    # a Python-level flag baked into the JIT trace. It only takes effect
+    # after jax.clear_caches() forces re-tracing. See __init__ for details.
+    if self.action_mask_enabled and self._dream_mask_active:
+      def policyfn(feat):
+        ft = self.feat2tensor(feat)
+        pol = self.pol(ft, 1)
+        ctx = self.mask_ctx_head(ft, 1).pred()
+        pol, _ = self._apply_action_mask(pol, ctx)
+        return sample(pol)
+    else:
+      policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
     _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training)
     first = jax.tree.map(
         lambda x: x[:, -K:].reshape((B * K, 1, *x.shape[2:])), repfeat)
@@ -291,43 +397,37 @@ class Agent(embodied.jax.Agent):
     # Compute reward for imagination (with P2E intrinsic reward if enabled)
     extr_rew = self.rew(inp, 2).pred()
     if self.p2e_enabled:
-      # Condition ensemble on (state, action) during imagination
-      imgact_tensor = self._act2tensor_fn(imgact)  # [B*K, H+1, act_dim]
-      disag_inp_imag = jnp.concatenate(
-          [sg(inp), imgact_tensor], axis=-1)  # [B*K, H+1, D+act_dim]
-      # Collect means and variances for full predictive variance
-      means = []
-      head_variances = []
+      # Compute ensemble disagreement on imagined features as intrinsic reward
+      # Each head predicts the target from imgfeat; disagreement = std across heads
+      preds = []
       for head in self.p2e_ensemble:
-        dist = head(disag_inp_imag, 2)
-        means.append(dist.pred())           # [B*K, H+1, target_dim]
-        head_variances.append(dist.output.stddev ** 2)
-      means = jnp.stack(means, axis=0)           # [num_models, B*K, H+1, target_dim]
-      head_variances = jnp.stack(head_variances, axis=0)
-      # Epistemic uncertainty = Std(means) — ensemble disagreement (P2E paper)
-      # Plan2Explore (Sekar et al., 2020) uses std, not variance.
-      epistemic = means.std(axis=0)               # std of means
-      aleatoric = head_variances.mean(axis=0)     # mean of variances (logged only)
-      intr_rew = epistemic.mean(axis=-1)          # [B*K, H+1]
+        pred = head(sg(inp), 2).pred()  # [B*K, H+1, target_dim]
+        preds.append(pred)
+      preds = jnp.stack(preds, axis=0)  # [num_models, B*K, H+1, target_dim]
+      # Intrinsic reward = mean variance across ensemble (epistemic uncertainty)
+      intr_rew = preds.var(axis=0).mean(axis=-1)  # [B*K, H+1]
+      # Combine: r_total = α_i * r_intr + α_e * r_extr
       # Stop gradient: ensemble should only be trained via disag_loss,
-      # not via the imagination policy/value loss.
-      # Always keep extrinsic reward at full scale (1.0×).  Only the
-      # disagreement intrinsic reward is scaled by expl_intr_scale.
-      combined_rew = (self._expl_intr_scale * jax.lax.stop_gradient(intr_rew)
-                      + extr_rew)
+      # not via gradients flowing back through the imagination policy/value loss.
+      combined_rew = (self._expl_intr_scale * jax.lax.stop_gradient(intr_rew) +
+                      self._expl_extr_scale * extr_rew)
       metrics['p2e/intr_rew'] = intr_rew.mean()
       metrics['p2e/extr_rew'] = extr_rew.mean()
       metrics['p2e/combined_rew'] = combined_rew.mean()
-      metrics['p2e/epistemic_std'] = epistemic.mean()
-      metrics['p2e/aleatoric_var'] = aleatoric.mean()  # this one IS variance
     else:
       combined_rew = extr_rew
+
+    # Apply mask to imagined policy for consistent actor-critic loss
+    img_pol = self.pol(inp, 2)
+    if self.action_mask_enabled and self._dream_mask_active:
+      img_ctx = self.mask_ctx_head(sg(inp), 2).pred()
+      img_pol, _ = self._apply_action_mask(img_pol, img_ctx)
 
     los, imgloss_out, mets = imag_loss(
         imgact,
         combined_rew,
         self.con(inp, 2).prob(1),
-        self.pol(inp, 2),
+        img_pol,
         self.val(inp, 2),
         self.slowval(inp, 2),
         self.retnorm, self.valnorm, self.advnorm,
@@ -386,7 +486,7 @@ class Agent(embodied.jax.Agent):
     if self.config.report_gradnorms:
       for key in self.scales:
         try:
-          lossfn = lambda data, carry: self.loss(
+          lossfn = lambda _data, carry: self.loss(
               carry, obs, prevact, training=False)[1][2]['losses'][key].mean()
           grad = nj.grad(lossfn, self.modules)(data, carry)[-1]
           metrics[f'gradnorm/{key}'] = optax.global_norm(grad)
@@ -425,8 +525,8 @@ class Agent(embodied.jax.Agent):
       video = jnp.where(mask, video, border[None, :, None, None, :])
       video = jnp.concatenate([video, 0 * video[:, :10]], 1)
 
-      B, T, H, W, C = video.shape
-      grid = video.transpose((1, 2, 0, 3, 4)).reshape((T, H, B * W, C))
+      Bv, Tv, H, W, C = video.shape
+      grid = video.transpose((1, 2, 0, 3, 4)).reshape((Tv, H, Bv * W, C))
       metrics[f'openloop/{key}'] = grid
 
     carry = (*new_carry, {k: data[k][:, -1] for k in self.act_space})
@@ -469,13 +569,13 @@ class Agent(embodied.jax.Agent):
       eps: float = 1e-20,
       beta1: float = 0.9,
       beta2: float = 0.999,
-      momentum: bool = True,
       nesterov: bool = False,
       wd: float = 0.0,
       wdregex: str = r'/kernel$',
       schedule: str = 'const',
       warmup: int = 1000,
       anneal: int = 0,
+      **_kwargs,  # absorb unused config keys (e.g. legacy 'momentum')
   ):
     chain = []
     chain.append(embodied.jax.opt.clip_by_agc(agc))
@@ -490,9 +590,11 @@ class Agent(embodied.jax.Agent):
     if schedule == 'const':
       sched = optax.constant_schedule(lr)
     elif schedule == 'linear':
-      sched = optax.linear_schedule(lr, 0.1 * lr, anneal - warmup)
+      transition = max(1, anneal - warmup)
+      sched = optax.linear_schedule(lr, 0.1 * lr, transition)
     elif schedule == 'cosine':
-      sched = optax.cosine_decay_schedule(lr, anneal - warmup, 0.1 * lr)
+      transition = max(1, anneal - warmup)
+      sched = optax.cosine_decay_schedule(lr, transition, 0.1 * lr)
     else:
       raise NotImplementedError(schedule)
     if warmup:

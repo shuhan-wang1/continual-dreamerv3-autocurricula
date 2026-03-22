@@ -121,10 +121,10 @@ def train_eval(
     cp.save()
     print('Start training loop (fresh start, no checkpoint loaded)')
   else:
-    loaded = cp.load()
-    if loaded:
-      print(f'Resumed from checkpoint at step {step.value}')
-    else:
+    try:
+      cp.load()
+      print(f'Resumed from checkpoint at step {int(step)}')
+    except FileNotFoundError:
       if hasattr(args, 'from_checkpoint') and args.from_checkpoint:
         elements.checkpoint.load(args.from_checkpoint, dict(
             agent=bind(agent.load, regex=args.from_checkpoint_regex)))
@@ -140,7 +140,7 @@ def train_eval(
       print('Evaluation')
       driver_eval.reset(agent.init_policy)
       driver_eval(eval_policy, episodes=args.eval_eps)
-      logger.add(eval_epstats.result(), prefix='epstats')
+      logger.add(eval_epstats.result(), prefix='epstats/eval')
       if len(replay_train):
         carry_report, mets = reportfn(carry_report, stream_report)
         logger.add(mets, prefix='report')
@@ -152,7 +152,7 @@ def train_eval(
 
     if should_log(step):
       logger.add(agg.result())
-      logger.add(train_epstats.result(), prefix='epstats')
+      logger.add(train_epstats.result(), prefix='epstats/train')
       logger.add(replay_train.stats(), prefix='replay')
       logger.add(usage.stats(), prefix='usage')
       logger.add({'fps/policy': policy_fps.result()})

@@ -372,7 +372,7 @@ class Replay:
   def _numitems(self, chunks):
     chunks = [x.filename if hasattr(x, 'filename') else x for x in chunks]
     if not chunks:
-      return 0
+      return {}
     chunks = list(reversed(sorted([elements.Path(x).stem for x in chunks])))
     times, uuids, succs, lengths = zip(*[x.split('-') for x in chunks])
     uuids = [elements.UUID(x) for x in uuids]

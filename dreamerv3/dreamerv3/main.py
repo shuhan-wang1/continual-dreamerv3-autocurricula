@@ -109,7 +109,6 @@ def main(argv=None):
         bind(make_env, config), config.replica, args, is_eval)
 
   elif config.script == 'parallel_envs':
-    is_eval = config.replica >= args.envs
     embodied.run.parallel.parallel_envs(
         bind(make_env, config), bind(make_env, config), args)
 

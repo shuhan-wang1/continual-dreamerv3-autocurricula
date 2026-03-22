@@ -63,7 +63,7 @@ def load_runs(args):
       if args.newstyle:
         _, task, method, seed = filename.parent.name.split('-')
       else:
-        task, method, seed = str(filename).split('/')[-4: -1]
+        task, method, seed = elements.Path(filename).parts[-4:-1]
       if not (methods.search(method) and tasks.search(task)):
         continue
       seed = f'{indir.name}_{seed}' if len(args.indirs) > 1 else seed
@@ -293,7 +293,7 @@ def curve(
   mask = np.isfinite(ys)
   ax.plot(xs[mask], ys[mask], label=label, zorder=200 - order, **kwargs)
   if scatter:
-    ax.scatter(xs, ys, s=5, label=label, zorder=3000 - order, **kwargs)
+    ax.scatter(xs, ys, s=5, zorder=3000 - order, **kwargs)
   if lo is not None:
     ax.fill_between(
         xs[mask], lo[mask], hi[mask],
@@ -385,7 +385,6 @@ def main(args):
   print_summary(df)
   if args.todf:
     assert args.todf.endswith('.json.gz')
-    import ipdb; ipdb.set_trace()
     df.to_json(args.todf, orient='records')
     print(f'Saved {args.todf}')
   stats = comp_stats(df, args)

@@ -22,7 +22,7 @@ class Wrapper:
     try:
       return getattr(self.env, name)
     except AttributeError:
-      raise ValueError(name)
+      raise AttributeError(name)
 
 
 class TimeLimit(Wrapper):
@@ -303,7 +303,7 @@ class ResizeImage(Wrapper):
 
   @functools.cached_property
   def obs_space(self):
-    spaces = self.env.obs_space
+    spaces = dict(self.env.obs_space)
     for key in self._keys:
       shape = self._size + spaces[key].shape[2:]
       spaces[key] = elements.Space(np.uint8, shape)

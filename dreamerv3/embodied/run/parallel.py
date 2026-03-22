@@ -190,7 +190,6 @@ def parallel_learner(agent, barrier, args):
       with elements.timer.section('replay_update'):
         updater.update(outs['replay'])
 
-    time.sleep(0.0001)
     agg.add(mets)
     fps.step(batch_steps)
 
@@ -377,7 +376,7 @@ def parallel_logger(make_logger, args):
         result = episode.result()
         logger.add({
             'score': result.pop('score'),
-            'length': result.pop('length') - 1,
+            'length': result.pop('length'),
         }, prefix='episode')
         rew = result.pop('rewards')
         if len(rew) > 1:
@@ -389,6 +388,7 @@ def parallel_logger(make_logger, args):
         print('Dropping episode statistics due to timeout.')
         del episodes[addr]
         del updated[addr]
+        del dones[addr]
 
   server = portal.Server(args.logger_addr, 'Logger')
   server.bind('add', addfn)

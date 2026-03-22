@@ -17,7 +17,6 @@ def eval_only(make_agent, make_env, make_logger, args):
   print('Logdir', logdir)
   step = logger.step
   usage = elements.Usage(**args.usage)
-  agg = elements.Agg()
   epstats = elements.Agg()
   episodes = defaultdict(elements.Agg)
   should_log = elements.when.Clock(args.log_every)
@@ -66,7 +65,6 @@ def eval_only(make_agent, make_env, make_logger, args):
   while step < args.steps:
     driver(policy, steps=10)
     if should_log(step):
-      logger.add(agg.result())
       logger.add(epstats.result(), prefix='epstats')
       logger.add(usage.stats(), prefix='usage')
       logger.add({'fps/policy': policy_fps.result()})

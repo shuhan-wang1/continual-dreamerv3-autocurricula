@@ -7,7 +7,9 @@ import pandas as pd
 def smooth(
     scalars: list,
     weight: float, # Weight between 0 and 1
-) -> list:  
+) -> list:
+    if not scalars:
+        return []
     last = scalars[0]  # First value in the plot (first timestep)
     smoothed = list()
     for point in scalars:
@@ -20,9 +22,9 @@ def smooth(
 def performance(
     data: Dict[int, np.array],
     num_tasks: int=8,
-    num_steps: int=1e6,
+    num_steps: int=1000000,
     num_seeds: int=10,
-    smoothing_factor: bool=None,
+    smoothing_factor: float=None,
     verbose: bool=False,
 ) -> np.array:
     """
@@ -39,11 +41,14 @@ def performance(
         # performance data per minihack task
         k = keys[i]
         d = data[k]
+        actual_seeds = d.shape[1] - 1
+        if actual_seeds != num_seeds:
+            raise ValueError(f"Data has {actual_seeds} seed columns but num_seeds={num_seeds}")
         # dataframe construction for different numbers of seeds
         df = {'t': d[:, 0]}
         for j in range(d.shape[1] - 1):
             df['s{}'.format(j)] = d[:, j + 1]
-        dataset = pd.DataFrame(df).fillna(method='ffill').fillna(method='bfill')
+        dataset = pd.DataFrame(df).ffill().bfill()
 
         # final performance on minihack task i
         if smoothing_factor is None:
@@ -53,8 +58,12 @@ def performance(
                 dataset['s{}'.format(j)] = smooth(dataset['s{}'.format(j)].to_numpy(), smoothing_factor)
             p_i_T = dataset.tail(1).to_numpy()[0, 1:]
 
-        # minihack levels can be negative so let's scale up to 0
-        p_i_T[p_i_T <= 0] = 0
+        # NOTE: Negative performance values are kept rather than hard-clipped to 0.
+        # Hard clipping masks forgetting: if a task drops from positive to negative
+        # performance, clamping both to 0 hides the regression. Use a small floor
+        # only to avoid numerical issues with extremely negative outliers.
+        _floor = -1e6
+        p_i_T = np.maximum(p_i_T, _floor)
         p_T += p_i_T
         if verbose:
             print("Task {0}, Performance {1}".format(i + 1, p_i_T))
@@ -63,7 +72,7 @@ def performance(
 def forgetting(
     data: Dict[int, np.array],
     num_tasks: int=8,
-    num_steps: int=1e6,
+    num_steps: int=1000000,
     num_seeds: int=10,
     smoothing_factor: float=None,
     verbose: bool=False,
@@ -80,25 +89,35 @@ def forgetting(
         # performance data per minihack task
         key = keys[i]
         d = data[key]
+        actual_seeds = d.shape[1] - 1
+        if actual_seeds != num_seeds:
+            raise ValueError(f"Data has {actual_seeds} seed columns but num_seeds={num_seeds}")
         # dataframe construction for different numbers of seeds
         df = {'t': d[:, 0]}
         for j in range(d.shape[1] - 1):
             df['s{}'.format(j)] = d[:, j + 1]
-        dataset = pd.DataFrame(df).fillna(method='ffill').fillna(method='bfill')
+        dataset = pd.DataFrame(df).ffill().bfill()
 
         if smoothing_factor is None:
-            f_i = dataset[dataset['t'] <= ((i + 1) * num_steps)].tail(1).to_numpy()[0, 1:]
+            filtered = dataset[dataset['t'] <= ((i + 1) * num_steps)]
+            if filtered.empty:
+                continue
+            f_i = filtered.tail(1).to_numpy()[0, 1:]
         else:
             for j in range(num_seeds):
                 dataset['s{}'.format(j)] = smooth(dataset['s{}'.format(j)].to_numpy(), smoothing_factor)
-        
-            f_i = dataset[dataset['t'] <= ((i + 1) * num_steps)].tail(1).to_numpy()[0, 1:]
+
+            filtered = dataset[dataset['t'] <= ((i + 1) * num_steps)]
+            if filtered.empty:
+                continue
+            f_i = filtered.tail(1).to_numpy()[0, 1:]
 
         f_T = dataset.tail(1).to_numpy()[0, 1:]
 
-        # minihack levels can be negative so let's scale up to 0
-        f_T[f_T <= 0] = 0
-        f_i[f_i <= 0] = 0
+        # Floor at a large negative to avoid -inf but preserve negative scores
+        _floor = -1e6
+        f_T = np.maximum(f_T, _floor)
+        f_i = np.maximum(f_i, _floor)
         f += (f_i - f_T)
         if verbose:
             print("Task {0}".format(i+1))
@@ -108,7 +127,7 @@ def forgetting(
 def integrate(
     dataset: np.array,
     num_seeds: int,
-    num_steps: int,
+    num_steps: int,  # steps per task: used as integration interval width AND normalization divisor
     task: int=None,
     aggregate: bool=False,
 ) -> np.array:
@@ -121,13 +140,13 @@ def integrate(
     # rectangle rule for integration
     upper = num_steps if task is None else task * num_steps
     lower = 0 if task is None else (task - 1) * num_steps
-    dataset = dataset[(dataset['t'] >= lower) & (dataset['t'] < upper)].fillna(method='ffill').to_numpy()
+    dataset = dataset[(dataset['t'] >= lower) & (dataset['t'] < upper)].ffill().bfill().to_numpy()
     auc = np.zeros(1) if aggregate else np.zeros(num_seeds)
     for i in range(1, dataset.shape[0]):
         delta_t = dataset[i, 0] - dataset[i - 1, 0]
         f = dataset[i, 1:]
-        # let's max 0 the smallest value of the performance
-        f[f <= 0] = 0
+        # Preserve negative values to avoid inflating AUC and masking forgetting
+        # (see _to_float docstring for rationale)
         # take the mean of the performance across seeds
         if aggregate:
             f = np.mean(f)
@@ -141,17 +160,8 @@ def fwd_transfer(
     dones_ref: Dict[str, np.array],
     num_tasks: int=8,
     num_seeds: int=10,
-    envs: List = [
-        "Room-Random-15x15-v0",
-        "Room-Monster-15x15-v0",
-        "Room-Trap-15x15-v0",
-        "Room-Ultimate-15x15-v0",
-        "River-Narrow-v0",
-        "River-v0",
-        "River-Monster-v0",
-        "HideNSeek-v0"
-    ],
-    num_steps: int=1e6,
+    envs: List = None,
+    num_steps: int=1000000,
     full_range: bool=False,
     verbose: bool=False,
     aggregate_ref_auc: bool=False,
@@ -164,6 +174,17 @@ def fwd_transfer(
     auc = area under the curve for the single task
     ft_i = auc_i - auc / (1 - auc_i)
     """
+    if envs is None:
+        envs = [
+            "Room-Random-15x15-v0",
+            "Room-Monster-15x15-v0",
+            "Room-Trap-15x15-v0",
+            "Room-Ultimate-15x15-v0",
+            "River-Narrow-v0",
+            "River-v0",
+            "River-Monster-v0",
+            "HideNSeek-v0",
+        ]
 
     ft = np.zeros(num_seeds)
     keys = list(dones.keys())
@@ -174,10 +195,11 @@ def fwd_transfer(
             cl_perf = dones[key]
             ref_auc = integrate(ref_perf, num_seeds, num_steps, task=None, aggregate=aggregate_ref_auc)
             if full_range:
-                cl_auc = integrate(cl_perf, num_seeds, num_steps * num_tasks, task=None, aggregate=False)
+                cl_auc = integrate(cl_perf, num_seeds, num_steps * num_tasks, task=None, aggregate=aggregate_ref_auc)
             else:
-                cl_auc = integrate(cl_perf, num_seeds, num_steps, task=i + 1, aggregate=False)
-            ft_i = (cl_auc - ref_auc) / (1 - cl_auc)
+                cl_auc = integrate(cl_perf, num_seeds, num_steps, task=i + 1, aggregate=aggregate_ref_auc)
+            denom = np.where(np.abs(1 - cl_auc) < 1e-12, 1e-12, 1 - cl_auc)
+            ft_i = (cl_auc - ref_auc) / denom
             ft += ft_i
             if verbose:
                 print("{0} ref auc {1} auc {2}".format(e, ref_auc, cl_auc))
@@ -185,8 +207,10 @@ def fwd_transfer(
     return ft / num_tasks
 
 
-def _clip_perf(value: float) -> float:
-    return float(value) if value > 0 else 0.0
+def _to_float(value: float) -> float:
+    """Convert to float without clipping. Negative scores are preserved
+    to avoid inflating AUC and masking forgetting."""
+    return float(value)
 
 
 def _ensure_dir(path: str) -> None:
@@ -256,48 +280,88 @@ def save_ref_metrics(path: str, ref_auc: Dict[str, float], steps_per_task: Union
 
 
 # ============== Craftax Achievement Definitions ==============
-# Craftax has 22 achievements organized in tiers (depths)
-# These are the canonical achievement names from Craftax
-CRAFTAX_ACHIEVEMENTS = [
-    # Tier 0 - Basic
-    'collect_wood',
-    'place_table',
-    'eat_cow',
-    'collect_sapling',
-    'collect_drink',
-    'make_wood_pickaxe',
-    'make_wood_sword',
-    # Tier 1 - Stone
-    'place_stone',
-    'collect_stone',
-    'place_furnace',
-    'collect_coal',
-    'collect_iron',
-    'make_stone_pickaxe',
-    'make_stone_sword',
-    # Tier 2 - Iron
-    'make_iron_pickaxe',
-    'make_iron_sword',
-    'collect_diamond',
-    # Tier 3 - Diamond
-    'make_diamond_pickaxe',
-    'make_diamond_sword',
-    # Tier 4 - Combat
-    'defeat_zombie',
-    'defeat_skeleton',
-    'wake_up_boss',
-]
+# Dynamically load achievement names from Craftax if available, else use
+# the full 67-achievement list matching train_craftax.py.
+try:
+    from craftax.craftax.constants import Achievement as CraftaxAchievement
+    _sorted = sorted(CraftaxAchievement, key=lambda a: a.value)
+    CRAFTAX_ACHIEVEMENTS = [a.name.lower() for a in _sorted]
+except ImportError:
+    # Fallback: full 67 achievements in enum order (synced with Craftax 1.x)
+    CRAFTAX_ACHIEVEMENTS = [
+        'collect_wood', 'place_table', 'eat_cow', 'collect_sapling',
+        'collect_drink', 'make_wood_pickaxe', 'make_wood_sword',
+        'place_plant', 'defeat_zombie', 'collect_stone', 'place_stone',
+        'eat_plant', 'defeat_skeleton', 'collect_coal', 'make_stone_pickaxe',
+        'make_stone_sword', 'wake_up', 'place_furnace', 'collect_iron',
+        'make_iron_pickaxe', 'make_iron_sword', 'collect_diamond',
+        'make_diamond_pickaxe', 'make_diamond_sword',
+        'make_iron_armour', 'make_diamond_armour',
+        'make_arrow', 'make_torch', 'place_torch',
+        'eat_bat', 'eat_snail', 'find_bow', 'fire_bow',
+        'collect_sapphire', 'collect_ruby',
+        'enter_gnomish_mines', 'enter_dungeon', 'enter_sewers',
+        'enter_vault', 'enter_troll_mines',
+        'defeat_gnome_warrior', 'defeat_gnome_archer',
+        'defeat_orc_solider', 'defeat_orc_mage',
+        'defeat_lizard', 'defeat_kobold',
+        'learn_fireball', 'cast_fireball', 'learn_iceball', 'cast_iceball',
+        'open_chest', 'drink_potion', 'enchant_sword', 'enchant_armour',
+        'enter_fire_realm', 'enter_ice_realm', 'enter_graveyard',
+        'defeat_troll', 'defeat_deep_thing', 'defeat_pigman',
+        'defeat_fire_elemental', 'defeat_frost_troll', 'defeat_ice_elemental',
+        'defeat_knight', 'defeat_archer',
+        'damage_necromancer', 'defeat_necromancer',
+    ]
 
-# Achievement tiers for depth calculation
-ACHIEVEMENT_TIERS = {
-    'collect_wood': 0, 'place_table': 0, 'eat_cow': 0, 'collect_sapling': 0,
-    'collect_drink': 0, 'make_wood_pickaxe': 0, 'make_wood_sword': 0,
-    'place_stone': 1, 'collect_stone': 1, 'place_furnace': 1, 'collect_coal': 1,
-    'collect_iron': 1, 'make_stone_pickaxe': 1, 'make_stone_sword': 1,
-    'make_iron_pickaxe': 2, 'make_iron_sword': 2, 'collect_diamond': 2,
-    'make_diamond_pickaxe': 3, 'make_diamond_sword': 3,
-    'defeat_zombie': 4, 'defeat_skeleton': 4, 'wake_up_boss': 4,
+# Achievement tiers for depth calculation (5 tiers: 0-4)
+_TIER_0 = {
+    'collect_wood', 'place_table', 'eat_cow', 'collect_sapling',
+    'collect_drink', 'make_wood_pickaxe', 'make_wood_sword',
+    'place_plant', 'eat_plant',
 }
+_TIER_1 = {
+    'defeat_zombie', 'collect_stone', 'place_stone',
+    'defeat_skeleton', 'make_stone_pickaxe', 'make_stone_sword',
+    'wake_up', 'place_furnace', 'collect_coal',
+    'eat_bat', 'eat_snail',
+}
+_TIER_2 = {
+    'collect_iron', 'make_iron_pickaxe', 'make_iron_sword',
+    'make_iron_armour', 'make_arrow', 'make_torch', 'place_torch',
+    'make_diamond_sword', 'make_diamond_armour',
+    'find_bow', 'fire_bow',
+}
+_TIER_3 = {
+    'collect_diamond', 'make_diamond_pickaxe',
+    'collect_sapphire', 'collect_ruby',
+    'enter_gnomish_mines', 'enter_dungeon', 'enter_sewers',
+    'enter_vault', 'enter_troll_mines',
+    'defeat_gnome_warrior', 'defeat_gnome_archer',
+    'defeat_orc_solider', 'defeat_orc_mage',
+    'defeat_lizard', 'defeat_kobold',
+    'learn_fireball', 'cast_fireball', 'learn_iceball', 'cast_iceball',
+    'open_chest', 'drink_potion', 'enchant_sword', 'enchant_armour',
+}
+_TIER_4 = {
+    'enter_fire_realm', 'enter_ice_realm', 'enter_graveyard',
+    'defeat_troll', 'defeat_deep_thing', 'defeat_pigman',
+    'defeat_fire_elemental', 'defeat_frost_troll', 'defeat_ice_elemental',
+    'defeat_knight', 'defeat_archer',
+    'damage_necromancer', 'defeat_necromancer',
+}
+ACHIEVEMENT_TIERS = {}
+for _name in CRAFTAX_ACHIEVEMENTS:
+    if _name in _TIER_0:
+        ACHIEVEMENT_TIERS[_name] = 0
+    elif _name in _TIER_1:
+        ACHIEVEMENT_TIERS[_name] = 1
+    elif _name in _TIER_2:
+        ACHIEVEMENT_TIERS[_name] = 2
+    elif _name in _TIER_3:
+        ACHIEVEMENT_TIERS[_name] = 3
+    elif _name in _TIER_4:
+        ACHIEVEMENT_TIERS[_name] = 4
 
 NUM_CRAFTAX_ACHIEVEMENTS = len(CRAFTAX_ACHIEVEMENTS)
 NUM_ACHIEVEMENT_TIERS = 5  # Tiers 0-4
@@ -589,6 +653,10 @@ class OnlineMetrics:
         self.auc = {i: 0.0 for i in range(self.num_tasks)}
         self.last_step = {i: None for i in range(self.num_tasks)}
         self.last_score = {i: None for i in range(self.num_tasks)}
+        self._total_updates = 0
+        self._cached_ap = 0.0
+        self._cached_forgetting = 0.0
+        self._cached_ft = float('nan')
 
     def _steps_for(self, task_id: int) -> int:
         return int(self.steps_per_task[task_id])
@@ -596,7 +664,7 @@ class OnlineMetrics:
     def update(self, task_id: int, step: int, score: float, length: Optional[int] = None) -> Dict[str, float]:
         task_id = int(task_id)
         step = int(step)
-        score = _clip_perf(score)
+        score = _to_float(score)
 
         last_step = self.last_step[task_id]
         last_score = self.last_score[task_id]
@@ -607,15 +675,22 @@ class OnlineMetrics:
         self.last_step[task_id] = step
         self.last_score[task_id] = score
         self.latest[task_id] = score
+        self._total_updates += 1
+
+        # Recompute expensive aggregates periodically (every 100 updates)
+        if self._total_updates % 100 == 0 or self._total_updates == 1:
+            self._cached_ap = float(self.average_performance())
+            self._cached_forgetting = float(self.average_forgetting())
+            self._cached_ft = float(self.forward_transfer())
 
         record = {
             'step': step,
             'task': task_id,
             'score': score,
             'length': None if length is None else int(length),
-            'ap': float(self.average_performance()),
-            'forgetting': float(self.average_forgetting()),
-            'ft': float(self.forward_transfer()),
+            'ap': self._cached_ap,
+            'forgetting': self._cached_forgetting,
+            'ft': self._cached_ft,
             'per_task_latest': self.latest_list(),
             'per_task_auc': self.auc_norm_list(),
         }
@@ -666,9 +741,9 @@ class OnlineMetrics:
             if end_val is None:
                 # Task i hasn't finished its training phase yet — skip
                 continue
-            end_val = float(_clip_perf(end_val))
+            end_val = float(_to_float(end_val))
             cur_val = self.latest.get(i, None)
-            cur_val = 0.0 if cur_val is None else float(_clip_perf(cur_val))
+            cur_val = 0.0 if cur_val is None else float(_to_float(cur_val))
             diffs.append(end_val - cur_val)
         return float(np.mean(diffs)) if diffs else 0.0
 
@@ -683,7 +758,8 @@ class OnlineMetrics:
             denom = max(1, self._steps_for(i))
             auc_cl = self.auc[i] / denom
             auc_ref = float(self.ref_auc[key])
-            vals.append((auc_cl - auc_ref) / (1.0 - auc_ref))
+            denom = (1.0 - auc_ref) if abs(1.0 - auc_ref) > 1e-12 else 1e-12
+            vals.append((auc_cl - auc_ref) / denom)
         return float(np.mean(vals)) if vals else float('nan')
 
     def save_summary(self) -> None:

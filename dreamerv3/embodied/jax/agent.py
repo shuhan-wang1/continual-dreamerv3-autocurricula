@@ -73,9 +73,7 @@ class Agent(embodied.Agent):
     elements.print(f'JAX devices ({jax.device_count()}):', available)
     if self.jaxcfg.expect_devices > 0:
       if len(available) != self.jaxcfg.expect_devices:
-        print('ALERT: Wrong number of devices')
-        while True:
-          time.sleep(1)
+        raise RuntimeError(f"Expected {self.jaxcfg.expect_devices} devices but found {len(available)}")
     assert len(available) == jax.process_count() * jax.local_device_count()
     flatten = lambda x: x.reshape(-1).tolist()
     devices = np.array(available).reshape(
@@ -495,13 +493,4 @@ class Agent(embodied.Agent):
       lines.append(f"Memory (code):    {mem.generated_code_size_in_bytes:.1e}")
       return ''.join(f'  {line}\n' for line in lines)
     except (TypeError, AttributeError, KeyError):
-      return 'No available'
-
-def init(fun, **jit_kwargs):
-  if not getattr(fun, '_is_pure', False):
-    fun = nj.pure(fun)
-  def wrapper(*args, **kwargs):
-    state, out = fun(*args, create=True, modify=True, ignore=True, **kwargs)
-    del out
-    return state, ()
-  return wrapper
+      return 'Not available'

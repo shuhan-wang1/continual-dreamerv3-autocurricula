@@ -14,8 +14,10 @@ from functools import partial as bind
 # Use JAX's default BFC allocator with preallocation to avoid memory fragmentation.
 # The 'platform' allocator causes CUDA_ERROR_ILLEGAL_ADDRESS after ~20k steps
 # due to severe fragmentation from repeated cudaMalloc/cudaFree calls.
-os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'true'
-os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.70'
+# Respect externally provided memory settings (e.g., run scripts), while
+# keeping safe defaults for single-GPU training.
+os.environ.setdefault('XLA_PYTHON_CLIENT_PREALLOCATE', 'false')
+os.environ.setdefault('XLA_PYTHON_CLIENT_MEM_FRACTION', '0.85')
 
 # NOTE: Do NOT set XLA_FLAGS here — internal.setup() in DreamerV3 will
 # overwrite it completely.  Instead, we patch internal.setup() to preserve
@@ -25,22 +27,39 @@ os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.70'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Reduce TF logging noise
 # Do NOT set XLA_PYTHON_CLIENT_ALLOCATOR='platform' — it causes memory fragmentation
 
-# Parse arguments early to determine which DreamerV3 version to use
+# Determine which DreamerV3 version to use and set up sys.path accordingly.
 root = pathlib.Path(__file__).parent
-# Import input_args before setting dreamerv3 path (it doesn't depend on dreamerv3)
 sys.path.insert(0, str(root))
 from input_args import parse_craftax_args
-_args = parse_craftax_args()
 
-# Add dreamerv3 to path based on --use_original_dreamer flag
-if _args.use_original_dreamer:
-    print("Using ORIGINAL DreamerV3 from dreamerv3-main/")
-    sys.path.insert(0, str(root / 'dreamerv3-main'))
-    sys.path.insert(0, str(root / 'dreamerv3-main' / 'dreamerv3'))
-else:
-    print("Using CONTINUOUS ENHANCED DreamerV3 from dreamerv3/")
-    sys.path.insert(0, str(root / 'dreamerv3'))
-    sys.path.insert(0, str(root / 'dreamerv3' / 'dreamerv3'))
+
+def _setup_dreamerv3_path():
+    """Parse args to determine DreamerV3 version and add it to sys.path.
+
+    When this module is imported (e.g. ``from train_craftax import run_craftax``),
+    calling ``parse_craftax_args()`` at module level would re-parse sys.argv and
+    fail on flags the caller's own parser already consumed.  Instead we only
+    parse when running as the main script; importers set up the path themselves
+    or rely on the default (enhanced) version.
+    """
+    if __name__ == '__main__':
+        _args = parse_craftax_args()
+        use_original = _args.use_original_dreamer
+    else:
+        # Imported by another entry-point – use the default (enhanced) version.
+        use_original = False
+
+    if use_original:
+        print("Using ORIGINAL DreamerV3 from dreamerv3-main/")
+        sys.path.insert(0, str(root / 'dreamerv3-main'))
+        sys.path.insert(0, str(root / 'dreamerv3-main' / 'dreamerv3'))
+    else:
+        print("Using CONTINUOUS ENHANCED DreamerV3 from dreamerv3/")
+        sys.path.insert(0, str(root / 'dreamerv3'))
+        sys.path.insert(0, str(root / 'dreamerv3' / 'dreamerv3'))
+
+
+_setup_dreamerv3_path()
 
 import ast
 import elements
@@ -62,8 +81,9 @@ import jax.numpy as jnp
 jax.config.update("jax_transfer_guard", "allow")
 
 # Performance: enable persistent compilation cache to avoid re-compiling JIT on restart
-jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
-jax.config.update("jax_persistent_cache_min_entry_size_bytes", 0)
+import tempfile as _tempfile
+jax.config.update("jax_compilation_cache_dir", os.path.join(_tempfile.gettempdir(), "jax_cache"))
+jax.config.update("jax_persistent_cache_min_entry_size_bytes", 1024)
 jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
 
 # Disable debug checks for speed
@@ -135,14 +155,12 @@ class CraftaxMetrics:
         self._achievement_history = {i: deque(maxlen=window_size) for i in range(num_tasks)}
 
         # Peak achievement rates for forgetting calculation
-        # Memory: O(num_tasks * num_achievements) floats — bounded.
-        # All deques above use maxlen=window_size so are also bounded.
         self._peak_achievement_rates = {i: np.zeros(num_achievements) for i in range(num_tasks)}
 
         # Lifetime accumulators
         self._total_episodes = {i: 0 for i in range(num_tasks)}
         self._total_successes = {i: 0 for i in range(num_tasks)}
-        self._max_return = {i: 0.0 for i in range(num_tasks)}
+        self._max_return = {i: -float('inf') for i in range(num_tasks)}
         self._max_depth = {i: -1 for i in range(num_tasks)}
         self._sum_return = {i: 0.0 for i in range(num_tasks)}
         self._personal_best_depth = -1  # Global personal best
@@ -287,7 +305,7 @@ class CraftaxMetrics:
     ):
         """Log core training metrics."""
         self._latest_training_metrics = {
-            'step': int(step),
+            'train_step': int(step),
             'loss/obs': float(loss_obs),
             'loss/rew': float(loss_rew),
             'loss/con': float(loss_con),
@@ -315,7 +333,7 @@ class CraftaxMetrics:
     ):
         """Log replay buffer diagnostic metrics."""
         self._latest_replay_diagnostics = {
-            'step': int(step),
+            'replay/step': int(step),
             'replay/buffer_size': int(buffer_size),
             'replay/depth_distribution': depth_distribution or [],
             'replay/mean_td_error': float(mean_td_error),
@@ -335,7 +353,7 @@ class CraftaxMetrics:
     ):
         """Log exploration diagnostic metrics."""
         self._latest_exploration_diagnostics = {
-            'step': int(step),
+            'explore_step': int(step),
             'explore/imagined_value': float(imagined_value),
             'explore/actual_value': float(actual_value),
             'explore/dream_accuracy': float(dream_accuracy),
@@ -353,9 +371,9 @@ class CraftaxMetrics:
         achievements: np.ndarray = None,
         achievement_depth: int = -1,
         td_error_mean: float = 0.0,
-        r_spatial: float = 0.0,
-        r_craft: float = 0.0,
-        r_intr: float = 0.0,
+        mask_penalty_mean: float = None,
+        mask_infeasible_frac: float = None,
+        mask_blocked_frac: float = None,
     ) -> dict:
         """Update metrics with episode results.
 
@@ -367,9 +385,6 @@ class CraftaxMetrics:
             achievements: Binary vector of achievements (NUM_CRAFTAX_ACHIEVEMENTS,).
             achievement_depth: Max achievement tier reached (-1 to 4).
             td_error_mean: Mean TD-error for this episode.
-            r_spatial: Episode-avg spatial-counting intrinsic reward.
-            r_craft: Episode-avg craft-novelty intrinsic reward.
-            r_intr: Episode-avg combined intrinsic reward.
         """
         task_id = int(task_id)
         score = float(score)
@@ -413,11 +428,6 @@ class CraftaxMetrics:
             'achievements': achievements.tolist() if achievements is not None else [],
             'achievement_depth': int(achievement_depth),
 
-            # Episode-level intrinsic reward metrics
-            'r_spatial': float(r_spatial),
-            'r_craft': float(r_craft),
-            'r_intr': float(r_intr),
-
             # Windowed per-task metrics
             'return_mean': self._windowed_mean_return(task_id),
             'success_rate': self._windowed_success_rate(task_id),
@@ -457,6 +467,13 @@ class CraftaxMetrics:
             # Include latest exploration diagnostics if available
             **self._latest_exploration_diagnostics,
         }
+
+        if mask_penalty_mean is not None:
+            record['mask_penalty_mean'] = float(mask_penalty_mean)
+        if mask_infeasible_frac is not None:
+            record['mask_infeasible_frac'] = float(mask_infeasible_frac)
+        if mask_blocked_frac is not None:
+            record['mask_blocked_frac'] = float(mask_blocked_frac)
 
         with open(self.jsonl_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(record, ensure_ascii=False) + '\n')
@@ -505,8 +522,6 @@ try:
     import craftax
     from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
     from craftax.craftax.envs.craftax_pixels_env import CraftaxPixelsEnv
-    from craftax.craftax_classic.envs.craftax_symbolic_env import CraftaxClassicSymbolicEnv
-    from craftax.craftax_classic.envs.craftax_pixels_env import CraftaxClassicPixelsEnv
     # Try to import achievement constants
     try:
         from craftax.craftax.constants import Achievement as CraftaxAchievement
@@ -576,28 +591,6 @@ if CRAFTAX_ACHIEVEMENTS_AVAILABLE:
         else:
             ACHIEVEMENT_TIERS[name] = 3  # default unknown to tier 3
 
-    # Pre-built vectorised tier lookup array for fast depth computation
-    # _TIER_ARRAY[i] = tier of achievement i  (-1 sentinel unused here)
-    _TIER_ARRAY = np.array(
-        [ACHIEVEMENT_TIERS.get(n, 3) for n in CRAFTAX_ACHIEVEMENT_NAMES],
-        dtype=np.int32)
-
-
-# ============== Craftax Observation Layout Constants ==============
-# Symbolic observation: 9×11 tiles × 83 channels = 8217 map dims + 51 inventory dims
-TILES_R, TILES_C, N_CH = 9, 11, 83
-MAP_SIZE = TILES_R * TILES_C * N_CH   # 8217
-INV_START = MAP_SIZE                   # 8217
-INV_SIZE = 51
-INV_CRAFT_SIZE = 16  # indices 0-15: materials (0-9) + equipment (10-15)
-N_BLOCK_CH = 37  # channels 0-36 are one-hot block type
-
-# --- Spatial novelty: binary first-visit indicator (Eq.10) ---
-# Hash the visible block-type layout per tile → bytes key.
-# r_spatial = 1.0 if the hash has never been seen this episode, else 0.0.
-# This directly incentivises visiting as many unique tile views as possible
-# and is immune to "walk in circles" exploitation (1/√N was too slow to decay).
-
 
 # ============== Craftax Environment Wrapper ==============
 class CraftaxWrapper(embodied.Env):
@@ -607,35 +600,19 @@ class CraftaxWrapper(embodied.Env):
     as possible and using JIT-compiled processing functions.
     """
 
-    def __init__(self, env_name='CraftaxSymbolic-v1', embedding_dim=256, use_embedding=True, seed=42, track_achievements=True,
-                 intrinsic_spatial=False, alpha_spatial=0.1, alpha_craft=0.3, alpha_e=1.0):
+    def __init__(self, env_name='CraftaxSymbolic-v1', embedding_dim=256, use_embedding=True, seed=42, track_achievements=True, use_action_mask=False):
         self._env_name = env_name
         self._embedding_dim = embedding_dim
         self._use_embedding = use_embedding
         self._seed = seed
         self._done = True
         self._track_achievements = track_achievements
-
-        # Spatial-counting + craft-novelty intrinsic reward (Eq.10-13)
-        # Each component is independently normalized to match |r_extr| magnitude,
-        # so alpha_spatial/alpha_craft are true relative-importance weights.
-        self._intrinsic_spatial = intrinsic_spatial
-        self._alpha_spatial = alpha_spatial
-        self._alpha_craft = alpha_craft
-        self._alpha_e = alpha_e
-        self._spatial_seen = set()   # set of spatial hashes (episodic)
-        self._inventory_seen = set() # set of inventory hashes (episodic)
-        # Independent EMA normalizers for spatial and craft (cross-episode).
-        # Each tracks its own running mean so that rare craft events get a
-        # proportionally larger scale factor when they do fire.
-        self._spatial_ema_mean = 0.0  # EMA of r_spatial
-        self._craft_ema_mean = 0.0    # EMA of r_craft
-        self._extr_ema_mean = 0.0     # EMA of |r_extr|
-        self._ema_rate = 0.01
-        self._ema_count = 0
+        self._use_action_mask = use_action_mask
+        self._mask_extract_warning = False
 
         # Achievement tracking for current episode
         self._episode_achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
+
 
         # Use a base key and step counter for deterministic key generation
         # Pre-generate a batch of keys to avoid per-step host-to-device transfers
@@ -648,6 +625,8 @@ class CraftaxWrapper(embodied.Env):
         # Create the appropriate Craftax environment
         self._is_classic = 'Classic' in env_name
         if self._is_classic:
+            from craftax.craftax_classic.envs.craftax_symbolic_env import CraftaxClassicSymbolicEnv
+            from craftax.craftax_classic.envs.craftax_pixels_env import CraftaxClassicPixelsEnv
             if 'Symbolic' in env_name:
                 self._env = CraftaxClassicSymbolicEnv()
             else:
@@ -687,13 +666,13 @@ class CraftaxWrapper(embodied.Env):
         
         # Setup embedding projection on GPU and JIT the processing function
         if use_embedding:
-            np.random.seed(42)
+            rng = np.random.default_rng(seed)
             flat_dim = int(np.prod(self._obs_shape))
-            projection_np = np.random.randn(flat_dim, embedding_dim).astype(np.float32)
+            projection_np = rng.standard_normal((flat_dim, embedding_dim)).astype(np.float32)
             projection_np /= np.sqrt(flat_dim)
             # Keep projection matrix on GPU
             self._projection = jax.device_put(jnp.array(projection_np))
-            
+
             # JIT compile the full obs->embedding pipeline on GPU
             @jax.jit
             def process_obs_jit(obs):
@@ -727,10 +706,11 @@ class CraftaxWrapper(embodied.Env):
         if self._track_achievements:
             spaces['log/achievements'] = elements.Space(np.int32, (NUM_CRAFTAX_ACHIEVEMENTS,), 0, 2)
             spaces['log/achievement_depth'] = elements.Space(np.int32)
-        if self._intrinsic_spatial:
-            spaces['log/r_spatial'] = elements.Space(np.float32)
-            spaces['log/r_craft'] = elements.Space(np.float32)
-            spaces['log/r_intr'] = elements.Space(np.float32)
+        # Action mask context used by policy-time masking.
+        # Keep this as a non-log key so it reaches the policy network input path.
+        if self._use_action_mask:
+            from craftax_mask import CONTEXT_SIZE
+            spaces['action_mask_context'] = elements.Space(np.float32, (CONTEXT_SIZE,), -np.inf, np.inf)
         return spaces
 
     @property
@@ -782,82 +762,23 @@ class CraftaxWrapper(embodied.Env):
                     padded[:len(achievements)] = achievements
                     return padded
                 return achievements
-        except Exception:
-            pass
+        except Exception as e:
+            if not hasattr(self, '_ach_extract_warned'):
+                print(f'[CraftaxWrapper] achievement extraction failed: {e}')
+                self._ach_extract_warned = True
         return np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.int32)
 
     def _compute_achievement_depth(self, achievements):
-        """Compute max achievement tier from achievement vector (vectorised)."""
-        mask = np.asarray(achievements, dtype=bool)[:len(_TIER_ARRAY)]
-        if not mask.any():
-            return -1
-        return int(_TIER_ARRAY[:len(mask)][mask].max())
+        """Compute max achievement tier from achievement vector."""
+        max_tier = -1
+        for i, achieved in enumerate(achievements):
+            if achieved and i < len(CRAFTAX_ACHIEVEMENT_NAMES):
+                name = CRAFTAX_ACHIEVEMENT_NAMES[i]
+                if name in ACHIEVEMENT_TIERS:
+                    max_tier = max(max_tier, ACHIEVEMENT_TIERS[name])
+        return max_tier
 
-    def _spatial_hash(self, flat_obs):
-        """Hash visible block-type layout → bytes key."""
-        map_obs = flat_obs[:MAP_SIZE].reshape(TILES_R, TILES_C, N_CH)
-        block_ids = np.argmax(map_obs[:, :, :N_BLOCK_CH], axis=-1).astype(np.int8)
-        return block_ids.tobytes()
-
-    def _spatial_novelty(self, flat_obs):
-        """Binary first-visit spatial reward (Eq.10).
-
-        Returns 1.0 if this tile-view has never been seen this episode, else 0.0.
-        """
-        s_key = self._spatial_hash(flat_obs)
-        r = 1.0 if s_key not in self._spatial_seen else 0.0
-        self._spatial_seen.add(s_key)
-        return r
-
-    def _inventory_hash(self, flat_obs):
-        """Hash craft-relevant inventory only: materials (0-9) + equipment (10-15).
-
-        Excludes player stats (health/food/drink/energy/...), direction,
-        and world state which change every step and drown the craft signal.
-        """
-        inv = flat_obs[INV_START:INV_START + INV_CRAFT_SIZE]
-        return tuple(np.round(inv, 1))
-
-    def _compute_intrinsic_reward(self, flat_obs, extr_reward):
-        """Compute combined reward with independently normalized spatial & craft.
-
-        Each component has its own EMA normalizer so that rare craft events
-        get a proportionally larger scale when they fire, preventing the
-        craft signal from being drowned by the more frequent spatial signal.
-
-        Returns (combined_reward, r_spatial, r_craft, r_intr_raw).
-        """
-        if not self._intrinsic_spatial:
-            return extr_reward, 0.0, 0.0, 0.0
-        # Spatial novelty (Eq.10): binary first-visit indicator
-        r_spatial = self._spatial_novelty(flat_obs)
-        # Craft novelty (Eq.11): r_craft = I[v_inv not in H_inv]
-        i_key = self._inventory_hash(flat_obs)
-        r_craft = 1.0 if i_key not in self._inventory_seen else 0.0
-        self._inventory_seen.add(i_key)
-        r_intr_raw = r_spatial + r_craft  # for logging only
-        # --- Independent adaptive normalization ---
-        rate = self._ema_rate
-        self._ema_count += 1
-        self._spatial_ema_mean = (1 - rate) * self._spatial_ema_mean + rate * r_spatial
-        self._craft_ema_mean = (1 - rate) * self._craft_ema_mean + rate * r_craft
-        self._extr_ema_mean = (1 - rate) * self._extr_ema_mean + rate * abs(extr_reward)
-        if self._ema_count < 100:
-            # Warmup: use raw values until EMA has enough samples
-            r_sp_norm = r_spatial
-            r_cr_norm = r_craft
-        else:
-            extr_mean = max(1e-8, self._extr_ema_mean)
-            sp_mean = max(1e-8, self._spatial_ema_mean)
-            cr_mean = max(1e-8, self._craft_ema_mean)
-            r_sp_norm = r_spatial * (extr_mean / sp_mean)
-            r_cr_norm = r_craft * (extr_mean / cr_mean)
-        combined = (self._alpha_spatial * r_sp_norm
-                    + self._alpha_craft * r_cr_norm
-                    + self._alpha_e * extr_reward)
-        return combined, r_spatial, r_craft, r_intr_raw
-
-    def _to_numpy_result(self, obs_jax, reward, is_first, is_last, is_terminal, achievements=None):
+    def _to_numpy_result(self, obs_jax, reward, is_first, is_last, is_terminal, achievements=None, mask_context=None):
         """Single batched transfer from GPU to CPU at the end of step."""
         # Process obs on GPU first
         processed = self._process_obs_jit(self._extract_obs(obs_jax))
@@ -877,6 +798,12 @@ class CraftaxWrapper(embodied.Env):
             # Ensure achievements are int32 to avoid JAX iota dtype issues
             result['log/achievements'] = np.asarray(achievements, dtype=np.int32)
             result['log/achievement_depth'] = np.int32(self._compute_achievement_depth(achievements))
+        if self._use_action_mask:
+            if mask_context is not None:
+                result['action_mask_context'] = np.asarray(mask_context, dtype=np.float32)
+            else:
+                from craftax_mask import CONTEXT_SIZE
+                result['action_mask_context'] = np.zeros(CONTEXT_SIZE, dtype=np.float32)
         return result
 
     def step(self, action):
@@ -886,23 +813,10 @@ class CraftaxWrapper(embodied.Env):
             self._done = False
             # Reset episode achievement tracking
             self._episode_achievements = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
-            # Reset episodic intrinsic reward state
-            self._spatial_seen = set()
-            self._inventory_seen = set()
+    
             achievements = self._extract_achievements_from_state(self._state) if self._track_achievements else None
-            result = self._to_numpy_result(self._obs, 0.0, True, False, False, achievements)
-            result['log/extr_reward'] = np.float32(0.0)
-            # Register initial obs in hash sets (so the second step sees it
-            # as already visited) but do NOT update EMA — reset steps always
-            # produce r_intr=2.0 / r_extr=0.0 which would bias the normalizer.
-            if self._intrinsic_spatial:
-                raw_obs = np.asarray(self._extract_obs(self._obs)).flatten()
-                self._spatial_seen.add(self._spatial_hash(raw_obs))
-                self._inventory_seen.add(self._inventory_hash(raw_obs))
-                result['log/r_spatial'] = np.float32(0.0)
-                result['log/r_craft'] = np.float32(0.0)
-                result['log/r_intr'] = np.float32(0.0)
-            return result
+            mask_ctx = self._extract_mask_context() if self._use_action_mask else None
+            return self._to_numpy_result(self._obs, 0.0, True, False, False, achievements, mask_ctx)
 
         # Get action - avoid Python int() conversion, keep as jax-compatible
         act = action['action']
@@ -919,11 +833,6 @@ class CraftaxWrapper(embodied.Env):
         self._done = bool(done)
         # Transfer reward scalar to CPU
         reward_val = float(reward)
-        extr_reward_val = reward_val  # save clean extrinsic before mixing
-        # Compute intrinsic reward if enabled (requires raw obs on CPU)
-        if self._intrinsic_spatial:
-            raw_obs = np.asarray(self._extract_obs(self._obs)).flatten()
-            reward_val, r_sp, r_cr, r_in = self._compute_intrinsic_reward(raw_obs, reward_val)
 
         # Extract achievements from state
         achievements = None
@@ -932,17 +841,39 @@ class CraftaxWrapper(embodied.Env):
             # Update episode achievements (OR with current)
             self._episode_achievements = np.logical_or(self._episode_achievements, achievements)
 
-        result = self._to_numpy_result(
-            self._obs, reward_val, False, self._done, self._done, achievements
+        mask_ctx = self._extract_mask_context() if self._use_action_mask else None
+        # Distinguish terminal (death) from truncation (timeout):
+        # is_terminal=True only when the agent actually died (health <= 0),
+        # not on time limit truncation where we should bootstrap value.
+        is_terminal = self._done and self._is_truly_terminal()
+        return self._to_numpy_result(
+            self._obs, reward_val, False, self._done, is_terminal, achievements, mask_ctx
         )
-        # Extrinsic reward (before intrinsic mixing) for clean eval metrics
-        result['log/extr_reward'] = np.float32(extr_reward_val)
-        # Add intrinsic reward logging (log/ prefix → filtered by replay.add)
-        if self._intrinsic_spatial:
-            result['log/r_spatial'] = np.float32(r_sp)
-            result['log/r_craft'] = np.float32(r_cr)
-            result['log/r_intr'] = np.float32(r_in)
-        return result
+
+    def _is_truly_terminal(self):
+        """Check if episode ended due to death (not timeout truncation)."""
+        try:
+            health = float(self._state.player_health)
+            return health <= 0
+        except Exception:
+            return True  # conservative: assume terminal if can't determine
+
+    def _extract_mask_context(self):
+        """Extract action mask context array from current state."""
+        try:
+            from craftax_mask import extract_mask_context
+            return extract_mask_context(self._state)
+        except ImportError as exc:
+            if not self._mask_extract_warning:
+                print(f'[action_mask] craftax_mask not importable: {exc}')
+                self._mask_extract_warning = True
+            return None
+        except Exception as exc:
+            # Log every unique error, not just the first
+            import traceback
+            print(f'[action_mask] extraction error: {exc}')
+            traceback.print_exc()
+            return None
 
     def close(self):
         pass
@@ -957,31 +888,21 @@ class VectorCraftaxEnv:
     """
 
     def __init__(self, env_name='CraftaxSymbolic-v1', num_envs=16,
-                 embedding_dim=256, use_embedding=True, seed=42, track_achievements=True,
-                 intrinsic_spatial=False, alpha_spatial=0.1, alpha_craft=0.3, alpha_e=1.0):
+                 embedding_dim=256, use_embedding=True, seed=42,
+                 track_achievements=True, use_action_mask=False,
+                 intrinsic_shaper=None):
         self._env_name = env_name
         self._num_envs = num_envs
         self._embedding_dim = embedding_dim
         self._use_embedding = use_embedding
         self._track_achievements = track_achievements
-
-        # Spatial-counting + craft-novelty intrinsic reward (Eq.10-13)
-        # Each component is independently normalized to match |r_extr|.
-        self._intrinsic_spatial = intrinsic_spatial
-        self._alpha_spatial = alpha_spatial
-        self._alpha_craft = alpha_craft
-        self._alpha_e = alpha_e
-        self._spatial_seen = [set() for _ in range(num_envs)]
-        self._inventory_seen = [set() for _ in range(num_envs)]
-        # Independent EMA normalizers for spatial and craft (shared across envs)
-        self._spatial_ema_mean = 0.0
-        self._craft_ema_mean = 0.0
-        self._extr_ema_mean = 0.0
-        self._ema_rate = 0.01
-        self._ema_count = 0
+        self._use_action_mask = use_action_mask
+        self._intrinsic_shaper = intrinsic_shaper
 
         # Create one Craftax env to get params / spaces
         if 'Classic' in env_name:
+            from craftax.craftax_classic.envs.craftax_symbolic_env import CraftaxClassicSymbolicEnv
+            from craftax.craftax_classic.envs.craftax_pixels_env import CraftaxClassicPixelsEnv
             if 'Symbolic' in env_name:
                 self._env = CraftaxClassicSymbolicEnv()
             else:
@@ -999,20 +920,6 @@ class VectorCraftaxEnv:
         self._v_reset = jax.jit(jax.vmap(self._env.reset, in_axes=(0, None)))
         self._v_step = jax.jit(jax.vmap(self._env.step, in_axes=(0, 0, 0, None)))
 
-        # Fused step-or-reset: single vmap call instead of separate reset + step
-        env = self._env
-        def _step_or_reset(key, state, action, env_params, should_reset):
-            def do_reset(_):
-                obs, new_state = env.reset(key, env_params)
-                return obs, new_state, jnp.float32(0.0), jnp.bool_(False)
-            def do_step(_):
-                obs, new_state, reward, done, _info = env.step(
-                    key, state, action, env_params)
-                return obs, new_state, reward, done
-            return jax.lax.cond(should_reset, do_reset, do_step, None)
-        self._v_step_or_reset = jax.jit(jax.vmap(
-            _step_or_reset, in_axes=(0, 0, 0, None, 0)))
-
         # Initial reset to get obs shape
         keys = jax.random.split(jax.random.PRNGKey(seed), num_envs)
         obs_batch, self._states = self._v_reset(keys, self._env_params)
@@ -1022,9 +929,9 @@ class VectorCraftaxEnv:
 
         # Projection for embedding (on GPU)
         if use_embedding:
-            np.random.seed(42)
+            rng = np.random.default_rng(seed)
             flat_dim = int(np.prod(self._obs_shape))
-            proj = np.random.randn(flat_dim, embedding_dim).astype(np.float32)
+            proj = rng.standard_normal((flat_dim, embedding_dim)).astype(np.float32)
             proj /= np.sqrt(flat_dim)
             self._projection = jax.device_put(jnp.array(proj))
 
@@ -1040,12 +947,9 @@ class VectorCraftaxEnv:
                 return obs.astype(jnp.float32)
             self._process_obs = process_obs
 
-        # JIT the full step logic (reset + step + process) to avoid per-step syncs
-        # We'll use a wrapper that handles auto-reset inside JAX.
         # RNG key management
         self._base_key = jax.random.PRNGKey(seed)
         self._step_count = 0
-        self._dones = jnp.ones(num_envs, dtype=jnp.bool_)  # all need reset initially
 
         # Do the initial reset properly
         self._obs_jax = self._extract_obs_batch(obs_batch)
@@ -1091,12 +995,27 @@ class VectorCraftaxEnv:
                     padded[:, :achievements.shape[1]] = achievements
                     return padded
                 return achievements
-        except Exception:
-            pass
+        except Exception as e:
+            if not hasattr(self, '_ach_extract_warned'):
+                print(f'[VectorCraftaxEnv] achievement extraction failed: {e}')
+                self._ach_extract_warned = True
         return np.zeros((self._num_envs, NUM_CRAFTAX_ACHIEVEMENTS), dtype=np.int32)
 
+    # Precomputed tier lookup for vectorized depth computation
+    _TIER_LOOKUP = None
+
+    @staticmethod
+    def _get_tier_lookup():
+        if VectorCraftaxEnv._TIER_LOOKUP is None:
+            lookup = np.full(NUM_CRAFTAX_ACHIEVEMENTS, -1, dtype=np.int32)
+            for j, name in enumerate(CRAFTAX_ACHIEVEMENT_NAMES):
+                if name in ACHIEVEMENT_TIERS:
+                    lookup[j] = ACHIEVEMENT_TIERS[name]
+            VectorCraftaxEnv._TIER_LOOKUP = lookup
+        return VectorCraftaxEnv._TIER_LOOKUP
+
     def _compute_achievement_depths_batch(self, achievements):
-        """Compute achievement depths for a batch of achievement vectors (vectorised).
+        """Compute achievement depths for a batch of achievement vectors.
 
         Args:
             achievements: numpy array of shape (num_envs, NUM_CRAFTAX_ACHIEVEMENTS).
@@ -1104,11 +1023,39 @@ class VectorCraftaxEnv:
         Returns:
             numpy array of shape (num_envs,) with achievement depths.
         """
-        n_ach = min(achievements.shape[1], len(_TIER_ARRAY))
-        mask = achievements[:, :n_ach].astype(bool)
-        # Broadcast tier array: where achieved, use tier; else -1
-        tiers = np.where(mask, _TIER_ARRAY[None, :n_ach], -1)
-        return tiers.max(axis=1).astype(np.int32)
+        tier_lookup = self._get_tier_lookup()
+        n_ach = min(achievements.shape[1], len(tier_lookup))
+        achieved_tiers = np.where(
+            achievements[:, :n_ach].astype(bool), tier_lookup[:n_ach], -1)
+        return achieved_tiers.max(axis=1).astype(np.int32)
+
+    def _extract_mask_context_batch(self, states):
+        """Extract action mask context for all envs from vectorized JAX states.
+
+        Returns numpy array of shape (num_envs, CONTEXT_SIZE) as float32.
+        Falls back to zeros on error.
+        """
+        try:
+            from craftax_mask import extract_mask_context
+        except ImportError:
+            from craftax_mask.rules import CONTEXT_SIZE as _CS
+            return np.zeros((self._num_envs, _CS), dtype=np.float32)
+        try:
+            # De-vectorize: extract per-env state and compute context
+            # TODO: consider vectorizing this loop (e.g. via jax.vmap) for large N
+            # This is a small Python loop (46 floats × N envs), negligible vs GPU step
+            contexts = []
+            for i in range(self._num_envs):
+                env_state = jax.tree_util.tree_map(lambda x: x[i], states)
+                ctx = extract_mask_context(env_state)
+                contexts.append(np.asarray(ctx, dtype=np.float32))
+            return np.stack(contexts, axis=0)
+        except Exception as e:
+            if not hasattr(self, '_mask_ctx_warned'):
+                print(f'[VectorCraftaxEnv] mask context extraction failed: {e}')
+                self._mask_ctx_warned = True
+            from craftax_mask.rules import CONTEXT_SIZE as _CS
+            return np.zeros((self._num_envs, _CS), dtype=np.float32)
 
     @property
     def obs_space(self):
@@ -1130,10 +1077,10 @@ class VectorCraftaxEnv:
         if self._track_achievements:
             spaces['log/achievements'] = elements.Space(np.int32, (NUM_CRAFTAX_ACHIEVEMENTS,), 0, 2)
             spaces['log/achievement_depth'] = elements.Space(np.int32)
-        if self._intrinsic_spatial:
-            spaces['log/r_spatial'] = elements.Space(np.float32)
-            spaces['log/r_craft'] = elements.Space(np.float32)
-            spaces['log/r_intr'] = elements.Space(np.float32)
+        if self._use_action_mask:
+            from craftax_mask.rules import CONTEXT_SIZE
+            spaces['action_mask_context'] = elements.Space(
+                np.float32, (CONTEXT_SIZE,), -np.inf, np.inf)
         return spaces
 
     @property
@@ -1143,93 +1090,8 @@ class VectorCraftaxEnv:
             'reset': elements.Space(bool),
         }
 
-    @staticmethod
-    def _spatial_hash_single(flat_obs):
-        """Hash visible block-type layout for a single env → bytes key."""
-        map_obs = flat_obs[:MAP_SIZE].reshape(TILES_R, TILES_C, N_CH)
-        block_ids = np.argmax(map_obs[:, :, :N_BLOCK_CH], axis=-1).astype(np.int8)
-        return block_ids.tobytes()
-
-    @staticmethod
-    def _inventory_hash_single(flat_obs):
-        """Hash craft-relevant inventory only: materials (0-9) + equipment (10-15)."""
-        inv = flat_obs[INV_START:INV_START + INV_CRAFT_SIZE]
-        return tuple(np.round(inv, 1))
-
-    def _compute_intrinsic_rewards(self, raw_obs_batch, extr_rewards, is_firsts):
-        """Batch compute intrinsic rewards with independent normalization.
-
-        Spatial and craft components are normalized separately so that rare
-        craft events receive a proportionally larger scale factor.
-
-        Args:
-            raw_obs_batch: numpy (N, flat_dim) raw observations.
-            extr_rewards: numpy (N,) extrinsic rewards.
-            is_firsts: numpy (N,) bool reset flags.
-
-        Returns:
-            (combined_rewards, r_spatials, r_crafts, r_intrs) — all (N,) float32.
-        """
-        N = self._num_envs
-        combined = np.empty(N, dtype=np.float32)
-        r_spatials = np.empty(N, dtype=np.float32)
-        r_crafts = np.empty(N, dtype=np.float32)
-        r_intrs = np.empty(N, dtype=np.float32)
-        for i in range(N):
-            if is_firsts[i]:
-                self._spatial_seen[i] = set()
-                self._inventory_seen[i] = set()
-            if not self._intrinsic_spatial or is_firsts[i]:
-                # Reset steps get zero reward; register initial obs so the
-                # second step sees the first obs as already visited.
-                if is_firsts[i] and self._intrinsic_spatial:
-                    flat = raw_obs_batch[i]
-                    s_key = self._spatial_hash_single(flat)
-                    self._spatial_seen[i].add(s_key)
-                    i_key = self._inventory_hash_single(flat)
-                    self._inventory_seen[i].add(i_key)
-                combined[i] = 0.0 if is_firsts[i] else extr_rewards[i]
-                r_spatials[i] = 0.0
-                r_crafts[i] = 0.0
-                r_intrs[i] = 0.0
-                continue
-            flat = raw_obs_batch[i]
-            # Spatial novelty (Eq.10): binary first-visit indicator
-            s_key = self._spatial_hash_single(flat)
-            r_sp = 1.0 if s_key not in self._spatial_seen[i] else 0.0
-            self._spatial_seen[i].add(s_key)
-            # Craft novelty (Eq.11)
-            i_key = self._inventory_hash_single(flat)
-            r_cr = 1.0 if i_key not in self._inventory_seen[i] else 0.0
-            self._inventory_seen[i].add(i_key)
-            r_spatials[i] = r_sp
-            r_crafts[i] = r_cr
-            r_intrs[i] = r_sp + r_cr  # raw total for logging
-        # --- Independent adaptive normalization ---
-        active_mask = ~is_firsts
-        if active_mask.any():
-            rate = self._ema_rate
-            self._ema_count += 1
-            self._spatial_ema_mean = (1 - rate) * self._spatial_ema_mean + rate * r_spatials[active_mask].mean()
-            self._craft_ema_mean = (1 - rate) * self._craft_ema_mean + rate * r_crafts[active_mask].mean()
-            self._extr_ema_mean = (1 - rate) * self._extr_ema_mean + rate * np.abs(extr_rewards[active_mask]).mean()
-        if self._ema_count >= 100:
-            extr_mean = max(1e-8, self._extr_ema_mean)
-            sp_scale = extr_mean / max(1e-8, self._spatial_ema_mean)
-            cr_scale = extr_mean / max(1e-8, self._craft_ema_mean)
-        else:
-            sp_scale = 1.0
-            cr_scale = 1.0
-        for i in range(N):
-            if is_firsts[i] or not self._intrinsic_spatial:
-                continue
-            combined[i] = (self._alpha_spatial * r_spatials[i] * sp_scale
-                           + self._alpha_craft * r_crafts[i] * cr_scale
-                           + self._alpha_e * extr_rewards[i])
-        return combined, r_spatials, r_crafts, r_intrs
-
     def step(self, actions_batch):
-        """Step all N envs at once using a fused step-or-reset vmap.
+        """Step all N envs at once.
 
         Args:
             actions_batch: dict with 'action' (N,) int, 'reset' (N,) bool.
@@ -1238,43 +1100,66 @@ class VectorCraftaxEnv:
         """
         reset_mask = actions_batch['reset'] | np.asarray(self._dones)
         acts = jnp.asarray(actions_batch['action'], dtype=jnp.int32)
-        keys = self._get_keys(self._num_envs)
-        should_reset = jnp.asarray(reset_mask, dtype=jnp.bool_)
 
-        # Single fused vmap: each env either resets or steps
-        obs_new, new_states, rewards_final, dones_final = self._v_step_or_reset(
-            keys, self._states, acts, self._env_params, should_reset)
+        keys = self._get_keys(self._num_envs)
+
+        # Auto-reset envs that are done  (all on GPU, vmapped)
+        if np.any(reset_mask):
+            reset_idx = np.where(reset_mask)[0]
+            reset_keys = keys[reset_idx]
+            # vmap over only the envs that need reset
+            r_obs, r_states = jax.vmap(
+                self._env.reset, in_axes=(0, None))(reset_keys, self._env_params)
+            # Scatter back into full state tree
+            r_obs_raw = self._extract_obs_batch(r_obs)
+            self._obs_jax = self._obs_jax.at[reset_idx].set(r_obs_raw)
+            self._states = jax.tree_util.tree_map(
+                lambda full, part: full.at[reset_idx].set(part),
+                self._states, r_states)
+
+        # Note: steps all envs including just-reset ones; jnp.where below ensures correctness.
+        step_keys = self._get_keys(self._num_envs)
+        obs_new, new_states, rewards, dones, _info = self._v_step(
+            step_keys, self._states, acts, self._env_params)
         obs_raw = self._extract_obs_batch(obs_new)
 
-        self._states = new_states
-        self._obs_jax = obs_raw
-        self._dones = dones_final
+        # For reset envs, the observation is from the reset, reward=0
+        reset_jnp = jnp.asarray(reset_mask)
+        # Where reset happened, keep the already-written reset obs
+        rewards_final = jnp.where(reset_jnp, 0.0, rewards)
+        dones_final = jnp.where(reset_jnp, False, dones)
+
+        # For non-reset envs, update states
+        self._states = jax.tree_util.tree_map(
+            lambda ns, old: jnp.where(
+                reset_jnp.reshape(-1, *([1]*(ns.ndim-1))), old, ns),
+            new_states, self._states)
+        self._obs_jax = jnp.where(
+            reset_jnp[:, None] if obs_raw.ndim == 2 else reset_jnp.reshape(-1, *([1]*(obs_raw.ndim-1))),
+            self._obs_jax, obs_raw)
+
+        self._dones = np.asarray(dones_final)
 
         # Process observations (embedding projection) — all on GPU, one call
         processed = self._process_obs(self._obs_jax)
 
         # === Single batched GPU→CPU transfer ===
-        if self._intrinsic_spatial:
-            # Also transfer raw obs for intrinsic reward hashing
-            raw_flat = self._obs_jax.reshape(self._num_envs, -1).astype(jnp.float32)
-            result_jax = (processed, rewards_final, dones_final, raw_flat)
-            processed_np, rewards_np, dones_np, raw_obs_np = jax.device_get(result_jax)
-        else:
-            result_jax = (processed, rewards_final, dones_final)
-            processed_np, rewards_np, dones_np = jax.device_get(result_jax)
+        # Include player_health for terminal/truncation distinction
+        health = self._states.player_health
+        result_jax = (processed, rewards_final, dones_final, health)
+        processed_np, rewards_np, dones_np, health_np = jax.device_get(result_jax)
 
         is_first = np.asarray(reset_mask, dtype=bool)
         is_last = np.asarray(dones_np, dtype=bool)
+        # Terminal = died (health <= 0); truncated = timeout (should bootstrap)
+        is_terminal = is_last & (np.asarray(health_np, dtype=np.float32) <= 0)
+
         rewards_out = np.asarray(rewards_np, dtype=np.float32)
-
-        # Save extrinsic reward before intrinsic mixing for clean evaluation
-        extr_rewards_np = rewards_out.copy()
-
-        # Compute intrinsic rewards if enabled
-        if self._intrinsic_spatial:
-            raw_np = np.asarray(raw_obs_np, dtype=np.float32)
-            rewards_out, r_spatials, r_crafts, r_intrs = \
-                self._compute_intrinsic_rewards(raw_np, rewards_out, is_first)
+        # Apply intrinsic reward shaping (spatial + craft novelty)
+        if self._intrinsic_shaper is not None:
+            raw_obs_np = np.asarray(jax.device_get(self._obs_jax), dtype=np.float32)
+            rewards_out = self._intrinsic_shaper.shape_rewards_batch(
+                raw_obs_np, rewards_out, is_first)
 
         key = 'embedding' if self._use_embedding else 'image'
         result = {
@@ -1282,9 +1167,7 @@ class VectorCraftaxEnv:
             'reward': rewards_out,
             'is_first': is_first,
             'is_last': is_last,
-            'is_terminal': is_last.copy(),
-            # Extrinsic reward (before intrinsic mixing) for clean eval metrics
-            'log/extr_reward': extr_rewards_np,
+            'is_terminal': is_terminal,
         }
 
         # Add achievement tracking (prefixed with log/ to exclude from agent training)
@@ -1294,11 +1177,9 @@ class VectorCraftaxEnv:
             result['log/achievements'] = achievements
             result['log/achievement_depth'] = depths
 
-        # Add intrinsic reward logging (log/ prefix → filtered by replay.add)
-        if self._intrinsic_spatial:
-            result['log/r_spatial'] = r_spatials
-            result['log/r_craft'] = r_crafts
-            result['log/r_intr'] = r_intrs
+        # Action mask context: extracted from game state for feasibility masking
+        if self._use_action_mask:
+            result['action_mask_context'] = self._extract_mask_context_batch(self._states)
 
         return result
 
@@ -1397,6 +1278,23 @@ def make_agent(config, env, args=None):
             'disag_models': getattr(args, 'disag_models', 10),
             'disag_target': getattr(args, 'disag_target', 'feat'),
             'expl_intr_scale': getattr(args, 'expl_intr_scale', 0.9),
+            'expl_extr_scale': getattr(args, 'expl_extr_scale', 0.0),
+        }
+    # Action mask config (Craftax feasibility prior)
+    action_mask_config = {}
+    if args is not None:
+        mask_cfg = {
+            'enabled': bool(getattr(args, 'action_mask_enabled', False)),
+            'mode': getattr(args, 'action_mask_mode', 'soft'),
+            'lambda_penalty': getattr(args, 'action_mask_lambda_penalty', 5.0),
+            'large_negative': getattr(args, 'action_mask_large_negative', 1e9),
+        }
+        action_mask_config = {
+            'action_mask': mask_cfg,
+            'action_mask_enabled': mask_cfg['enabled'],
+            'action_mask_mode': mask_cfg['mode'],
+            'action_mask_lambda_penalty': mask_cfg['lambda_penalty'],
+            'action_mask_large_negative': mask_cfg['large_negative'],
         }
     agent_config = elements.Config(
         **config.agent,
@@ -1410,6 +1308,7 @@ def make_agent(config, env, args=None):
         replica=config.replica,
         replicas=config.replicas,
         **p2e_config,
+        **action_mask_config,
     )
     return Agent(obs_space, act_space, agent_config)
 
@@ -1533,16 +1432,6 @@ def make_selector(args, capacity, seed=0):
               f'grid={args.nlr_grid_length_bins}x{args.nlr_grid_reward_bins}')
         return selector
 
-    # ------------------------------------------------------------------
-    # Reward-weighted sampling
-    # ------------------------------------------------------------------
-    if getattr(args, 'reward_sampling', False):
-        temperature = getattr(args, 'reward_sampling_temp', 1.0)
-        selector = selectors.RewardWeighted(temperature=temperature, seed=seed)
-        print(f'[RewardWeighted] Reward-weighted sampling enabled '
-              f'(temperature={temperature})')
-        return selector
-
     # Check if using 50:50 sampling (Continual-Dreamer strategy)
     # This is the recommended setup for continual learning with 8+ tasks.
     # The "recent" half uses a triangular (linearly decaying) distribution
@@ -1631,8 +1520,8 @@ def make_replay(config, directory, args=None):
         replay_kwargs['eviction'] = eviction
     else:
         # Original DreamerV3: use default selector (uniform) and no eviction parameter
-        if args is not None and getattr(args, 'reservoir_eviction', False):
-            print("Warning: --reservoir_eviction is not supported with --use_original_dreamer")
+        if args is not None and getattr(args, 'reservoir_sampling', False):
+            print("Warning: --reservoir_sampling is not supported with --use_original_dreamer")
         if args is not None and getattr(args, 'recent_frac', 0.0) > 0:
             print("Warning: --recent_frac sampling is not supported with --use_original_dreamer")
 
@@ -1647,6 +1536,49 @@ def make_logger(config, step):
         elements.logger.JSONLOutput(logdir, 'metrics.jsonl'),
     ]
     return elements.Logger(step, outputs, multiplier=1)
+
+
+MASK_LOG_SPECS = (
+    ('log/mask_penalty_mean', 'mask_penalty_mean', 'mean'),
+    ('log/mask_infeasible_frac', 'mask_infeasible_frac', 'mean'),
+    ('log/mask_blocked_frac', 'mask_blocked_frac', 'mean'),
+    ('log/mask/context_missing', 'mask/context_missing', 'mean'),
+    ('log/mask/invalid_place_table_count', 'mask/invalid_place_table_count', 'sum'),
+    ('log/mask/invalid_place_furnace_count', 'mask/invalid_place_furnace_count', 'sum'),
+    ('log/mask/invalid_make_wood_pickaxe_count', 'mask/invalid_make_wood_pickaxe_count', 'sum'),
+    ('log/mask/invalid_make_stone_pickaxe_count', 'mask/invalid_make_stone_pickaxe_count', 'sum'),
+    ('log/mask/place_table_prob_before', 'mask/place_table_prob_before', 'mean'),
+    ('log/mask/place_table_prob_after', 'mask/place_table_prob_after', 'mean'),
+)
+
+
+def _add_mask_metrics_to_episode(episode, tran):
+    for source_key, target_key, agg in MASK_LOG_SPECS:
+        if source_key in tran:
+            episode.add(target_key, tran[source_key], agg=agg)
+
+
+def _copy_mask_metrics_to_payload(result, payload):
+    for _, target_key, _ in MASK_LOG_SPECS:
+        if target_key in result:
+            payload[target_key] = float(result[target_key])
+
+
+def _zero_mask_logs(batch_size):
+    zeros = np.zeros(batch_size, dtype=np.float32)
+    ones = np.ones(batch_size, dtype=np.float32)
+    return {
+        'log/mask_penalty_mean': zeros,
+        'log/mask_infeasible_frac': zeros,
+        'log/mask_blocked_frac': zeros,
+        'log/mask/context_missing': ones,
+        'log/mask/invalid_place_table_count': zeros,
+        'log/mask/invalid_place_furnace_count': zeros,
+        'log/mask/invalid_make_wood_pickaxe_count': zeros,
+        'log/mask/invalid_make_stone_pickaxe_count': zeros,
+        'log/mask/place_table_prob_before': zeros,
+        'log/mask/place_table_prob_after': zeros,
+    }
 
 
 def _get_size_overrides(size_preset):
@@ -1725,6 +1657,12 @@ def load_config(args):
         effective_train_ratio = 96.0
     else:
         effective_train_ratio = 64.0
+    prealloc_env = os.environ.get('XLA_PYTHON_CLIENT_PREALLOCATE')
+    if prealloc_env is None:
+        prealloc_flag = False
+    else:
+        prealloc_flag = str(prealloc_env).strip().lower() in ('1', 'true', 't', 'yes', 'y')
+
     run_overrides = {
         'logdir': f'{args.logdir}/craftax_{tag}',
         'seed': args.seed,
@@ -1741,7 +1679,8 @@ def load_config(args):
             'debug': False,  # Disable debug mode for performance
         },
         'jax': {
-            'prealloc': True,   # Use BFC allocator with preallocation to prevent fragmentation
+            # Keep aligned with current process env setting (or default to False).
+            'prealloc': prealloc_flag,
             'platform': 'gpu',  # Must be 'gpu' (not 'cuda') for internal.setup() GPU flags
         },
     }
@@ -1778,7 +1717,8 @@ def train_single(make_env, config, args, env_name=None):
         make_env: Callable(seed: int) -> embodied.Env that creates one env instance.
         env_name: If provided, use VectorCraftaxEnv for GPU-vectorised envs.
     """
-    np.random.seed(config.seed)
+    # Seed numpy RNG for reproducibility
+    _rng = np.random.default_rng(config.seed)
     logdir = elements.Path(config.logdir)
 
     # Always start fresh: remove old logdir contents (replay, checkpoints)
@@ -1800,6 +1740,18 @@ def train_single(make_env, config, args, env_name=None):
     use_embedding = getattr(args, 'input_type', 'embedding') == 'embedding'
     embedding_dim = getattr(args, 'embedding_dim', 256)
 
+    # Intrinsic reward shaping
+    intrinsic_shaper = None
+    if getattr(args, 'intrinsic_spatial', False):
+        from intrinsic_reward import IntrinsicRewardShaper
+        intrinsic_shaper = IntrinsicRewardShaper(
+            alpha_spatial=getattr(args, 'alpha_spatial', 0.1),
+            alpha_craft=getattr(args, 'alpha_craft', 0.3),
+            alpha_e=getattr(args, 'alpha_e', 1.0),
+        )
+        print(f'Intrinsic reward enabled: alpha_spatial={intrinsic_shaper.alpha_spatial}, '
+              f'alpha_craft={intrinsic_shaper.alpha_craft}, alpha_e={intrinsic_shaper.alpha_e}')
+
     if env_name is not None and CRAFTAX_AVAILABLE:
         # === Vectorised path: single process, single CUDA context ===
         print(f'Creating {num_envs} vectorised Craftax envs (env={env_name}).')
@@ -1807,10 +1759,8 @@ def train_single(make_env, config, args, env_name=None):
             env_name=env_name, num_envs=num_envs,
             embedding_dim=embedding_dim, use_embedding=use_embedding,
             seed=config.seed,
-            intrinsic_spatial=getattr(args, 'intrinsic_spatial', False),
-            alpha_spatial=getattr(args, 'alpha_spatial', 0.1),
-            alpha_craft=getattr(args, 'alpha_craft', 0.3),
-            alpha_e=getattr(args, 'alpha_e', 1.0))
+            use_action_mask=getattr(args, 'action_mask_enabled', False),
+            intrinsic_shaper=intrinsic_shaper)
         driver = VectorDriver(vec_env)
         # Use a lightweight single env for agent space inference
         tmp_env = wrap_env(make_env(config.seed))
@@ -1830,16 +1780,6 @@ def train_single(make_env, config, args, env_name=None):
             agent = make_agent(config, driver.envs[0], args)
     replay = make_replay(config, logdir / 'replay', args)
 
-    # Print intrinsic reward config
-    if getattr(args, 'intrinsic_spatial', False):
-        print('=== Spatial-Counting + Craft-Novelty Intrinsic Reward ===')
-        print(f'  alpha_spatial: {getattr(args, "alpha_spatial", 0.1)}')
-        print(f'  alpha_craft:   {getattr(args, "alpha_craft", 0.3)}')
-        print(f'  alpha_e:       {getattr(args, "alpha_e", 1.0)}')
-        print(f'  r_t = a_sp * norm_sp(r_spatial) + a_cr * norm_cr(r_craft) + a_e * r_extr')
-        print(f'  norm_x = adaptive EMA scaling (E[|r_extr|] / E[r_x]), independent per component')
-        print('==========================================================')
-
     step = elements.Counter()
     logger = make_logger(config, step)
     online = None
@@ -1857,12 +1797,6 @@ def train_single(make_env, config, args, env_name=None):
     train_ratio = config.run.train_ratio
     should_train = elements.when.Ratio(train_ratio / batch_steps)
 
-    # Aggregators for training metrics → metrics.jsonl (mirrors DreamerV3 pattern)
-    train_agg = elements.Agg()
-    epstats = elements.Agg()
-    _last_log_step = [0]
-    _LOG_EVERY = 1000  # flush training metrics to metrics.jsonl every N steps
-
     episodes = collections.defaultdict(elements.Agg)
     episode_achievements = {}  # Track achievements per worker
 
@@ -1871,10 +1805,15 @@ def train_single(make_env, config, args, env_name=None):
     nlr_nonpriv = getattr(args, 'nlr_sampling', False) or getattr(args, 'nlu_sampling', False)
     nlr_active = nlr_privileged or nlr_nonpriv
     episode_item_keys = {}          # worker -> list of item keys inserted this episode
-    _prev_inserted_id = {}          # per-worker tracking to avoid cross-worker misattribution
+    _prev_inserted_id = {}           # per-worker tracking to avoid cross-worker misattribution
 
     # Shared state for training metrics
-    training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0, 'last_replay_log_step': 0, 'latest_td_error': 0.0}
+    training_metrics_state = {'log_every': 1000, 'last_log_step': 0, 'latest_td_error': 0.0}
+    replay_diag_state = {'last_log_step': 0}  # independent throttle for replay diagnostics
+    replay_keys = set(agent.spaces.keys())
+
+    def replay_addfn(tran, worker):
+        replay.add({k: v for k, v in tran.items() if k in replay_keys}, worker)
 
     def logfn(tran, worker):
         episode = episodes[worker]
@@ -1885,23 +1824,13 @@ def train_single(make_env, config, args, env_name=None):
             episode_achievements[worker] = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
             episode_item_keys[worker] = []
 
-        # Use extrinsic reward for score (not inflated by intrinsic rewards)
-        extr_rew = tran.get('log/extr_reward', tran['reward'])
-        episode.add('score', extr_rew, agg='sum')
+        episode.add('score', tran['reward'], agg='sum')
         episode.add('length', 1, agg='sum')
-
-        # Aggregate ALL log/* keys (DreamerV3 pattern: avg/max/sum per key)
-        for key, value in tran.items():
-            if key.startswith('log/'):
-                val = np.asarray(value)
-                if val.ndim == 0:
-                    episode.add(key + '/avg', val, agg='avg')
-                    episode.add(key + '/max', val, agg='max')
-                    episode.add(key + '/sum', val, agg='sum')
+        _add_mask_metrics_to_episode(episode, tran)
 
         # NLR: track newly inserted item keys for this worker's episode
         if nlr_active and worker in episode_item_keys:
-            cur_id = replay._last_inserted_by_worker.get(worker)
+            cur_id = replay.get_last_inserted_by_worker(worker)
             if cur_id is not None and cur_id != _prev_inserted_id.get(worker):
                 episode_item_keys[worker].append(cur_id)
                 _prev_inserted_id[worker] = cur_id
@@ -1917,20 +1846,19 @@ def train_single(make_env, config, args, env_name=None):
             result = episode.result()
             score = result.pop('score')
             length = result.pop('length')
-            logger.add({'score': score, 'length': length}, prefix='episode')
-
-            # Remaining episode-level aggregations (log/* avg/max/sum) go to epstats
-            epstats.add(result)
+            episode_payload = {'score': score, 'length': length}
+            _copy_mask_metrics_to_payload(result, episode_payload)
+            logger.add(episode_payload, prefix='episode')
 
             # NLR/NLU: feed episode metadata to replay selector
             if nlr_active:
                 keys = episode_item_keys.get(worker, [])
                 if keys:
-                    if nlr_privileged:
+                    if nlr_privileged and hasattr(replay, 'update_nlr_episode'):
                         achievements = episode_achievements.get(
                             worker, np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_))
                         replay.update_nlr_episode(achievements, float(score), keys)
-                    else:
+                    elif not nlr_privileged and hasattr(replay, 'update_nlr_episode_nonpriv'):
                         replay.update_nlr_episode_nonpriv(int(length), float(score), keys)
 
             if online is not None:
@@ -1940,11 +1868,6 @@ def train_single(make_env, config, args, env_name=None):
                 if isinstance(achievement_depth, np.ndarray):
                     achievement_depth = int(achievement_depth.item())
 
-                # Extract episode-level intrinsic reward averages for online metrics
-                ep_r_spatial = result.get('log/r_spatial/avg', 0.0)
-                ep_r_craft = result.get('log/r_craft/avg', 0.0)
-                ep_r_intr = result.get('log/r_intr/avg', 0.0)
-
                 online.update(
                     task_id=0,
                     step=int(step.value),
@@ -1953,32 +1876,22 @@ def train_single(make_env, config, args, env_name=None):
                     achievements=achievements,
                     achievement_depth=int(achievement_depth),
                     td_error_mean=training_metrics_state['latest_td_error'],
-                    r_spatial=float(ep_r_spatial),
-                    r_craft=float(ep_r_craft),
-                    r_intr=float(ep_r_intr),
+                    mask_penalty_mean=result.get('mask_penalty_mean'),
+                    mask_infeasible_frac=result.get('mask_infeasible_frac'),
+                    mask_blocked_frac=result.get('mask_blocked_frac'),
                 )
-            # Log episode metrics to wandb
-            try:
-                wb_ep = {'episode/score': float(score), 'episode/length': int(length)}
-                for k in ('log/r_spatial/avg', 'log/r_craft/avg', 'log/r_intr/avg'):
-                    if k in result:
-                        wb_ep[f'episode/{k}'] = float(result[k])
-                wandb.log(wb_ep, step=int(step.value))
-            except Exception:
-                pass
             logger.write()
 
     def log_training_metrics_fn(mets, step_val):
         """Log training metrics periodically."""
-        # Always update latest TD-error (needed for per-episode logging even without online)
+        if online is None:
+            return
+
+        # Always update latest TD-error so it's available for per-episode logging
         adv_val = mets.get('adv', None)
         if adv_val is not None:
             training_metrics_state['latest_td_error'] = float(adv_val)
 
-        if online is None:
-            return
-
-        # The rest only applies when online metrics are enabled
         current_step = int(step_val)
         if current_step - training_metrics_state['last_log_step'] >= training_metrics_state['log_every']:
             training_metrics_state['last_log_step'] = current_step
@@ -2001,6 +1914,9 @@ def train_single(make_env, config, args, env_name=None):
             td_error_mean = float(mets.get('adv', 0.0))
             td_error_max = float(mets.get('adv_mag', 0.0))
 
+            # Mask context loss (from dream masking head)
+            loss_mask_ctx = float(mets.get('loss/mask_ctx', 0.0))
+
             online.log_training_metrics(
                 step=current_step,
                 loss_obs=loss_obs,
@@ -2015,12 +1931,13 @@ def train_single(make_env, config, args, env_name=None):
                 ensemble_disagreement=ensemble_disagreement,
                 intrinsic_reward=intrinsic_reward,
                 extrinsic_reward=extrinsic_reward,
+                **{'loss/mask_ctx': loss_mask_ctx},
             )
 
             # Log exploration diagnostics (dream accuracy)
             imagined_value = float(mets.get('val', 0.0))
             actual_value = float(mets.get('ret', 0.0))
-            dream_accuracy = 1.0 - abs(imagined_value - actual_value) / max(abs(actual_value), 1e-8) if actual_value != 0 else 0.0
+            dream_accuracy = 1.0 / (1.0 + abs(imagined_value - actual_value))
 
             intr_extr_ratio = 0.0
             if extrinsic_reward > 0:
@@ -2039,25 +1956,18 @@ def train_single(make_env, config, args, env_name=None):
         if online is None:
             return
         current_step = int(step_val)
-        if current_step - training_metrics_state['last_replay_log_step'] >= training_metrics_state['log_every']:
-            training_metrics_state['last_replay_log_step'] = current_step
+        if current_step - replay_diag_state['last_log_step'] >= training_metrics_state['log_every']:
+            replay_diag_state['last_log_step'] = current_step
             stats = replay_buffer.stats()
             buffer_size = stats.get('total_steps', len(replay_buffer))
-
-            # Compute depth distribution from recent samples if possible
-            # This is an approximation - actual implementation depends on buffer structure
-            depth_distribution = [0.0] * (NUM_ACHIEVEMENT_TIERS + 1)
 
             online.log_replay_diagnostics(
                 step=current_step,
                 buffer_size=buffer_size,
-                depth_distribution=depth_distribution,
-                mean_td_error=0.0,  # Would need to track priorities
-                mean_episode_age=0.0,  # Would need timestamp tracking
             )
 
     driver.on_step(lambda tran, _: step.increment())
-    driver.on_step(replay.add)
+    driver.on_step(replay_addfn)
     driver.on_step(logfn)
 
     # Prefill
@@ -2068,7 +1978,8 @@ def train_single(make_env, config, args, env_name=None):
             carry,
             {k: np.stack([v.sample() for _ in range(len(obs['is_first']))])
              for k, v in driver.act_space.items() if k != 'reset'},
-            {}
+            (_zero_mask_logs(len(obs['is_first']))
+             if getattr(args, 'action_mask_enabled', False) else {})
         )
         driver.reset()
         driver(random_policy, steps=prefill)
@@ -2084,27 +1995,23 @@ def train_single(make_env, config, args, env_name=None):
     stream_train = iter(agent.stream(make_stream(replay, 'train')))
     carry_train = [agent.init_train(batch_size)]
 
-    cp = elements.Checkpoint(logdir / 'ckpt')
-    cp.step = step
-    cp.agent = agent
-    cp.replay = replay
-
+    # Checkpoint setup: support resuming interrupted runs
+    ckpt_dir = logdir / 'ckpt'
     if getattr(args, 'fresh_start', True):
-        ckpt_dir = logdir / 'ckpt'
         if ckpt_dir.exists():
             import shutil as _shutil
             _shutil.rmtree(str(ckpt_dir), ignore_errors=True)
             print('Removed old checkpoint directory for fresh start.')
-        cp.save()
-        print('Start training loop (fresh start, no checkpoint loaded)')
-    else:
-        loaded = cp.load()
-        if loaded:
-            print(f'Resumed from checkpoint at step {step.value}')
-        else:
-            cp.save()
-            print('No checkpoint found, starting fresh')
 
+    cp = elements.Checkpoint(logdir / 'ckpt')
+    cp.step = step
+    cp.agent = agent
+    cp.replay = replay
+    if not getattr(args, 'fresh_start', True):
+        cp.load(ckpt_dir, keys=['step', 'agent', 'replay'])
+    cp.save()
+
+    print(f'Start training loop (step={int(step.value)})')
     policy = lambda carry, obs: agent.policy(carry, obs, mode='train')
     driver.reset(agent.init_policy)
 
@@ -2117,6 +2024,12 @@ def train_single(make_env, config, args, env_name=None):
     else:
         collect_steps = max(num_envs * 4, 64)
 
+    # Dream mask warmup: mask_ctx_head trains from step 0, but its predictions
+    # are only used in imagination after prefill + warmup_steps.  The periodic
+    # jax.clear_caches() below triggers re-trace so the flag change is picked up.
+    dream_mask_warmup_steps = prefill + 40000  # 10k prefill + 40k warmup
+    dream_mask_activated = False
+
     total_steps = int(config.run.steps)
     while step < total_steps:
         driver(policy, steps=collect_steps)
@@ -2126,39 +2039,25 @@ def train_single(make_env, config, args, env_name=None):
                 carry_train[0], outs, mets = agent.train(carry_train[0], batch)
                 if 'replay' in outs:
                     replay.update(outs['replay'])
-                # Accumulate training metrics for metrics.jsonl (DreamerV3 pattern)
-                train_agg.add(mets, prefix='train')
-                # Log training and exploration metrics to online_metrics.jsonl
+                # Log training and exploration metrics
                 log_training_metrics_fn(mets, step.value)
                 log_replay_diagnostics_fn(replay, step.value)
-
-        # Periodic training-metric flush to metrics.jsonl + wandb
-        _cur = int(step.value)
-        if _cur - _last_log_step[0] >= _LOG_EVERY and _cur > 0:
-            _last_log_step[0] = _cur
-            train_result = train_agg.result()
-            ep_result = epstats.result()
-            replay_result = replay.stats()
-            logger.add(train_result)
-            logger.add(ep_result, prefix='epstats')
-            logger.add(replay_result, prefix='replay')
-            logger.write()
-            # Mirror to wandb
-            try:
-                wb = {}
-                wb.update({k: float(v) for k, v in train_result.items() if np.isscalar(v) or (hasattr(v, 'ndim') and v.ndim == 0)})
-                wb.update({f'epstats/{k}': float(v) for k, v in ep_result.items() if np.isscalar(v) or (hasattr(v, 'ndim') and v.ndim == 0)})
-                wb.update({f'replay/{k}': float(v) for k, v in replay_result.items() if np.isscalar(v) or (hasattr(v, 'ndim') and v.ndim == 0)})
-                if wb:
-                    wandb.log(wb, step=int(step.value))
-            except Exception:
-                pass  # wandb logging is best-effort
-
-        if step.value % 10000 < 10:
+        # Activate dream masking after warmup
+        if (not dream_mask_activated
+                and getattr(agent.model, '_dream_mask_active', None) is not None
+                and step.value >= dream_mask_warmup_steps):
+            agent.model._dream_mask_active = True
+            dream_mask_activated = True
+            jax.clear_caches()  # force re-trace to pick up the flag
+            print(f'[step {step.value}] Dream masking activated '
+                  f'(warmup complete after {dream_mask_warmup_steps} steps)')
+        if step.value % 10000 < collect_steps:
             cp.save()
         # Periodically clear JAX caches to prevent memory accumulation
-        _cache_interval = getattr(args, 'jax_cache_clear_interval', 0)
-        if _cache_interval > 0 and step.value % _cache_interval == 0 and step.value > 0:
+        # that causes CUDA_ERROR_ILLEGAL_ADDRESS after ~15k steps
+        _raw_cache_interval = getattr(args, 'jax_cache_clear_interval', 0)
+        _cache_interval = _raw_cache_interval if _raw_cache_interval > 0 else None
+        if _cache_interval is not None and step.value % _cache_interval < collect_steps and step.value > 0:
             jax.clear_caches()
 
     cp.save()
@@ -2175,7 +2074,8 @@ def cl_train_loop(make_envs, config, args, env_names=None):
         make_envs: List of Callable(seed: int) -> embodied.Env, one per task.
         env_names: Optional list of Craftax env name strings for vectorised path.
     """
-    np.random.seed(config.seed)
+    # Seed numpy RNG for reproducibility
+    _rng = np.random.default_rng(config.seed)
 
     unbalanced_steps = None
     if args.unbalanced_steps not in [None, 'None', 'none']:
@@ -2199,9 +2099,24 @@ def cl_train_loop(make_envs, config, args, env_names=None):
     print('Logdir:', logdir)
 
     num_envs = config.run.envs
+
+    # Intrinsic reward shaping
+    intrinsic_shaper = None
+    if getattr(args, 'intrinsic_spatial', False):
+        from intrinsic_reward import IntrinsicRewardShaper
+        intrinsic_shaper = IntrinsicRewardShaper(
+            alpha_spatial=getattr(args, 'alpha_spatial', 0.1),
+            alpha_craft=getattr(args, 'alpha_craft', 0.3),
+            alpha_e=getattr(args, 'alpha_e', 1.0),
+        )
+        print(f'Intrinsic reward enabled: alpha_spatial={intrinsic_shaper.alpha_spatial}, '
+              f'alpha_craft={intrinsic_shaper.alpha_craft}, alpha_e={intrinsic_shaper.alpha_e}')
+
     env0 = wrap_env(make_envs[0](config.seed))
 
     agent = make_agent(config, env0, args)
+    env0.close()  # Free GPU memory; env0 is only needed for space definitions
+
     replay = make_replay(config, logdir / 'replay', args)
 
     total_step = elements.Counter()
@@ -2221,41 +2136,30 @@ def cl_train_loop(make_envs, config, args, env_names=None):
     train_ratio = config.run.train_ratio
     should_train = elements.when.Ratio(train_ratio / batch_steps)
 
-    # Aggregators for training metrics → metrics.jsonl (mirrors DreamerV3 pattern)
-    train_agg = elements.Agg()
-    epstats = elements.Agg()
-    _last_log_step_cl = [0]
-    _LOG_EVERY_CL = 1000  # flush training metrics to metrics.jsonl every N steps
+    # Checkpoint setup: support resuming interrupted runs
+    ckpt_dir = logdir / 'ckpt'
+    if getattr(args, 'fresh_start', True):
+        if ckpt_dir.exists():
+            import shutil as _shutil
+            _shutil.rmtree(str(ckpt_dir), ignore_errors=True)
+            print('Removed old checkpoint directory for fresh start.')
 
     cp = elements.Checkpoint(logdir / 'ckpt')
     cp.step = total_step
     cp.agent = agent
     cp.replay = replay
-
-    if getattr(args, 'fresh_start', True):
-        ckpt_dir = logdir / 'ckpt'
-        if ckpt_dir.exists():
-            import shutil as _shutil
-            _shutil.rmtree(str(ckpt_dir), ignore_errors=True)
-            print('Removed old checkpoint directory for fresh start.')
-        cp.save()
-        print('Start CL training loop (fresh start, no checkpoint loaded)')
-    else:
-        loaded = cp.load()
-        if loaded:
-            print(f'Resumed CL from checkpoint at step {total_step.value}')
-        else:
-            cp.save()
-            print('No checkpoint found, starting CL fresh')
+    if not getattr(args, 'fresh_start', True):
+        cp.load(ckpt_dir, keys=['step', 'agent', 'replay'])
+    cp.save()
 
     stats = replay.stats()
-    total_steps_done = stats.get('total_steps', 0)
+    total_steps_done = int(total_step.value)
     steps_per_task = int(args.steps)
     num_tasks = len(make_envs)
 
     if unbalanced_steps is not None:
         tot_steps_after_task = np.cumsum(unbalanced_steps)
-        task_id = next((i for i, j in enumerate(total_steps_done < tot_steps_after_task) if j), 0)
+        task_id = next((i for i, j in enumerate(total_steps_done < tot_steps_after_task) if j), len(unbalanced_steps) - 1)
         rep = int(total_steps_done // np.sum(unbalanced_steps))
     else:
         task_id = int(total_steps_done // steps_per_task) % num_tasks
@@ -2280,19 +2184,19 @@ def cl_train_loop(make_envs, config, args, env_names=None):
         collect_steps = max(num_envs * 4, 64)
 
     # Shared state for training metrics logging
-    training_metrics_state = {'latest': {}, 'log_every': 1000, 'last_log_step': 0, 'last_replay_log_step': 0, 'latest_td_error': 0.0}
+    training_metrics_state = {'log_every': 1000, 'last_log_step': 0, 'latest_td_error': 0.0}
+    replay_diag_state = {'last_log_step': 0}  # independent throttle for replay diagnostics
 
     def log_training_metrics_fn(mets, step_val, current_task_id):
         """Log training metrics periodically."""
-        # Always update latest TD-error (needed for per-episode logging even without online)
+        if online is None:
+            return
+
+        # Always update latest TD-error so it's available for per-episode logging
         adv_val = mets.get('adv', None)
         if adv_val is not None:
             training_metrics_state['latest_td_error'] = float(adv_val)
 
-        if online is None:
-            return
-
-        # The rest only applies when online metrics are enabled
         current_step = int(step_val)
         if current_step - training_metrics_state['last_log_step'] >= training_metrics_state['log_every']:
             training_metrics_state['last_log_step'] = current_step
@@ -2311,6 +2215,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
 
             td_error_mean = float(mets.get('adv', 0.0))
             td_error_max = float(mets.get('adv_mag', 0.0))
+            loss_mask_ctx = float(mets.get('loss/mask_ctx', 0.0))
 
             online.log_training_metrics(
                 step=current_step,
@@ -2327,11 +2232,12 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                 intrinsic_reward=intrinsic_reward,
                 extrinsic_reward=extrinsic_reward,
                 task_id=current_task_id,
+                **{'loss/mask_ctx': loss_mask_ctx},
             )
 
             imagined_value = float(mets.get('val', 0.0))
             actual_value = float(mets.get('ret', 0.0))
-            dream_accuracy = 1.0 - abs(imagined_value - actual_value) / max(abs(actual_value), 1e-8) if actual_value != 0 else 0.0
+            dream_accuracy = 1.0 / (1.0 + abs(imagined_value - actual_value))
             intr_extr_ratio = intrinsic_reward / extrinsic_reward if extrinsic_reward > 0 else 0.0
 
             online.log_exploration_diagnostics(
@@ -2347,18 +2253,14 @@ def cl_train_loop(make_envs, config, args, env_names=None):
         if online is None:
             return
         current_step = int(step_val)
-        if current_step - training_metrics_state['last_replay_log_step'] >= training_metrics_state['log_every']:
-            training_metrics_state['last_replay_log_step'] = current_step
+        if current_step - replay_diag_state['last_log_step'] >= training_metrics_state['log_every']:
+            replay_diag_state['last_log_step'] = current_step
             stats = replay_buffer.stats()
             buffer_size = stats.get('total_steps', len(replay_buffer))
-            depth_distribution = [0.0] * (NUM_ACHIEVEMENT_TIERS + 1)
 
             online.log_replay_diagnostics(
                 step=current_step,
                 buffer_size=buffer_size,
-                depth_distribution=depth_distribution,
-                mean_td_error=0.0,
-                mean_episode_age=0.0,
             )
 
     while rep < args.num_task_repeats:
@@ -2370,6 +2272,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
             episodes = collections.defaultdict(elements.Agg)
             episode_achievements = {}  # Track achievements per worker
             current_task = task_id  # Capture for closure
+            replay_keys = set(agent.spaces.keys())
 
             # NLR/NLU: track replay item keys per worker episode
             cl_nlr_privileged = getattr(args, 'nlr_privileged_sampling', False) or getattr(args, 'nlu_privileged_sampling', False)
@@ -2386,23 +2289,13 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                     episode_achievements[worker] = np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_)
                     cl_episode_item_keys[worker] = []
 
-                # Use extrinsic reward for score (not inflated by intrinsic rewards)
-                extr_rew = tran.get('log/extr_reward', tran['reward'])
-                episode.add('score', extr_rew, agg='sum')
+                episode.add('score', tran['reward'], agg='sum')
                 episode.add('length', 1, agg='sum')
-
-                # Aggregate ALL log/* keys (DreamerV3 pattern: avg/max/sum per key)
-                for key, value in tran.items():
-                    if key.startswith('log/'):
-                        val = np.asarray(value)
-                        if val.ndim == 0:
-                            episode.add(key + '/avg', val, agg='avg')
-                            episode.add(key + '/max', val, agg='max')
-                            episode.add(key + '/sum', val, agg='sum')
+                _add_mask_metrics_to_episode(episode, tran)
 
                 # NLR: track newly inserted item keys for this worker's episode
                 if cl_nlr_active and worker in cl_episode_item_keys:
-                    cur_id = replay._last_inserted_by_worker.get(worker)
+                    cur_id = replay.get_last_inserted_by_worker(worker)
                     if cur_id is not None and cur_id != cl_prev_inserted_id.get(worker):
                         cl_episode_item_keys[worker].append(cur_id)
                         cl_prev_inserted_id[worker] = cur_id
@@ -2418,10 +2311,9 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                     result = episode.result()
                     score = result.pop('score')
                     length = result.pop('length')
-                    logger.add({'score': score, 'length': length, 'task': current_task}, prefix='episode')
-
-                    # Remaining episode-level aggregations (log/* avg/max/sum) go to epstats
-                    epstats.add(result)
+                    episode_payload = {'score': score, 'length': length, 'task': current_task}
+                    _copy_mask_metrics_to_payload(result, episode_payload)
+                    logger.add(episode_payload, prefix='episode')
 
                     # NLR/NLU: feed episode metadata to replay selector
                     if cl_nlr_active:
@@ -2440,11 +2332,6 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                         if isinstance(achievement_depth, np.ndarray):
                             achievement_depth = int(achievement_depth.item())
 
-                        # Extract episode-level intrinsic reward averages for online metrics
-                        ep_r_spatial = result.get('log/r_spatial/avg', 0.0)
-                        ep_r_craft = result.get('log/r_craft/avg', 0.0)
-                        ep_r_intr = result.get('log/r_intr/avg', 0.0)
-
                         online.update(
                             task_id=current_task,
                             step=int(total_step.value),
@@ -2453,20 +2340,14 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                             achievements=achievements,
                             achievement_depth=int(achievement_depth),
                             td_error_mean=training_metrics_state['latest_td_error'],
-                            r_spatial=float(ep_r_spatial),
-                            r_craft=float(ep_r_craft),
-                            r_intr=float(ep_r_intr),
+                            mask_penalty_mean=result.get('mask_penalty_mean'),
+                            mask_infeasible_frac=result.get('mask_infeasible_frac'),
+                            mask_blocked_frac=result.get('mask_blocked_frac'),
                         )
-                    # Log episode metrics to wandb
-                    try:
-                        wb_ep = {'episode/score': float(score), 'episode/length': int(length), 'episode/task': current_task}
-                        for k in ('log/r_spatial/avg', 'log/r_craft/avg', 'log/r_intr/avg'):
-                            if k in result:
-                                wb_ep[f'episode/{k}'] = float(result[k])
-                        wandb.log(wb_ep, step=int(total_step.value))
-                    except Exception:
-                        pass
                     logger.write()
+
+            def replay_addfn(tran, worker):
+                replay.add({k: v for k, v in tran.items() if k in replay_keys}, worker)
 
             if use_vectorised:
                 task_env_name = env_names[task_id]
@@ -2475,10 +2356,8 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                     env_name=task_env_name, num_envs=num_envs,
                     embedding_dim=embedding_dim, use_embedding=use_embedding,
                     seed=config.seed,
-                    intrinsic_spatial=getattr(args, 'intrinsic_spatial', False),
-                    alpha_spatial=getattr(args, 'alpha_spatial', 0.1),
-                    alpha_craft=getattr(args, 'alpha_craft', 0.3),
-                    alpha_e=getattr(args, 'alpha_e', 1.0))
+                    use_action_mask=getattr(args, 'action_mask_enabled', False),
+                    intrinsic_shaper=intrinsic_shaper)
                 driver = VectorDriver(vec_env)
             else:
                 env_fns = [lambda i=i, fn=make_task_env: wrap_env(fn(config.seed + i)) for i in range(num_envs)]
@@ -2487,7 +2366,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
 
             driver.on_step(lambda tran, _: total_step.increment())
             driver.on_step(lambda tran, _: step.increment())
-            driver.on_step(replay.add)
+            driver.on_step(replay_addfn)
             driver.on_step(logfn)
 
             prefill = 10000
@@ -2498,7 +2377,8 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                     carry,
                     {k: np.stack([v.sample() for _ in range(len(obs['is_first']))])
                      for k, v in driver.act_space.items() if k != 'reset'},
-                    {}
+                    (_zero_mask_logs(len(obs['is_first']))
+                     if getattr(args, 'action_mask_enabled', False) else {})
                 )
                 driver.reset()
                 driver(random_policy, steps=int(needed))
@@ -2510,11 +2390,17 @@ def cl_train_loop(make_envs, config, args, env_names=None):
             driver.reset(agent.init_policy)
 
             if unbalanced_steps is not None:
+                assert len(unbalanced_steps) == num_tasks, \
+                    f'unbalanced_steps length {len(unbalanced_steps)} != num_tasks {num_tasks}'
                 steps_limit = int(unbalanced_steps[task_id])
             else:
                 steps_limit = steps_per_task
 
             print(f'Training for {steps_limit} steps on task {task_id}')
+
+            # Dream mask warmup for CL loop
+            cl_dream_mask_warmup = prefill + 40000
+            cl_dream_mask_activated = getattr(agent.model, '_dream_mask_active', False)
 
             while step < steps_limit:
                 driver(policy, steps=collect_steps)
@@ -2524,39 +2410,24 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                         carry_train[0], outs, mets = agent.train(carry_train[0], batch)
                         if 'replay' in outs:
                             replay.update(outs['replay'])
-                        # Accumulate training metrics for metrics.jsonl (DreamerV3 pattern)
-                        train_agg.add(mets, prefix='train')
-                        # Log training and exploration metrics to online_metrics.jsonl
+                        # Log training and exploration metrics
                         log_training_metrics_fn(mets, total_step.value, current_task)
                         log_replay_diagnostics_fn(replay, total_step.value)
-
-                # Periodic training-metric flush to metrics.jsonl + wandb
-                _cur_cl = int(total_step.value)
-                if _cur_cl - _last_log_step_cl[0] >= _LOG_EVERY_CL and _cur_cl > 0:
-                    _last_log_step_cl[0] = _cur_cl
-                    train_result = train_agg.result()
-                    ep_result = epstats.result()
-                    replay_result = replay.stats()
-                    logger.add(train_result)
-                    logger.add(ep_result, prefix='epstats')
-                    logger.add(replay_result, prefix='replay')
-                    logger.write()
-                    # Mirror to wandb
-                    try:
-                        wb = {'task': current_task}
-                        wb.update({k: float(v) for k, v in train_result.items() if np.isscalar(v) or (hasattr(v, 'ndim') and v.ndim == 0)})
-                        wb.update({f'epstats/{k}': float(v) for k, v in ep_result.items() if np.isscalar(v) or (hasattr(v, 'ndim') and v.ndim == 0)})
-                        wb.update({f'replay/{k}': float(v) for k, v in replay_result.items() if np.isscalar(v) or (hasattr(v, 'ndim') and v.ndim == 0)})
-                        if wb:
-                            wandb.log(wb, step=int(total_step.value))
-                    except Exception:
-                        pass  # wandb logging is best-effort
-
-                if step.value % 10000 < 10:
+                # Activate dream masking after warmup
+                if (not cl_dream_mask_activated
+                        and getattr(agent.model, '_dream_mask_active', None) is not None
+                        and total_step.value >= cl_dream_mask_warmup):
+                    agent.model._dream_mask_active = True
+                    cl_dream_mask_activated = True
+                    jax.clear_caches()
+                    print(f'[step {total_step.value}] Dream masking activated '
+                          f'(CL warmup complete)')
+                if step.value % 10000 < collect_steps:
                     cp.save()
                 # Periodically clear JAX caches to prevent memory accumulation
-                _cache_interval = getattr(args, 'jax_cache_clear_interval', 0)
-                if _cache_interval > 0 and total_step.value % _cache_interval == 0 and total_step.value > 0:
+                _raw_cache_interval = getattr(args, 'jax_cache_clear_interval', 0)
+                _cache_interval = _raw_cache_interval if _raw_cache_interval > 0 else 50000
+                if total_step.value % _cache_interval < collect_steps and total_step.value > 0:
                     jax.clear_caches()
 
             driver.close()
@@ -2571,27 +2442,22 @@ def cl_train_loop(make_envs, config, args, env_names=None):
     logger.close()
 
 
-def make_craftax(env_name, embedding_dim=256, use_embedding=True, seed=42,
-                 intrinsic_spatial=False, alpha_spatial=0.1, alpha_craft=0.3, alpha_e=1.0):
+def make_craftax(env_name, embedding_dim=256, use_embedding=True, seed=42, use_action_mask=False):
     """Create a Craftax environment with proper wrappers."""
     if not CRAFTAX_AVAILABLE:
         raise ImportError("Craftax is not installed. Install with: pip install craftax")
-
+    
     return CraftaxWrapper(
         env_name=env_name,
         embedding_dim=embedding_dim,
         use_embedding=use_embedding,
         seed=seed,
-        intrinsic_spatial=intrinsic_spatial,
-        alpha_spatial=alpha_spatial,
-        alpha_craft=alpha_craft,
-        alpha_e=alpha_e,
+        use_action_mask=use_action_mask,
     )
 
 
 def run_craftax(args):
     """Main entry point for Craftax training."""
-    tag = args.tag + str(args.seed)
     config, tag = load_config(args)
 
     unbalanced_steps = None
@@ -2649,10 +2515,7 @@ def run_craftax(args):
                 embedding_dim=args.embedding_dim,
                 use_embedding=use_embedding,
                 seed=seed,
-                intrinsic_spatial=getattr(args, 'intrinsic_spatial', False),
-                alpha_spatial=getattr(args, 'alpha_spatial', 0.1),
-                alpha_craft=getattr(args, 'alpha_craft', 0.3),
-                alpha_e=getattr(args, 'alpha_e', 1.0),
+                use_action_mask=getattr(args, 'action_mask_enabled', False),
             ))
             print(f"Task {i}: env {name}, use_embedding: {use_embedding}")
 
@@ -2676,10 +2539,7 @@ def run_craftax(args):
             embedding_dim=args.embedding_dim,
             use_embedding=use_embedding,
             seed=seed,
-            intrinsic_spatial=getattr(args, 'intrinsic_spatial', False),
-            alpha_spatial=getattr(args, 'alpha_spatial', 0.1),
-            alpha_craft=getattr(args, 'alpha_craft', 0.3),
-            alpha_e=getattr(args, 'alpha_e', 1.0),
+            use_action_mask=getattr(args, 'action_mask_enabled', False),
         )
 
         train_single(make_env, config, args, env_name=env_name)

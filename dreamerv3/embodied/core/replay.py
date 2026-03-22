@@ -45,6 +45,7 @@ class Replay:
     self.items = {}
     self.fifo = deque()  # Used for FIFO eviction
     self.item_keys = []  # Used for reservoir eviction (random access)
+    self._itemkey_positions = {}  # itemid -> index in item_keys (O(1) lookup)
     self.itemid = 0
     self.total_seen = 0  # For reservoir sampling probability
     self._eviction_rng = np.random.default_rng(seed + 1000)  # Separate RNG for eviction
@@ -71,12 +72,20 @@ class Replay:
     self.last_inserted_itemid = None  # Track last inserted item for NLR
     self._last_inserted_by_worker = {}  # Per-worker last inserted item ID
 
+  def get_last_inserted_by_worker(self, worker):
+    """Return the last inserted item ID for a given worker."""
+    return self._last_inserted_by_worker.get(worker)
+
   def __len__(self):
     return len(self.items)
 
   def stats(self):
     ratio = lambda x, y: x / y if y else np.nan
-    m = self.metrics
+    with self.rwlock.writing:
+      # Atomically snapshot and reset metrics under the write lock
+      m = dict(self.metrics)
+      for key in self.metrics:
+        self.metrics[key] = 0
     chunk_nbytes = sum(x.nbytes for x in list(self.chunks.values()))
     stats = {
         'items': len(self.items),
@@ -91,14 +100,12 @@ class Replay:
     # Add pool utilization if sampler supports it
     if hasattr(self.sampler, 'get_pool_utilization'):
       stats.update(self.sampler.get_pool_utilization())
-    for key in self.metrics:
-      self.metrics[key] = 0
     return stats
 
   @elements.timer.section('replay_add')
   def add(self, step, worker=0):
     step = {k: v for k, v in step.items() if not k.startswith('log/')}
-    with self.rwlock.reading:
+    with self.rwlock.writing:
       step = {k: np.asarray(v) for k, v in step.items()}
 
       if worker not in self.current:
@@ -145,32 +152,34 @@ class Replay:
   def sample(self, batch, mode='train'):
     message = f'Replay buffer {self.name} is empty'
     limiters.wait(lambda: len(self.sampler), message)
-    seqs, is_online = zip(*[self._sample(mode) for _ in range(batch)])
-    data = self._assemble_batch(seqs, 0, self.length)
-    data = self._annotate_batch(data, is_online, True)
+    with self.rwlock.reading:
+      seqs, is_online = zip(*[self._sample(mode) for _ in range(batch)])
+      data = self._assemble_batch(seqs, 0, self.length)
+      data = self._annotate_batch(data, is_online, True)
     return data
 
   @elements.timer.section('replay_update')
   def update(self, data):
-    stepid = data.pop('stepid')
-    priority = data.pop('priority', None)
-    assert stepid.ndim == 3, stepid.shape
-    self.metrics['updates'] += int(np.prod(stepid.shape[:-1]))
-    if priority is not None:
-      assert priority.ndim == 2, priority.shape
-      self.sampler.prioritize(
-          stepid.reshape((-1, stepid.shape[-1])),
-          priority.flatten())
-    if data:
-      for i, stepid in enumerate(stepid):
-        stepid = stepid[0].tobytes()
-        chunkid = elements.UUID(stepid[:-4])
-        index = int.from_bytes(stepid[-4:], 'big')
-        values = {k: v[i] for k, v in data.items()}
-        try:
-          self._setseq(chunkid, index, values)
-        except KeyError:
-          pass
+    with self.rwlock.writing:
+      stepid = data.pop('stepid')
+      priority = data.pop('priority', None)
+      assert stepid.ndim == 3, stepid.shape
+      self.metrics['updates'] += int(np.prod(stepid.shape[:-1]))
+      if priority is not None:
+        assert priority.ndim == 2, priority.shape
+        self.sampler.prioritize(
+            stepid.reshape((-1, stepid.shape[-1])),
+            priority.flatten())
+      if data:
+        for i, sid in enumerate(stepid):
+          sid_bytes = sid[0].tobytes()
+          chunkid = elements.UUID(sid_bytes[:-4])
+          index = int.from_bytes(sid_bytes[-4:], 'big')
+          values = {k: v[i] for k, v in data.items()}
+          try:
+            self._setseq(chunkid, index, values)
+          except KeyError:
+            pass
 
   def _sample(self, mode):
     assert mode in ('train', 'report', 'eval'), mode
@@ -189,7 +198,7 @@ class Replay:
           is_online = False
         seq = self._getseq(chunkid, index, concat=False)
         return seq, is_online
-      except KeyError:
+      except (KeyError, IndexError):
         continue
 
   def _insert(self, chunkid, index):
@@ -205,6 +214,9 @@ class Replay:
         return
       # Accept: remove a random existing item and add this one
       self._remove_random(j)
+      # Defensive: ensure sampler is below capacity after eviction (prevents double eviction)
+      assert not hasattr(self.sampler, 'capacity') or len(self.sampler) < self.sampler.capacity, \
+          "Sampler at capacity after eviction — possible double eviction bug"
     elif self.capacity and len(self.items) >= self.capacity:
       # FIFO eviction
       self._remove()
@@ -214,27 +226,41 @@ class Replay:
     self.items[itemid] = (chunkid, index)
     stepids = self._getseq(chunkid, index, ['stepid'])['stepid']
     self.sampler[itemid] = stepids
-    self.fifo.append(itemid)
+    if self.eviction == 'fifo':
+      self.fifo.append(itemid)
+    self._itemkey_positions[itemid] = len(self.item_keys)
     self.item_keys.append(itemid)
     self.last_inserted_itemid = itemid
 
   def _remove(self):
     """Remove the oldest item (FIFO eviction)."""
+    # Skip items already removed by reservoir eviction
+    while self.fifo and self.fifo[0] not in self.items:
+      self.fifo.popleft()
     itemid = self.fifo.popleft()
     self._remove_item(itemid)
+    # Swap-and-pop for O(1) removal from item_keys
+    idx = self._itemkey_positions.pop(itemid, None)
+    if idx is not None and len(self.item_keys) > 0:
+      last = self.item_keys[-1]
+      if idx < len(self.item_keys) - 1:
+        self.item_keys[idx] = last
+        self._itemkey_positions[last] = idx
+      self.item_keys.pop()
 
   def _remove_random(self, index):
     """Remove item at random index (reservoir eviction)."""
-    if index >= len(self.item_keys):
-      index = self._eviction_rng.integers(0, len(self.item_keys))
+    assert index < len(self.item_keys), (
+        f"reservoir eviction index {index} out of range {len(self.item_keys)}")
     itemid = self.item_keys[index]
     self._remove_item(itemid)
-    # Remove from item_keys and fifo
-    self.item_keys.remove(itemid)
-    try:
-      self.fifo.remove(itemid)
-    except ValueError:
-      pass
+    # Swap-and-pop for O(1) removal from item_keys
+    self._itemkey_positions.pop(itemid, None)
+    last = self.item_keys[-1]
+    if index < len(self.item_keys) - 1:
+      self.item_keys[index] = last
+      self._itemkey_positions[last] = index
+    self.item_keys.pop()
 
   def _remove_item(self, itemid):
     """Remove a specific item from the buffer."""
@@ -245,7 +271,7 @@ class Replay:
       if self.refs[chunkid] < 1:
         del self.refs[chunkid]
         chunk = self.chunks.pop(chunkid)
-        if chunk.succ in self.refs:
+        if chunk.succ in self.refs and self.refs[chunk.succ] > 0:
           self.refs[chunk.succ] -= 1
 
   def _getseq(self, chunkid, index, keys=None, concat=True):
@@ -430,7 +456,7 @@ class Replay:
   def _numitems(self, chunks):
     chunks = [x.filename if hasattr(x, 'filename') else x for x in chunks]
     if not chunks:
-      return 0
+      return {}
     chunks = list(reversed(sorted([elements.Path(x).stem for x in chunks])))
     times, uuids, succs, lengths = zip(*[x.split('-') for x in chunks])
     uuids = [elements.UUID(x) for x in uuids]
@@ -470,8 +496,9 @@ class Replay:
         item_keys = [self.last_inserted_itemid]
       else:
         return
-    for key in item_keys:
-      self.sampler.update_episode_stats(key, achievements, reward)
+    for i, key in enumerate(item_keys):
+      self.sampler.update_episode_stats(
+          key, achievements, reward, _update_globals=(i == 0))
 
   def update_nlr_episode_nonpriv(self, episode_length, reward, item_keys=None):
     """Notify the non-privileged NLR/NLU selector about episode-level metadata.
@@ -499,8 +526,9 @@ class Replay:
         item_keys = [self.last_inserted_itemid]
       else:
         return
-    for key in item_keys:
-      self.sampler.update_episode_stats(key, episode_length, reward)
+    for i, key in enumerate(item_keys):
+      self.sampler.update_episode_stats(
+          key, episode_length, reward, _update_globals=(i == 0))
 
   def _notempty(self, reason=False):
     if reason:

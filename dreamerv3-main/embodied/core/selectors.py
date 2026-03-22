@@ -101,7 +101,7 @@ class Recency:
       p = prob
       for segment in path:
         p = p[segment]
-      index = rng.choice(len(segment), p=p)
+      index = rng.choice(len(p), p=p)
       path.append(index)
     index = sum(
         index * bfactor ** (len(tree) - level - 1)
@@ -221,6 +221,11 @@ class Mixture:
   def __delitem__(self, key):
     for selector in self.selectors:
       del selector[key]
+
+  def __len__(self):
+    if not self.selectors:
+      return 0
+    return len(self.selectors[0])
 
   def prioritize(self, stepids, priorities):
     for selector in self.selectors:

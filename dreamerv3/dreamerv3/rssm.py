@@ -133,7 +133,7 @@ class RSSM(nj.Module):
     return carry, entries, losses, feat, metrics
 
   def _core(self, deter, stoch, action):
-    stoch = stoch.reshape((stoch.shape[0], -1))
+    stoch = stoch.reshape((*stoch.shape[:-2], -1))
     action /= sg(jnp.maximum(1, jnp.abs(action)))
     g = self.blocks
     flat2group = lambda x: einops.rearrange(x, '... (g h) -> ... g h', g=g)

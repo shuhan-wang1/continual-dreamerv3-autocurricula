@@ -110,7 +110,6 @@ class CSVExporter:
     def add_checkpoint(self, figure, metric, checkpoint, method_a, vals_a,
                        method_b, vals_b):
         """Store one checkpoint row for a pair of methods."""
-        from scipy import stats as _st
         t_stat, p_val, sig = welch_t(vals_a, vals_b)
         pooled = np.sqrt((vals_a.std()**2 + vals_b.std()**2) / 2) \
             if len(vals_a) > 0 and len(vals_b) > 0 else 0
@@ -336,15 +335,31 @@ SIGNIFICANCE_LEVEL = 0.05
 OUTPUT_DIR = pathlib.Path("figures")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# Correct ordering: matches Craftax Achievement enum values 0-21
+# Full 67 achievements in Craftax enum order (synced with Craftax 1.x)
 ACHIEVEMENT_NAMES = [
-    "collect_wood", "place_table", "eat_cow", "collect_sapling",       # 0-3
-    "collect_drink", "make_wood_pickaxe", "make_wood_sword",           # 4-6
-    "place_plant", "defeat_zombie", "collect_stone", "place_stone",    # 7-10
-    "eat_plant", "defeat_skeleton", "make_stone_pickaxe",              # 11-13
-    "make_stone_sword", "wake_up", "place_furnace", "collect_coal",    # 14-17
-    "collect_iron", "collect_diamond", "make_iron_pickaxe",            # 18-20
-    "make_iron_sword",                                                 # 21
+    "collect_wood", "place_table", "eat_cow", "collect_sapling",
+    "collect_drink", "make_wood_pickaxe", "make_wood_sword",
+    "place_plant", "defeat_zombie", "collect_stone", "place_stone",
+    "eat_plant", "defeat_skeleton", "collect_coal", "make_stone_pickaxe",
+    "make_stone_sword", "wake_up", "place_furnace", "collect_iron",
+    "make_iron_pickaxe", "make_iron_sword", "collect_diamond",
+    "make_diamond_pickaxe", "make_diamond_sword",
+    "make_iron_armour", "make_diamond_armour",
+    "make_arrow", "make_torch", "place_torch",
+    "eat_bat", "eat_snail", "find_bow", "fire_bow",
+    "collect_sapphire", "collect_ruby",
+    "enter_gnomish_mines", "enter_dungeon", "enter_sewers",
+    "enter_vault", "enter_troll_mines",
+    "defeat_gnome_warrior", "defeat_gnome_archer",
+    "defeat_orc_solider", "defeat_orc_mage",
+    "defeat_lizard", "defeat_kobold",
+    "learn_fireball", "cast_fireball", "learn_iceball", "cast_iceball",
+    "open_chest", "drink_potion", "enchant_sword", "enchant_armour",
+    "enter_fire_realm", "enter_ice_realm", "enter_graveyard",
+    "defeat_troll", "defeat_deep_thing", "defeat_pigman",
+    "defeat_fire_elemental", "defeat_frost_troll", "defeat_ice_elemental",
+    "defeat_knight", "defeat_archer",
+    "damage_necromancer", "defeat_necromancer",
 ]
 
 
@@ -426,6 +441,9 @@ def discover_methods(logs_dir: pathlib.Path):
 
     method_seeds = defaultdict(set)
     # Primary pattern: craftax_dreamerv3-<method>-<seed>
+    # Note: greedy (.+) is correct here -- it consumes up to the LAST hyphen
+    # before the trailing digit group, so method names with embedded hyphens
+    # or digit groups (e.g., "mask-v2-soft") are parsed correctly.
     pattern_primary = re.compile(r"^craftax_dreamerv3-(.+)-(\d+)$")
     # Fallback pattern: craftax_<method>-<seed>  (but NOT craftax_dreamerv3-*)
     pattern_fallback = re.compile(r"^craftax_(.+)-(\d+)$")
@@ -576,7 +594,9 @@ def interpolate_to_common_grid(all_steps, all_vals, n_points=INTERP_STEPS):
     grid = np.linspace(lo, hi, n_points)
     interped = []
     for s, v in zip(all_steps, all_vals):
-        interped.append(np.interp(grid, s, v))
+        # Use NaN for extrapolated regions to avoid silent flat extrapolation
+        # when the fallback range extends beyond a curve's actual data range.
+        interped.append(np.interp(grid, s, v, left=np.nan, right=np.nan))
     return grid, np.array(interped)
 
 
@@ -1019,9 +1039,9 @@ def figure_exploration_metrics(data):
 
     # Value overestimation ratio
     stats_lines.append("\n  Value Overestimation (imagined / actual at final point):")
+    imag_curves = build_curves(data, "online", "explore/imagined_value", smooth=30)
+    act_curves = build_curves(data, "online", "explore/actual_value", smooth=30)
     for mk in METHODS:
-        imag_curves = build_curves(data, "online", "explore/imagined_value", smooth=30)
-        act_curves = build_curves(data, "online", "explore/actual_value", smooth=30)
         ig, im = imag_curves[mk]
         ag, am = act_curves[mk]
         if ig is not None and ag is not None and im is not None and am is not None:
@@ -1067,9 +1087,9 @@ def figure_forgetting_and_frontier(data):
 
     # Peak forgetting analysis
     stats_lines.append("  Peak aggregate forgetting (max over training):")
+    forgetting_curves = build_curves(data, "online", "aggregate_forgetting", smooth=20)
     for mk in METHODS:
-        curves = build_curves(data, "online", "aggregate_forgetting", smooth=20)
-        grid, mat = curves[mk]
+        grid, mat = forgetting_curves[mk]
         if grid is not None and mat is not None:
             peak_per_seed = mat.max(axis=1)
             peak_step_per_seed = grid[mat.argmax(axis=1)]

@@ -84,13 +84,20 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   cp.step = step
   cp.agent = agent
   cp.replay = replay
-  # Never load checkpoint - always start fresh
-  # if args.from_checkpoint:
-  #   elements.checkpoint.load(args.from_checkpoint, dict(
-  #       agent=bind(agent.load, regex=args.from_checkpoint_regex)))
-  cp.save()
-
-  print('Start training loop (fresh start, no checkpoint loaded)')
+  # Load from checkpoint if resuming, otherwise save fresh checkpoint
+  if not getattr(args, 'fresh_start', True):
+    try:
+      cp.load()
+      print(f'Resumed from checkpoint at step {int(step)}')
+    except FileNotFoundError:
+      if hasattr(args, 'from_checkpoint') and args.from_checkpoint:
+        elements.checkpoint.load(args.from_checkpoint, dict(
+            agent=bind(agent.load, regex=args.from_checkpoint_regex)))
+      print('No checkpoint found, starting fresh')
+      cp.save()
+  else:
+    cp.save()
+    print('Start training loop (fresh start)')
   policy = lambda *args: agent.policy(*args, mode='train')
   driver.reset(agent.init_policy)
   while step < args.steps:

@@ -1,4 +1,5 @@
 import argparse
+import json
 
 def parse_minigrid_args(args=None):
     parser = argparse.ArgumentParser(description="Continual DV2 Minigrid")
@@ -7,7 +8,7 @@ def parse_minigrid_args(args=None):
                         help='Flag for continual learning loop.')
     parser.add_argument('--num_tasks', type=int, default=1)
     parser.add_argument('--num_task_repeats', type=int, default=1)
-    parser.add_argument('--steps', type=int, default=5e5)
+    parser.add_argument('--steps', type=int, default=500000)
     parser.add_argument('--env', type=int, default=0, help='picks the env for the single task dv2.')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--tag', type=str, default='', help='unique str to tag tb.')
@@ -29,17 +30,19 @@ def parse_minigrid_args(args=None):
     parser.add_argument('--embedding_dim', type=int, default=256,
                         help='Dimension of the embedding input.')
     # DV2
-    parser.add_argument('--replay_capacity', type=int, default=2e6)
-    parser.add_argument('--reservoir_sampling', default=True, action='store_true',
-                        help='Flag for using reservoir sampling.') 
+    parser.add_argument('--replay_capacity', type=int, default=2000000)
+    parser.add_argument('--reservoir_sampling', default=False, action='store_true',
+                        help='Flag for using reservoir sampling.')
+    parser.add_argument('--no_reservoir_sampling', dest='reservoir_sampling', action='store_false',
+                        help='Disable reservoir sampling.')
     parser.add_argument('--recent_past_sampl_thres', type=float, default=0.5,
                         help="probability of triangle distribution, expected to be > 0 and <= 1. 0 denotes taking episodes always from uniform distribution.")
     parser.add_argument('--minlen', type=int, default=50,
                         help="minimal episode length of episodes stored in the replay buffer")
     parser.add_argument('--batch_size', type=int, default=16,
                         help="mini-batch size")
-    parser.add_argument('--unbalanced_steps', type=list, default=None,
-                        help="number of steps per each task")
+    parser.add_argument('--unbalanced_steps', type=str, default=None,
+                        help="number of steps per each task (JSON list, e.g. '[100000, 200000]')")
 
     # exploration
     parser.add_argument('--plan2explore', default=False, action='store_true',
@@ -69,7 +72,7 @@ def parse_minihack_args(args=None):
                         help='Flag to delete the training episodes after running the script to save storage space.')
     parser.add_argument('--num_tasks', type=int, default=1)
     parser.add_argument('--num_task_repeats', type=int, default=1)
-    parser.add_argument('--steps', type=int, default=5e5)
+    parser.add_argument('--steps', type=int, default=500000)
     parser.add_argument('--train_every', type=int, default=10, help="")
 
     parser.add_argument('--seed', type=int, default=42)
@@ -98,7 +101,7 @@ def parse_minihack_args(args=None):
     # DV2
     parser.add_argument('--beta', type=float, default=1.0)
     parser.add_argument('--eta', type=float, default=3e-3)
-    parser.add_argument('--replay_capacity', type=int, default=2e6)
+    parser.add_argument('--replay_capacity', type=int, default=2000000)
     parser.add_argument('--rssm_stoch', type=int, default=32,
                         help="number of different stochastic latent variables in the wm")
     parser.add_argument('--rssm_discrete', type=int, default=32,
@@ -117,18 +120,19 @@ def parse_minihack_args(args=None):
                         help='Flag for using reward sampling.')
     parser.add_argument('--coverage_sampling', default=False, action='store_true',
                         help='Flag for using coverage maximization.')
-    parser.add_argument('--coverage_sampling_args', default={"filters": 64, 
-                            "kernel_size": [3,3], 
-                            "number_of_comparisons": 1000, 
-                            "normalize_lstm_state": True, 
-                            "distance": "euclid"}, action='store_true',
-                        help='Coverage maximization arguments.')
+    parser.add_argument('--coverage_sampling_args', type=json.loads,
+                        default={"filters": 64,
+                            "kernel_size": [3, 3],
+                            "number_of_comparisons": 1000,
+                            "normalize_lstm_state": True,
+                            "distance": "euclid"},
+                        help='Coverage maximization arguments (JSON string).')
     parser.add_argument('--minlen', type=int, default=50,
                         help="minimal episode length of episodes stored in the replay buffer")
     parser.add_argument('--batch_size', type=int, default=16,
                         help="mini-batch size")
-    parser.add_argument('--unbalanced_steps', type=list, default=None,
-                        help="number of steps per each task")
+    parser.add_argument('--unbalanced_steps', type=str, default=None,
+                        help="number of steps per each task (JSON list, e.g. '[100000, 200000]')")
     parser.add_argument('--sep_ac', default=False, action='store_true',
                         help='Flag for using separate Actor-Critics per task.')
 
@@ -162,7 +166,7 @@ def parse_craftax_args(args=None):
                         help='Flag to delete the training episodes after running the script to save storage space.')
     parser.add_argument('--num_tasks', type=int, default=1)
     parser.add_argument('--num_task_repeats', type=int, default=1)
-    parser.add_argument('--steps', type=int, default=5e5)
+    parser.add_argument('--steps', type=int, default=500000)
 
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--env', type=int, default=0, help='picks the env for the single task training.')
@@ -185,7 +189,7 @@ def parse_craftax_args(args=None):
                         help='Dimension of the embedding input.')
 
     # Training
-    parser.add_argument('--replay_capacity', type=int, default=2e6)
+    parser.add_argument('--replay_capacity', type=int, default=2000000)
     parser.add_argument('--batch_size', type=int, default=16,
                         help="mini-batch size (default 16, increase for better GPU utilization)")
     parser.add_argument('--batch_length', type=int, default=64,
@@ -194,23 +198,25 @@ def parse_craftax_args(args=None):
                         help="Training steps per env step (default: auto-scaled based on envs/batch_length)")
     parser.add_argument('--model_size', type=str, default='25m',
                         choices=['1m', '12m', '25m', '50m', '100m', '200m', '400m'],
-                        help="Model size preset (default 12m for Craftax). "
+                        help="Model size preset (default 25m). "
                              "12m~2GB, 25m~4GB, 50m~8GB, 100m~16GB, 200m~32GB+")
     parser.add_argument('--envs', type=int, default=None,
                         help='Number of parallel environments (override config run.envs).')
     parser.add_argument('--eval_envs', type=int, default=None,
                         help='Number of evaluation environments (override config run.eval_envs).')
-    parser.add_argument('--unbalanced_steps', type=list, default=None,
-                        help="number of steps per each task")
+    parser.add_argument('--unbalanced_steps', type=str, default=None,
+                        help="number of steps per each task (JSON list, e.g. '[100000, 200000]')")
 
     # Replay eviction strategy (PDF Section 4.1)
-    parser.add_argument('--reservoir_eviction', default=True, action='store_true',
+    parser.add_argument('--reservoir_eviction', default=False, action='store_true',
                         help='Use reservoir eviction (random item removal) instead of FIFO. PDF Section 4.1: Vitter 1985.')
     parser.add_argument('--no_reservoir_eviction', dest='reservoir_eviction', action='store_false',
                         help='Use FIFO eviction instead of reservoir.')
     # Deprecated alias for backward compatibility
     parser.add_argument('--reservoir_sampling', default=None, action='store_true',
                         help='(DEPRECATED: use --reservoir_eviction) Alias for reservoir eviction.')
+    parser.add_argument('--no_reservoir_sampling', dest='reservoir_sampling', action='store_false',
+                        help='(DEPRECATED: use --no_reservoir_eviction) Disable reservoir eviction.')
 
     # Replay sampling strategies (PDF Section 4.1)
     parser.add_argument('--reward_sampling', default=False, action='store_true',
@@ -283,9 +289,21 @@ def parse_craftax_args(args=None):
     parser.add_argument('--nlr_grid_eps', type=float, default=0.01,
                         help='Non-privileged NLR: epsilon added to bin counts for smoothing.')
 
+    # Intrinsic Reward (Spatial + Craft Novelty)
+    parser.add_argument('--intrinsic_spatial', default=False, action='store_true',
+                        help='Enable spatial + craft novelty intrinsic reward.')
+    parser.add_argument('--no_intrinsic_spatial', dest='intrinsic_spatial', action='store_false',
+                        help='Disable intrinsic reward.')
+    parser.add_argument('--alpha_spatial', type=float, default=0.1,
+                        help='Weight for spatial novelty intrinsic reward (default: 0.1).')
+    parser.add_argument('--alpha_craft', type=float, default=0.3,
+                        help='Weight for craft novelty intrinsic reward (default: 0.3).')
+    parser.add_argument('--alpha_e', type=float, default=1.0,
+                        help='Weight for extrinsic (environment) reward (default: 1.0).')
+
     # Exploration
     parser.add_argument('--plan2explore', default=True, action='store_true',
-                        help='Enable plan2explore exploration strategy (default: enabled).')
+                        help='Enable plan2explore exploration strategy (enabled by default; use --no_plan2explore to disable).')
     parser.add_argument('--no_plan2explore', dest='plan2explore', action='store_false',
                         help='Disable plan2explore exploration strategy.')
     parser.add_argument('--disag_models', type=int, default=10,
@@ -294,29 +312,18 @@ def parse_craftax_args(args=None):
                         help='Target for ensemble disagreement prediction (feat = deter + stoch).')
     parser.add_argument('--expl_intr_scale', type=float, default=0.9,
                         help="scale of the intrinsic reward (PDF Section 5.1: α_i=0.9).")
+    parser.add_argument('--expl_extr_scale', type=float, default=0.0,
+                        help="scale of the extrinsic reward for P2E explorer (0.0 = pure intrinsic).")
     parser.add_argument('--sep_exp_eval_policies', default=False, action='store_true',
                         help='Whether to use separate exploration and evaluation policies.')
     parser.add_argument('--rssm_full_recon', default=False, action='store_true',
                         help='Whether to have the WM reconstruct the obs, discount and rewards.')
 
-    # Spatial-counting + Craft-novelty intrinsic reward (PDF Section 4.2, Eq.10-13)
-    parser.add_argument('--intrinsic_spatial', default=False, action='store_true',
-                        help='Enable spatial-counting + craft-novelty intrinsic reward (Eq.10-12).')
-    parser.add_argument('--no_intrinsic_spatial', dest='intrinsic_spatial', action='store_false',
-                        help='Disable spatial-counting + craft-novelty intrinsic reward.')
-    parser.add_argument('--alpha_spatial', type=float, default=0.1,
-                        help='Spatial novelty weight (default 0.1). After independent adaptive '
-                             'normalization each component is scaled to match |r_extr|, so this '
-                             'is the true relative importance weight.')
-    parser.add_argument('--alpha_craft', type=float, default=0.3,
-                        help='Craft novelty weight (default 0.3). Independently normalized, so '
-                             'rare craft events get a proportionally larger scale factor.')
-    parser.add_argument('--alpha_e', type=float, default=1.0,
-                        help='Extrinsic reward scale alpha_e (default 1.0).')
-
     # Online metrics
     parser.add_argument('--online_metrics', default=True, action='store_true',
-                        help='Enable online continual-learning metrics logging.')
+                        help='Enable online continual-learning metrics logging (enabled by default; use --no_online_metrics to disable).')
+    parser.add_argument('--no_online_metrics', dest='online_metrics', action='store_false',
+                        help='Disable online continual-learning metrics logging.')
     parser.add_argument('--ref_metrics_path', type=str, default=None,
                         help='Path to reference metrics JSON for forward transfer.')
     parser.add_argument('--ref_metrics_dir', type=str, default=None,
@@ -328,7 +335,7 @@ def parse_craftax_args(args=None):
 
     # Checkpoint resumption
     parser.add_argument('--fresh_start', default=True, action='store_true',
-                        help='Start fresh (delete old checkpoints). Default: True.')
+                        help='Start fresh (delete old checkpoints). Enabled by default; use --resume to disable.')
     parser.add_argument('--resume', dest='fresh_start', action='store_false',
                         help='Resume from existing checkpoint if available.')
 
@@ -336,6 +343,17 @@ def parse_craftax_args(args=None):
     parser.add_argument('--jax_cache_clear_interval', type=int, default=0,
                         help='Clear JAX caches every N steps (0=disabled). '
                              'Needed if dynamic shapes cause cache growth.')
+
+    # Action masking (Craftax feasibility prior)
+    parser.add_argument('--action_mask_enabled', default=False, action='store_true',
+                        help='Enable action feasibility masking at actor sampling time.')
+    parser.add_argument('--action_mask_mode', type=str, default='soft',
+                        choices=['soft', 'hard', 'none'],
+                        help='Mask mode: soft (bias=-lambda*deficit), hard (block), none.')
+    parser.add_argument('--action_mask_lambda_penalty', type=float, default=5.0,
+                        help='Soft mode penalty weight (default 5.0).')
+    parser.add_argument('--action_mask_large_negative', type=float, default=1e9,
+                        help='Hard mode block magnitude (default 1e9).')
 
     args = parser.parse_known_args(args=args)[0]
 
@@ -376,7 +394,7 @@ def parse_navix_args(args=None):
                         help='Flag to delete the training episodes after running the script to save storage space.')
     parser.add_argument('--num_tasks', type=int, default=1)
     parser.add_argument('--num_task_repeats', type=int, default=1)
-    parser.add_argument('--steps', type=int, default=5e5)
+    parser.add_argument('--steps', type=int, default=500000)
     parser.add_argument('--max_steps', type=int, default=500,
                         help='Maximum steps per episode in NAVIX environment.')
 
@@ -402,7 +420,9 @@ def parse_navix_args(args=None):
 
     # Online metrics
     parser.add_argument('--online_metrics', default=True, action='store_true',
-                        help='Enable online continual-learning metrics logging.')
+                        help='Enable online continual-learning metrics logging (enabled by default; use --no_online_metrics to disable).')
+    parser.add_argument('--no_online_metrics', dest='online_metrics', action='store_false',
+                        help='Disable online continual-learning metrics logging.')
     parser.add_argument('--ref_metrics_path', type=str, default=None,
                         help='Path to reference metrics JSON for forward transfer.')
     parser.add_argument('--ref_metrics_dir', type=str, default=None,
@@ -415,11 +435,15 @@ def parse_navix_args(args=None):
                         help='Dimension of the embedding input.')
 
     # Training
-    parser.add_argument('--replay_capacity', type=int, default=2e6)
+    parser.add_argument('--replay_capacity', type=int, default=2000000)
     parser.add_argument('--batch_size', type=int, default=16,
                         help="mini-batch size")
-    parser.add_argument('--unbalanced_steps', type=list, default=None,
-                        help="number of steps per each task")
+    parser.add_argument('--batch_length', type=int, default=32,
+                        help="sequence length for training batches (default 32)")
+    parser.add_argument('--model_size', type=str, default='12m',
+                        help="model size preset (default: '12m')")
+    parser.add_argument('--unbalanced_steps', type=str, default=None,
+                        help="number of steps per each task (JSON list, e.g. '[100000, 200000]')")
 
     # Replay sampling strategies
     parser.add_argument('--reservoir_sampling', default=False, action='store_true',
@@ -457,6 +481,17 @@ def parse_navix_args(args=None):
                         help='Flag to decide whether to use a state bonus.')
     parser.add_argument('--eval_skills', default=False, action='store_true',
                         help='Flag evaluating our model on the multiskill envs.')
+
+    # Action masking (Craftax feasibility prior)
+    parser.add_argument('--action_mask_enabled', default=False, action='store_true',
+                        help='Enable action feasibility masking at actor sampling time.')
+    parser.add_argument('--action_mask_mode', type=str, default='soft',
+                        choices=['soft', 'hard', 'none'],
+                        help='Mask mode: soft (bias=-lambda*deficit), hard (block), none.')
+    parser.add_argument('--action_mask_lambda_penalty', type=float, default=5.0,
+                        help='Soft mode penalty weight (default 5.0).')
+    parser.add_argument('--action_mask_large_negative', type=float, default=1e9,
+                        help='Hard mode block magnitude (default 1e9).')
 
     args = parser.parse_known_args(args=args)[0]
     return args

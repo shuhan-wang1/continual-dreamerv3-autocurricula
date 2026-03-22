@@ -12,6 +12,7 @@ Experiment groups:
   B  Component ablation     (spatial-only vs craft-only vs both)
   D  Replay strategy       (50:50, NLR, NLU — privileged & non-privileged)
   E  Final model           (NLR replay + Spatial+Craft intrinsic)
+  F  Action masking        (soft mask, hard mask — with and without intrinsic)
 
 Output directory structure:
   experiment_results/ablation/
@@ -78,9 +79,10 @@ EXPERIMENTS = OrderedDict()
 # ---------- Group A: Core Comparison ----------
 EXPERIMENTS["A1_baseline"] = {
     "group": "A",
-    "desc": "Pure DreamerV3 (no P2E, no intrinsic)",
+    "desc": "Pure DreamerV3 (uniform replay, no P2E, no intrinsic)",
     "args": {
         "no_plan2explore": True,
+        "recent_frac": 0.0,
     },
 }
 EXPERIMENTS["A2_p2e"] = {
@@ -187,6 +189,32 @@ EXPERIMENTS["E1_nlr_intrinsic"] = {
         "alpha_spatial": 0.1,
         "alpha_craft": 0.3,
         "alpha_e": 1.0,
+    },
+}
+
+# ---------- Group F: Action Masking ----------
+# Evaluates soft vs hard feasibility masking in isolation.
+# Uses FIFO replay (no NLR/NLU), no intrinsic rewards, no P2E.
+# This isolates the pure effect of action masking on exploration.
+EXPERIMENTS["F1_mask_soft"] = {
+    "group": "F",
+    "desc": "Soft action mask (lambda=5.0, FIFO replay, no intrinsic, no P2E)",
+    "args": {
+        "no_plan2explore": True,
+        "no_intrinsic_spatial": True,
+        "action_mask_enabled": True,
+        "action_mask_mode": "soft",
+        "action_mask_lambda_penalty": 5.0,
+    },
+}
+EXPERIMENTS["F2_mask_hard"] = {
+    "group": "F",
+    "desc": "Hard action mask (block infeasible, FIFO replay, no intrinsic, no P2E)",
+    "args": {
+        "no_plan2explore": True,
+        "no_intrinsic_spatial": True,
+        "action_mask_enabled": True,
+        "action_mask_mode": "hard",
     },
 }
 
@@ -355,6 +383,7 @@ def print_experiment_table(experiments, seeds):
                 "B": "Component Ablation",
                 "D": "Replay Strategy Comparison",
                 "E": "Final Model (NLR + Intrinsic)",
+                "F": "Action Masking (Soft vs Hard)",
             }
             label = group_labels.get(current_group, current_group)
             print(f"  --- Group {current_group}: {label} ---")
@@ -382,10 +411,10 @@ def main():
                         help="Print commands without executing.")
     parser.add_argument("--only", type=str, default=None,
                         help="Run only these experiments (comma-separated IDs or group letters). "
-                             "E.g., --only A or --only A1_baseline,B2_craft_light")
+                             "E.g., --only A or --only A1_baseline,B2_craft_only")
     parser.add_argument("--skip", type=str, default=None,
                         help="Skip these experiments (comma-separated IDs or group letters). "
-                             "E.g., --skip D or --skip C1_low_intrinsic")
+                             "E.g., --skip D or --skip D1_nlr")
     parser.add_argument("--seeds", type=str, default="1,4,42",
                         help="Comma-separated seeds (default: 1,4,42).")
     parser.add_argument("--base_logdir", type=str, default=BASE_LOGDIR,
@@ -484,11 +513,20 @@ def main():
                           f"(already complete, status={prev_status})")
                     continue
 
-            # ETA calculation
+            # ETA calculation based on actually-executed runs (not skipped ones)
+            executed_so_far = completed + failed
             if run_times:
                 avg_time = sum(run_times) / len(run_times)
-                remaining = total_runs - run_idx + 1
-                eta = avg_time * remaining
+                remaining_total = total_runs - run_idx
+                # Estimate how many of the remaining runs will actually execute
+                # using the ratio of executed-to-seen so far (excluding current)
+                seen_so_far = run_idx - 1  # runs already processed before this one
+                if seen_so_far > 0:
+                    exec_ratio = executed_so_far / seen_so_far
+                else:
+                    exec_ratio = 1.0
+                remaining_exec = exec_ratio * remaining_total + 1  # +1 for current run
+                eta = avg_time * remaining_exec
                 eta_str = f"  ETA: {format_duration(eta)}"
             else:
                 eta_str = ""
@@ -518,6 +556,8 @@ def main():
             save_manifest(manifest_path, manifest)
 
             # Execute
+            result = None
+            status = "unknown"
             try:
                 result = subprocess.run(
                     cmd,
@@ -560,7 +600,7 @@ def main():
                 "status": status,
                 "duration_s": round(run_duration, 1),
                 "finished": datetime.now().isoformat(),
-                "return_code": result.returncode if "result" in dir() else -1,
+                "return_code": result.returncode if result is not None else -1,
             })
             save_manifest(manifest_path, manifest)
 

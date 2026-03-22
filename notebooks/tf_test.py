@@ -23,10 +23,12 @@ class SplitMnistGenerator():
         train_loader = DataLoader(train_dataset, batch_size=len(train_dataset))
         test_loader = DataLoader(test_dataset, batch_size=len(test_dataset))
 
-        self.X_train = next(iter(train_loader))[0].numpy().reshape(-1, 28*28)
-        self.X_test = next(iter(test_loader))[0].numpy().reshape(-1, 28*28)
-        self.train_label = next(iter(train_loader))[1].numpy()
-        self.test_label = next(iter(test_loader))[1].numpy()
+        train_batch = next(iter(train_loader))
+        test_batch = next(iter(test_loader))
+        self.X_train = train_batch[0].numpy().reshape(-1, 28*28)
+        self.X_test = test_batch[0].numpy().reshape(-1, 28*28)
+        self.train_label = train_batch[1].numpy()
+        self.test_label = test_batch[1].numpy()
 
         self.sets_0 = [0, 2, 4, 6, 8]
         self.sets_1 = [1, 3, 5, 7, 9]
@@ -103,18 +105,21 @@ def train(model, task_id, loss_fnc, optimizer, train_loader, no_epochs):
         # Single model [(28*28 x 256), (256,) (256 x 2), (2,)]
         # multiple models [(28*28 x 256), (256,) (256 x 2), (2,)] x num_tasks
 
+        train_loss.reset_states()
         for data, target in train_loader:
-            train_loss.reset_states()
+            # Only compute gradients for the active head's variables to avoid
+            # wasting computation on inactive heads (L23).
+            head_idx = 0 if model.single_head else task_id
+            active_vars = model.MLPs[head_idx].trainable_variables
             with tf.GradientTape() as tape:
                 # training=True is only needed if there are layers with different
                 # behavior during training versus inference (e.g. Dropout).
                 predictions = model(task_id, data)
                 loss = loss_fnc(one_hot(target), predictions)
-            gradients = tape.gradient(loss, model.trainable_variables)
-            # previous gradients are None, so we need to replace them with zeros
+            gradients = tape.gradient(loss, active_vars)
             gradients = [grad if grad is not None else tf.zeros_like(var) for var, grad in zip(
-                    model.trainable_variables, gradients)]
-            optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+                    active_vars, gradients)]
+            optimizer.apply_gradients(zip(gradients, active_vars))
             train_loss.update_state(loss)
 
         print(
@@ -131,9 +136,9 @@ def test(model, task_id, loss_fnc, test_loader):
     test_loss = tf.keras.metrics.Mean(name='test_loss')
     test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
 
+    test_accuracy.reset_states()
+    test_loss.reset_states()
     for data, target in test_loader:
-        test_accuracy.reset_states()
-        test_loss.reset_states()
         output = model(task_id, data)
         loss = loss_fnc(one_hot(target), output)
         test_loss.update_state(loss)
@@ -164,7 +169,7 @@ def run(no_epochs, data_gen, seed, single_head):
 
     all_acc = np.array([])
     
-    model_list = ListMLP(num_tasks=data_gen.max_iter, input_dim=28*28, output_size=2, hidden_dim=256, single_head=single_head)
+    model_list = ListMLP(num_tasks=data_gen.max_iter, input_dim=in_dim, output_size=out_dim, hidden_dim=256, single_head=single_head)
 
     loss = tf.keras.losses.BinaryCrossentropy(from_logits=True)
 

@@ -57,7 +57,7 @@ def setup(
     # CUDA_ERROR_ILLEGAL_ADDRESS on single-GPU setups.
     try:
       num_devices = len(jax.devices())
-    except:
+    except Exception:
       num_devices = 1
 
     if num_devices > 1:
