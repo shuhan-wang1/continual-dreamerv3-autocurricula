@@ -60,7 +60,7 @@ python train_craftax.py \
     --seed 1 \
     --steps 1000000000 \
     --envs 32 \
-    --batch_size 16 \
+    --batch_size 48 \
     --batch_length 64 \
     --model_size 25m \
     --resume \

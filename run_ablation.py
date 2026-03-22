@@ -55,7 +55,7 @@ from pathlib import Path
 # ============================================================================
 DEFAULTS = {
     "steps":           1_000_000_000,   # 1B steps
-    "batch_size":      16,
+    "batch_size":      48,
     "batch_length":    64,
     "envs":            32,              # A100 has enough VRAM for 32 parallel envs
     "model_size":      "25m",           # ~4GB VRAM, safe on A100-40G/80G
