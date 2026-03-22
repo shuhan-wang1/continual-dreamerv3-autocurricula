@@ -81,7 +81,11 @@ class Replay:
 
   def stats(self):
     ratio = lambda x, y: x / y if y else np.nan
-    m = self.metrics
+    with self.rwlock.writing:
+      # Atomically snapshot and reset metrics under the write lock
+      m = dict(self.metrics)
+      for key in self.metrics:
+        self.metrics[key] = 0
     chunk_nbytes = sum(x.nbytes for x in list(self.chunks.values()))
     stats = {
         'items': len(self.items),
@@ -96,9 +100,6 @@ class Replay:
     # Add pool utilization if sampler supports it
     if hasattr(self.sampler, 'get_pool_utilization'):
       stats.update(self.sampler.get_pool_utilization())
-    # Note: metrics are per-window (reset after each stats() call), not cumulative
-    for key in self.metrics:
-      self.metrics[key] = 0
     return stats
 
   @elements.timer.section('replay_add')
@@ -197,7 +198,7 @@ class Replay:
           is_online = False
         seq = self._getseq(chunkid, index, concat=False)
         return seq, is_online
-      except KeyError:
+      except (KeyError, IndexError):
         continue
 
   def _insert(self, chunkid, index):
@@ -225,13 +226,17 @@ class Replay:
     self.items[itemid] = (chunkid, index)
     stepids = self._getseq(chunkid, index, ['stepid'])['stepid']
     self.sampler[itemid] = stepids
-    self.fifo.append(itemid)
+    if self.eviction == 'fifo':
+      self.fifo.append(itemid)
     self._itemkey_positions[itemid] = len(self.item_keys)
     self.item_keys.append(itemid)
     self.last_inserted_itemid = itemid
 
   def _remove(self):
     """Remove the oldest item (FIFO eviction)."""
+    # Skip items already removed by reservoir eviction
+    while self.fifo and self.fifo[0] not in self.items:
+      self.fifo.popleft()
     itemid = self.fifo.popleft()
     self._remove_item(itemid)
     # Swap-and-pop for O(1) removal from item_keys
@@ -245,8 +250,8 @@ class Replay:
 
   def _remove_random(self, index):
     """Remove item at random index (reservoir eviction)."""
-    if index >= len(self.item_keys):
-      index = min(index, len(self.item_keys) - 1)
+    assert index < len(self.item_keys), (
+        f"reservoir eviction index {index} out of range {len(self.item_keys)}")
     itemid = self.item_keys[index]
     self._remove_item(itemid)
     # Swap-and-pop for O(1) removal from item_keys
@@ -256,10 +261,6 @@ class Replay:
       self.item_keys[index] = last
       self._itemkey_positions[last] = index
     self.item_keys.pop()
-    try:
-      self.fifo.remove(itemid)
-    except ValueError:
-      pass
 
   def _remove_item(self, itemid):
     """Remove a specific item from the buffer."""

@@ -183,22 +183,22 @@ def compute_mask_logging_stats(details, rules, raw_logits=None,
 
 
 def empty_mask_logging_stats(batch_shape, rules, context_missing=False):
-    """Create zero-valued logging tensors."""
+    """Create zero-valued logging tensors (each entry gets its own tensor)."""
     xp = _array_module()
-    zeros = xp.zeros(batch_shape, dtype=xp.float32)
     stats = {
-        "mask_penalty_mean": zeros,
-        "mask_infeasible_frac": zeros,
-        "mask_blocked_frac": zeros,
+        "mask_penalty_mean": xp.zeros(batch_shape, dtype=xp.float32),
+        "mask_infeasible_frac": xp.zeros(batch_shape, dtype=xp.float32),
+        "mask_blocked_frac": xp.zeros(batch_shape, dtype=xp.float32),
         "mask/context_missing": (
-            xp.ones(batch_shape, dtype=xp.float32) if context_missing else zeros),
-        "mask/place_table_prob_before": zeros,
-        "mask/place_table_prob_after": zeros,
+            xp.ones(batch_shape, dtype=xp.float32) if context_missing
+            else xp.zeros(batch_shape, dtype=xp.float32)),
+        "mask/place_table_prob_before": xp.zeros(batch_shape, dtype=xp.float32),
+        "mask/place_table_prob_after": xp.zeros(batch_shape, dtype=xp.float32),
     }
     for rule in rules.values():
         s = rule["metric_suffix"]
-        stats[f"mask/invalid_{s}_count"] = zeros
-        stats[f"mask/deficit_{s}"] = zeros
+        stats[f"mask/invalid_{s}_count"] = xp.zeros(batch_shape, dtype=xp.float32)
+        stats[f"mask/deficit_{s}"] = xp.zeros(batch_shape, dtype=xp.float32)
     return stats
 
 
@@ -237,12 +237,17 @@ def _set_last_axis(array, index, value, xp):
 
 
 def _array_module(arr=None):
-    """Return the appropriate array module for the given array, or default."""
+    """Return the appropriate array module for the given array, or default.
+
+    When arr is None, defaults to numpy. JAX is only used when the input
+    array is actually a JAX array, avoiding unexpected JAX usage in
+    CPU-only contexts.
+    """
     if arr is not None:
         if _HAS_JAX and isinstance(arr, jnp.ndarray):
             return jnp
         return np
-    return jnp if _HAS_JAX else np
+    return np
 
 
 def _softmax(logits):

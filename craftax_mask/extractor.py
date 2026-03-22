@@ -5,6 +5,8 @@ Returns a float32 array of shape (CONTEXT_SIZE,) matching the schema in rules.py
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 from .rules import CONTEXT_SIZE, C
@@ -14,6 +16,7 @@ _CLOSE_OFFSETS = [
     (0, -1), (0, 1), (-1, 0), (1, 0),   # cardinal
     (-1, -1), (-1, 1), (1, -1), (1, 1),  # diagonal
 ]
+_CLOSE_OFFSETS_ARR = np.array(_CLOSE_OFFSETS, dtype=np.int32)  # (8, 2) for vectorized use
 
 # Player direction -> row/col offset (constants.py DIRECTIONS)
 # 0=NOOP(0,0), 1=LEFT(0,-1), 2=RIGHT(0,1), 3=UP(-1,0), 4=DOWN(1,0)
@@ -23,6 +26,7 @@ _DIRECTIONS = {0: (0, 0), 1: (0, -1), 2: (0, 1), 3: (-1, 0), 4: (1, 0)}
 _BLOCK_IDS = {}
 _SOLID_SET = set()
 _CAN_PLACE_ITEM_SET = set()
+_CRAFTAX_AVAILABLE = False
 
 try:
     from craftax.craftax.constants import BlockType
@@ -40,8 +44,12 @@ try:
     # Blocks that can receive a torch (CAN_PLACE_ITEM_BLOCKS)
     _TORCH_NAMES = {'GRASS', 'SAND', 'PATH', 'FIRE_GRASS', 'ICE_GRASS'}
     _CAN_PLACE_ITEM_SET = {_BLOCK_IDS[n] for n in _TORCH_NAMES if n in _BLOCK_IDS}
+    _CRAFTAX_AVAILABLE = True
 except ImportError:
-    pass
+    warnings.warn(
+        "Craftax not installed — action mask context extraction will produce incorrect results",
+        RuntimeWarning,
+    )
 
 try:
     from craftax.craftax.constants import ItemType
@@ -59,14 +67,24 @@ for _n in ('ENCHANTMENT_TABLE_FIRE', 'ENCHANTMENT_TABLE_ICE'):
         _ENCHANT_TABLE_IDS.add(_BLOCK_IDS[_n])
 
 _GRASS_ID = _BLOCK_IDS.get('GRASS', None)
-_CRAFTING_TABLE_ID = _BLOCK_IDS.get('CRAFTING_TABLE', 11)
-_FURNACE_ID = _BLOCK_IDS.get('FURNACE', 12)
+
+_CRAFTING_TABLE_ID = _BLOCK_IDS.get('CRAFTING_TABLE', None)
+if _CRAFTING_TABLE_ID is None:
+    _CRAFTING_TABLE_ID = 11
+    warnings.warn("Using hardcoded CRAFTING_TABLE block ID=11", RuntimeWarning)
+
+_FURNACE_ID = _BLOCK_IDS.get('FURNACE', None)
+if _FURNACE_ID is None:
+    _FURNACE_ID = 12
+    warnings.warn("Using hardcoded FURNACE block ID=12", RuntimeWarning)
 _MONSTERS_TO_CLEAR = 8
 _MAX_PROJECTILES = 3
 
 
 def extract_mask_context(state) -> np.ndarray:
     """Extract a flat float32 context array of shape (CONTEXT_SIZE,) from EnvState."""
+    if not _CRAFTAX_AVAILABLE:
+        raise RuntimeError("Craftax constants required for mask extraction")
     ctx = np.zeros(CONTEXT_SIZE, dtype=np.float32)
 
     # --- Inventory ---
@@ -133,6 +151,10 @@ def extract_mask_context(state) -> np.ndarray:
 
     player_dir = int(_scalar(getattr(state, 'player_direction', 0)))
 
+    # Fetch item_map once for reuse in both facing checks and ladder checks
+    item_map = getattr(state, 'item_map', None)
+    im = np.asarray(item_map) if item_map is not None else None
+
     map_arr = getattr(state, 'map', None)
     if map_arr is not None:
         full_map = np.asarray(map_arr)
@@ -149,53 +171,55 @@ def extract_mask_context(state) -> np.ndarray:
             h, w = level_map.shape[:2]
 
             # Proximity: exact 8-cell adjacency (matches CLOSE_BLOCKS)
-            near_table = False
-            near_furnace = False
-            for dr, dc in _CLOSE_OFFSETS:
-                nr, nc = px + dr, py + dc
-                if 0 <= nr < h and 0 <= nc < w:
-                    block = int(level_map[nr, nc])
-                    if block == _CRAFTING_TABLE_ID:
-                        near_table = True
-                    if block == _FURNACE_ID:
-                        near_furnace = True
-            ctx[C.NEAR_TABLE] = float(near_table)
-            ctx[C.NEAR_FURNACE] = float(near_furnace)
+            # Vectorized: compute all 8 neighbor positions at once
+            neighbor_pos = _CLOSE_OFFSETS_ARR + np.array([px, py], dtype=np.int32)  # (8, 2)
+            valid = (
+                (neighbor_pos[:, 0] >= 0) & (neighbor_pos[:, 0] < h)
+                & (neighbor_pos[:, 1] >= 0) & (neighbor_pos[:, 1] < w)
+            )
+            valid_rows = neighbor_pos[valid, 0]
+            valid_cols = neighbor_pos[valid, 1]
+            neighbor_blocks = level_map[valid_rows, valid_cols]
+            ctx[C.NEAR_TABLE] = float(np.any(neighbor_blocks == _CRAFTING_TABLE_ID))
+            ctx[C.NEAR_FURNACE] = float(np.any(neighbor_blocks == _FURNACE_ID))
 
             # Facing block checks
-            dr, dc = _DIRECTIONS.get(player_dir, (0, 0))
-            fr, fc = px + dr, py + dc
-            if 0 <= fr < h and 0 <= fc < w:
-                facing_block = int(level_map[fr, fc])
-                facing_is_solid = facing_block in _SOLID_SET
-
-                # Check item_map for items at facing position
-                item_map = getattr(state, 'item_map', None)
+            if player_dir == 0:
+                # NOOP direction: no valid facing tile
+                facing_block = -1
+                facing_is_solid = False
                 facing_has_item = False
-                if item_map is not None:
-                    im = np.asarray(item_map)
-                    if im.ndim >= 3 and level_idx < im.shape[0]:
-                        facing_has_item = int(im[level_idx, fr, fc]) != _ITEM_NONE
-                    elif im.ndim == 2:
-                        facing_has_item = int(im[fr, fc]) != _ITEM_NONE
+                ctx[C.FACING_PLACEABLE] = 0.0
+            else:
+                dr, dc = _DIRECTIONS.get(player_dir, (0, 0))
+                fr, fc = px + dr, py + dc
+                if 0 <= fr < h and 0 <= fc < w:
+                    facing_block = int(level_map[fr, fc])
+                    facing_is_solid = facing_block in _SOLID_SET
 
-                ctx[C.FACING_PLACEABLE] = float(not facing_is_solid and not facing_has_item)
-                ctx[C.FACING_GRASS] = float(
-                    _GRASS_ID is not None and facing_block == _GRASS_ID and not facing_has_item)
-                ctx[C.FACING_ENCHANT_TABLE] = float(facing_block in _ENCHANT_TABLE_IDS)
-                ctx[C.FACING_FIRE_TABLE] = float(
-                    'ENCHANTMENT_TABLE_FIRE' in _BLOCK_IDS
-                    and facing_block == _BLOCK_IDS['ENCHANTMENT_TABLE_FIRE'])
-                ctx[C.FACING_ICE_TABLE] = float(
-                    'ENCHANTMENT_TABLE_ICE' in _BLOCK_IDS
-                    and facing_block == _BLOCK_IDS['ENCHANTMENT_TABLE_ICE'])
-                ctx[C.FACING_TORCH_PLACEABLE] = float(
-                    facing_block in _CAN_PLACE_ITEM_SET and not facing_has_item)
+                    # Check item_map for items at facing position
+                    facing_has_item = False
+                    if im is not None:
+                        if im.ndim >= 3 and level_idx < im.shape[0]:
+                            facing_has_item = int(im[level_idx, fr, fc]) != _ITEM_NONE
+                        elif im.ndim == 2:
+                            facing_has_item = int(im[fr, fc]) != _ITEM_NONE
+
+                    ctx[C.FACING_PLACEABLE] = float(not facing_is_solid and not facing_has_item)
+                    ctx[C.FACING_GRASS] = float(
+                        _GRASS_ID is not None and facing_block == _GRASS_ID and not facing_has_item)
+                    ctx[C.FACING_ENCHANT_TABLE] = float(facing_block in _ENCHANT_TABLE_IDS)
+                    ctx[C.FACING_FIRE_TABLE] = float(
+                        'ENCHANTMENT_TABLE_FIRE' in _BLOCK_IDS
+                        and facing_block == _BLOCK_IDS['ENCHANTMENT_TABLE_FIRE'])
+                    ctx[C.FACING_ICE_TABLE] = float(
+                        'ENCHANTMENT_TABLE_ICE' in _BLOCK_IDS
+                        and facing_block == _BLOCK_IDS['ENCHANTMENT_TABLE_ICE'])
+                    ctx[C.FACING_TORCH_PLACEABLE] = float(
+                        facing_block in _CAN_PLACE_ITEM_SET and not facing_has_item)
 
     # --- Ladder checks ---
-    item_map = getattr(state, 'item_map', None)
-    if item_map is not None:
-        im = np.asarray(item_map)
+    if im is not None:
         item_at_player = _ITEM_NONE
         if im.ndim >= 3 and level_idx < im.shape[0]:
             if 0 <= px < im.shape[1] and 0 <= py < im.shape[2]:
@@ -222,6 +246,9 @@ def extract_mask_context(state) -> np.ndarray:
             if m.ndim >= 2 and level_idx < m.shape[0]:
                 active = int(m[level_idx].sum())
                 ctx[C.PROJECTILE_SLOTS] = float(active < _MAX_PROJECTILES)
+            elif m.ndim == 1:
+                active = int(m.sum())
+                ctx[C.PROJECTILE_SLOTS] = float(active < _MAX_PROJECTILES)
 
     return ctx
 
@@ -232,4 +259,7 @@ def _scalar(x) -> float:
         return float(np.asarray(x).item())
     except (ValueError, TypeError):
         arr = np.asarray(x).flatten()
-        return float(arr[0]) if arr.size > 0 else 0.0
+        if arr.size > 0:
+            return float(arr[0])
+        warnings.warn(f"_scalar received unconvertible value: {type(x)}", RuntimeWarning)
+        return 0.0

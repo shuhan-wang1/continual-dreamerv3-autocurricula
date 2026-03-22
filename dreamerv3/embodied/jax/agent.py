@@ -73,9 +73,7 @@ class Agent(embodied.Agent):
     elements.print(f'JAX devices ({jax.device_count()}):', available)
     if self.jaxcfg.expect_devices > 0:
       if len(available) != self.jaxcfg.expect_devices:
-        print('ALERT: Wrong number of devices')
-        while True:
-          time.sleep(1)
+        raise RuntimeError(f"Expected {self.jaxcfg.expect_devices} devices but found {len(available)}")
     assert len(available) == jax.process_count() * jax.local_device_count()
     flatten = lambda x: x.reshape(-1).tolist()
     devices = np.array(available).reshape(

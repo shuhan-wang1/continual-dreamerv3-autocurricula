@@ -96,11 +96,14 @@ class Agent(embodied.jax.Agent):
           act='silu', norm='rms', outscale=1.0,
           winit='trunc_normal_in',
           name='mask_ctx')
-      # Dream mask warmup: the head trains from step 0, but its predictions
-      # are only used in imagination after warmup. This flag is set by the
-      # training loop once enough steps have passed. The periodic
-      # jax.clear_caches() call causes re-tracing so the flag change is
-      # picked up.
+      # WARNING: _dream_mask_active controls whether the mask is applied during
+      # imagination. Because self.loss() is JIT-compiled, this Python-level
+      # boolean is baked into the traced graph. Changing it has NO effect
+      # until jax.clear_caches() is called to force re-tracing. The training
+      # loop (train_craftax.py) is responsible for:
+      #   1. Setting agent.model._dream_mask_active = True
+      #   2. Immediately calling jax.clear_caches()
+      # If you modify this mechanism, ensure both steps always happen together.
       self._dream_mask_active = False
 
     # Plan2Explore (P2E) ensemble for intrinsic exploration reward
@@ -346,9 +349,12 @@ class Agent(embodied.jax.Agent):
         # Use .loss() instead of .log_prob() - returns negative log prob
         disag_loss = disag_loss + pred.loss(disag_tgt)
       disag_loss = disag_loss / self._disag_models
-      # Repeat last valid value to [B, T] (avoids diluting mean with zeros)
+      # Pad to [B, T] with the batch-wise mean of disag_loss so that the
+      # padded value neither biases toward the last timestep (old behaviour)
+      # nor dilutes the mean with zeros.
+      pad_val = disag_loss.mean(axis=1, keepdims=True)  # [B, 1]
       losses['disag'] = jnp.concatenate(
-          [disag_loss, disag_loss[:, -1:]], axis=1)
+          [disag_loss, pad_val], axis=1)
 
     # Mask context prediction loss (train head to predict action_mask_context
     # from RSSM features, enabling mask application during imagination).
@@ -365,9 +371,9 @@ class Agent(embodied.jax.Agent):
     K = min(self.config.imag_last or T, T)
     H = self.config.imag_length
     starts = self.dyn.starts(dyn_entries, dyn_carry, K)
-    # Dream masking: only apply after warmup (self._dream_mask_active is set
-    # by the training loop; jax.clear_caches() triggers re-trace so this
-    # Python-level flag is picked up).
+    # Dream masking: only apply after warmup. WARNING: _dream_mask_active is
+    # a Python-level flag baked into the JIT trace. It only takes effect
+    # after jax.clear_caches() forces re-tracing. See __init__ for details.
     if self.action_mask_enabled and self._dream_mask_active:
       def policyfn(feat):
         ft = self.feat2tensor(feat)
@@ -563,13 +569,13 @@ class Agent(embodied.jax.Agent):
       eps: float = 1e-20,
       beta1: float = 0.9,
       beta2: float = 0.999,
-      momentum: bool = True,
       nesterov: bool = False,
       wd: float = 0.0,
       wdregex: str = r'/kernel$',
       schedule: str = 'const',
       warmup: int = 1000,
       anneal: int = 0,
+      **_kwargs,  # absorb unused config keys (e.g. legacy 'momentum')
   ):
     chain = []
     chain.append(embodied.jax.opt.clip_by_agc(agc))

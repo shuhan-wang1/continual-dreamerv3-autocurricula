@@ -63,7 +63,7 @@ def find_logdir(path: str) -> str:
 
 def resolve_key(records: List[Dict], base: str, prefixes=("", "episode/")) -> Optional[str]:
     """Find the actual key in records, trying multiple prefixes."""
-    sample = records[:100]
+    sample = records[:500]
     for pfx in prefixes:
         candidate = pfx + base
         if any(candidate in r and r[candidate] is not None for r in sample):
@@ -219,8 +219,8 @@ def diag_mask_ctx_convergence(train_records, outdir, fmt):
     rolling_std = np.array([np.std(v[i:i+window]) for i in range(len(rolling_mean))])
     ax.plot(s[:len(rolling_mean)], rolling_mean, color="tab:red", label="rolling mean")
     ax.fill_between(s[:len(rolling_mean)],
-                    smooth(v[:len(rolling_mean)] - rolling_std[:len(rolling_mean)], 50),
-                    smooth(v[:len(rolling_mean)] + rolling_std[:len(rolling_mean)], 50),
+                    rolling_mean - rolling_std,
+                    rolling_mean + rolling_std,
                     alpha=0.15, color="tab:red", label="±1 std")
     ax.set_title("Rolling Statistics", fontsize=12)
     ax.set_xlabel("Step")
@@ -252,7 +252,7 @@ def diag_mask_ctx_convergence(train_records, outdir, fmt):
     return "\n".join(lines)
 
 
-def diag_mask_activity(online_records, outdir, fmt):
+def diag_mask_activity(online_records, outdir, fmt, total_actions=42):
     """Panel 3: Mask activity — infeasible fraction, penalty magnitude."""
     metrics = [
         ("mask_penalty_mean", "Mean Penalty", "tab:orange"),
@@ -301,7 +301,7 @@ def diag_mask_activity(online_records, outdir, fmt):
     lines = ["=" * 70, "  DIAGNOSTIC 3: Mask Activity", "=" * 70]
     if "Infeasible Fraction" in found:
         s, v, _ = found["Infeasible Fraction"]
-        total_actions = 42  # Craftax full action space size
+        # total_actions is passed as a parameter (default 42 for Craftax)
         early = v[:max(1, len(v)//10)]
         late = v[max(0, len(v) - len(v)//10):]
         lines.append(f"  Total actions: {total_actions}")
@@ -425,9 +425,14 @@ def diag_before_after_warmup(online_records, outdir, fmt):
 
         bm = np.nanmean(v[before_mask]) if before_mask.any() else float("nan")
         am = np.nanmean(v[after_mask]) if after_mask.any() else float("nan")
-        delta = am - bm
-        pct = delta / abs(bm) * 100 if bm != 0 and not math.isnan(bm) else 0
-        lines.append(f"  {label:<25} {bm:>12.4f} {am:>12.4f} {delta:>+12.4f} {pct:>+9.1f}%")
+        if math.isnan(bm) or math.isnan(am):
+            bm_str = f"{bm:>12.4f}" if not math.isnan(bm) else "         N/A"
+            am_str = f"{am:>12.4f}" if not math.isnan(am) else "         N/A"
+            lines.append(f"  {label:<25} {bm_str} {am_str} {'         N/A':>12} {'    N/A':>10}")
+        else:
+            delta = am - bm
+            pct = delta / abs(bm) * 100 if bm != 0 else 0
+            lines.append(f"  {label:<25} {bm:>12.4f} {am:>12.4f} {delta:>+12.4f} {pct:>+9.1f}%")
 
     fig.suptitle("Diagnostic 5: Dream Mask Warmup Effect", fontsize=14)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
@@ -437,7 +442,7 @@ def diag_before_after_warmup(online_records, outdir, fmt):
     return "\n".join(lines)
 
 
-def diag_parameter_recommendations(online_records, train_records):
+def diag_parameter_recommendations(online_records, train_records, lambda_penalty=None, total_actions=42):
     """Panel 6: Automated parameter recommendations."""
     lines = ["=" * 70, "  DIAGNOSTIC 6: Parameter Recommendations", "=" * 70]
 
@@ -482,13 +487,21 @@ def diag_parameter_recommendations(online_records, train_records):
         _, pv = get_series(online_records, pen_key)
         if len(pv) > 0:
             pen_mean = np.nanmean(pv)
-            lines.append(f"\n  [lambda_penalty] Current: 5.0 (soft mode)")
+            # Try to extract actual lambda from records, fall back to parameter/default
+            if lambda_penalty is None:
+                lp_key = resolve_key(online_records, "lambda_penalty", ("", "episode/", "config/"))
+                if lp_key:
+                    _, lp_vals = get_series(online_records, lp_key)
+                    lambda_penalty = float(lp_vals[-1]) if len(lp_vals) > 0 else 5.0
+                else:
+                    lambda_penalty = 5.0
+            lines.append(f"\n  [lambda_penalty] Current: {lambda_penalty} (soft mode)")
             lines.append(f"    Mean penalty per step: {pen_mean:.4f}")
             if pen_mean < 0.1:
                 lines.append(f"    → Most actions are feasible. Penalty is appropriate.")
             elif pen_mean < 1.0:
                 lines.append(f"    → Moderate masking. Lambda seems reasonable.")
-            elif pen_mean < 5.0:
+            elif pen_mean < lambda_penalty:
                 lines.append(f"    → Heavy masking. Consider if this is expected for early game.")
             else:
                 lines.append(f"    → Very heavy masking. Lambda may be too high for soft mode.")
@@ -501,7 +514,7 @@ def diag_parameter_recommendations(online_records, train_records):
             inf_mean = np.nanmean(iv)
             lines.append(f"\n  [effective_action_space]")
             lines.append(f"    Mean infeasible fraction: {inf_mean:.3f}")
-            lines.append(f"    Effective actions: ~{42 - int(42 * inf_mean)}/{42}")
+            lines.append(f"    Effective actions: ~{total_actions - int(total_actions * inf_mean)}/{total_actions}")
             if inf_mean > 0.8:
                 lines.append(f"    → WARNING: >80% actions masked — agent is very constrained.")
                 lines.append(f"      This is normal in early Craftax (no items), but if persistent,")

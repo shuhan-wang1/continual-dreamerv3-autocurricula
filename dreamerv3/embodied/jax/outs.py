@@ -204,6 +204,12 @@ class Binary(Output):
     prob = jax.nn.sigmoid(self.logit)
     return jax.random.bernoulli(seed, prob, shape + self.logit.shape)
 
+  def entropy(self):
+    p = jax.nn.sigmoid(self.logit)
+    logp = jax.nn.log_sigmoid(self.logit)
+    lognotp = jax.nn.log_sigmoid(-self.logit)
+    return -(p * logp + (1 - p) * lognotp)
+
 
 class Categorical(Output):
 

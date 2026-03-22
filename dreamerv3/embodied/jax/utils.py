@@ -10,9 +10,6 @@ sg = jax.lax.stop_gradient
 f32 = jnp.float32
 i32 = jnp.int32
 
-COMPUTE_DTYPE = jnp.bfloat16
-
-
 class Normalize(nj.Module):
 
   rate: float = 0.01
@@ -118,7 +115,7 @@ class SlowModel:
     [self.model.write(k, v) for k, v in values.items()]
     self.count.write(self.count.read() + 1)
 
-  def _initonce(self, *args, method=None, **kwargs):
+  def _initonce(self):
     assert self.source.values, 'no parameters to track'
     if not self.model.values:
       p = self.model.path + '/'

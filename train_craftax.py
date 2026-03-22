@@ -666,7 +666,7 @@ class CraftaxWrapper(embodied.Env):
         
         # Setup embedding projection on GPU and JIT the processing function
         if use_embedding:
-            rng = np.random.default_rng(42)
+            rng = np.random.default_rng(seed)
             flat_dim = int(np.prod(self._obs_shape))
             projection_np = rng.standard_normal((flat_dim, embedding_dim)).astype(np.float32)
             projection_np /= np.sqrt(flat_dim)
@@ -889,13 +889,15 @@ class VectorCraftaxEnv:
 
     def __init__(self, env_name='CraftaxSymbolic-v1', num_envs=16,
                  embedding_dim=256, use_embedding=True, seed=42,
-                 track_achievements=True, use_action_mask=False):
+                 track_achievements=True, use_action_mask=False,
+                 intrinsic_shaper=None):
         self._env_name = env_name
         self._num_envs = num_envs
         self._embedding_dim = embedding_dim
         self._use_embedding = use_embedding
         self._track_achievements = track_achievements
         self._use_action_mask = use_action_mask
+        self._intrinsic_shaper = intrinsic_shaper
 
         # Create one Craftax env to get params / spaces
         if 'Classic' in env_name:
@@ -927,7 +929,7 @@ class VectorCraftaxEnv:
 
         # Projection for embedding (on GPU)
         if use_embedding:
-            rng = np.random.default_rng(42)
+            rng = np.random.default_rng(seed)
             flat_dim = int(np.prod(self._obs_shape))
             proj = rng.standard_normal((flat_dim, embedding_dim)).astype(np.float32)
             proj /= np.sqrt(flat_dim)
@@ -1136,7 +1138,7 @@ class VectorCraftaxEnv:
             reset_jnp[:, None] if obs_raw.ndim == 2 else reset_jnp.reshape(-1, *([1]*(obs_raw.ndim-1))),
             self._obs_jax, obs_raw)
 
-        self._dones = dones_final
+        self._dones = np.asarray(dones_final)
 
         # Process observations (embedding projection) — all on GPU, one call
         processed = self._process_obs(self._obs_jax)
@@ -1152,10 +1154,17 @@ class VectorCraftaxEnv:
         # Terminal = died (health <= 0); truncated = timeout (should bootstrap)
         is_terminal = is_last & (np.asarray(health_np, dtype=np.float32) <= 0)
 
+        rewards_out = np.asarray(rewards_np, dtype=np.float32)
+        # Apply intrinsic reward shaping (spatial + craft novelty)
+        if self._intrinsic_shaper is not None:
+            raw_obs_np = np.asarray(jax.device_get(self._obs_jax), dtype=np.float32)
+            rewards_out = self._intrinsic_shaper.shape_rewards_batch(
+                raw_obs_np, rewards_out, is_first)
+
         key = 'embedding' if self._use_embedding else 'image'
         result = {
             key: np.asarray(processed_np, dtype=np.float32),
-            'reward': np.asarray(rewards_np, dtype=np.float32),
+            'reward': rewards_out,
             'is_first': is_first,
             'is_last': is_last,
             'is_terminal': is_terminal,
@@ -1708,7 +1717,8 @@ def train_single(make_env, config, args, env_name=None):
         make_env: Callable(seed: int) -> embodied.Env that creates one env instance.
         env_name: If provided, use VectorCraftaxEnv for GPU-vectorised envs.
     """
-    np.random.seed(config.seed)
+    # Seed numpy RNG for reproducibility
+    _rng = np.random.default_rng(config.seed)
     logdir = elements.Path(config.logdir)
 
     # Always start fresh: remove old logdir contents (replay, checkpoints)
@@ -1730,6 +1740,18 @@ def train_single(make_env, config, args, env_name=None):
     use_embedding = getattr(args, 'input_type', 'embedding') == 'embedding'
     embedding_dim = getattr(args, 'embedding_dim', 256)
 
+    # Intrinsic reward shaping
+    intrinsic_shaper = None
+    if getattr(args, 'intrinsic_spatial', False):
+        from intrinsic_reward import IntrinsicRewardShaper
+        intrinsic_shaper = IntrinsicRewardShaper(
+            alpha_spatial=getattr(args, 'alpha_spatial', 0.1),
+            alpha_craft=getattr(args, 'alpha_craft', 0.3),
+            alpha_e=getattr(args, 'alpha_e', 1.0),
+        )
+        print(f'Intrinsic reward enabled: alpha_spatial={intrinsic_shaper.alpha_spatial}, '
+              f'alpha_craft={intrinsic_shaper.alpha_craft}, alpha_e={intrinsic_shaper.alpha_e}')
+
     if env_name is not None and CRAFTAX_AVAILABLE:
         # === Vectorised path: single process, single CUDA context ===
         print(f'Creating {num_envs} vectorised Craftax envs (env={env_name}).')
@@ -1737,7 +1759,8 @@ def train_single(make_env, config, args, env_name=None):
             env_name=env_name, num_envs=num_envs,
             embedding_dim=embedding_dim, use_embedding=use_embedding,
             seed=config.seed,
-            use_action_mask=getattr(args, 'action_mask_enabled', False))
+            use_action_mask=getattr(args, 'action_mask_enabled', False),
+            intrinsic_shaper=intrinsic_shaper)
         driver = VectorDriver(vec_env)
         # Use a lightweight single env for agent space inference
         tmp_env = wrap_env(make_env(config.seed))
@@ -1831,11 +1854,11 @@ def train_single(make_env, config, args, env_name=None):
             if nlr_active:
                 keys = episode_item_keys.get(worker, [])
                 if keys:
-                    if nlr_privileged:
+                    if nlr_privileged and hasattr(replay, 'update_nlr_episode'):
                         achievements = episode_achievements.get(
                             worker, np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_))
                         replay.update_nlr_episode(achievements, float(score), keys)
-                    else:
+                    elif not nlr_privileged and hasattr(replay, 'update_nlr_episode_nonpriv'):
                         replay.update_nlr_episode_nonpriv(int(length), float(score), keys)
 
             if online is not None:
@@ -2032,8 +2055,9 @@ def train_single(make_env, config, args, env_name=None):
             cp.save()
         # Periodically clear JAX caches to prevent memory accumulation
         # that causes CUDA_ERROR_ILLEGAL_ADDRESS after ~15k steps
-        _cache_interval = getattr(args, 'jax_cache_clear_interval', 0) or 50000
-        if step.value % _cache_interval < collect_steps and step.value > 0:
+        _raw_cache_interval = getattr(args, 'jax_cache_clear_interval', 0)
+        _cache_interval = _raw_cache_interval if _raw_cache_interval > 0 else None
+        if _cache_interval is not None and step.value % _cache_interval < collect_steps and step.value > 0:
             jax.clear_caches()
 
     cp.save()
@@ -2050,7 +2074,8 @@ def cl_train_loop(make_envs, config, args, env_names=None):
         make_envs: List of Callable(seed: int) -> embodied.Env, one per task.
         env_names: Optional list of Craftax env name strings for vectorised path.
     """
-    np.random.seed(config.seed)
+    # Seed numpy RNG for reproducibility
+    _rng = np.random.default_rng(config.seed)
 
     unbalanced_steps = None
     if args.unbalanced_steps not in [None, 'None', 'none']:
@@ -2074,6 +2099,19 @@ def cl_train_loop(make_envs, config, args, env_names=None):
     print('Logdir:', logdir)
 
     num_envs = config.run.envs
+
+    # Intrinsic reward shaping
+    intrinsic_shaper = None
+    if getattr(args, 'intrinsic_spatial', False):
+        from intrinsic_reward import IntrinsicRewardShaper
+        intrinsic_shaper = IntrinsicRewardShaper(
+            alpha_spatial=getattr(args, 'alpha_spatial', 0.1),
+            alpha_craft=getattr(args, 'alpha_craft', 0.3),
+            alpha_e=getattr(args, 'alpha_e', 1.0),
+        )
+        print(f'Intrinsic reward enabled: alpha_spatial={intrinsic_shaper.alpha_spatial}, '
+              f'alpha_craft={intrinsic_shaper.alpha_craft}, alpha_e={intrinsic_shaper.alpha_e}')
+
     env0 = wrap_env(make_envs[0](config.seed))
 
     agent = make_agent(config, env0, args)
@@ -2318,7 +2356,8 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                     env_name=task_env_name, num_envs=num_envs,
                     embedding_dim=embedding_dim, use_embedding=use_embedding,
                     seed=config.seed,
-                    use_action_mask=getattr(args, 'action_mask_enabled', False))
+                    use_action_mask=getattr(args, 'action_mask_enabled', False),
+                    intrinsic_shaper=intrinsic_shaper)
                 driver = VectorDriver(vec_env)
             else:
                 env_fns = [lambda i=i, fn=make_task_env: wrap_env(fn(config.seed + i)) for i in range(num_envs)]
@@ -2386,7 +2425,8 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                 if step.value % 10000 < collect_steps:
                     cp.save()
                 # Periodically clear JAX caches to prevent memory accumulation
-                _cache_interval = getattr(args, 'jax_cache_clear_interval', 0) or 50000
+                _raw_cache_interval = getattr(args, 'jax_cache_clear_interval', 0)
+                _cache_interval = _raw_cache_interval if _raw_cache_interval > 0 else 50000
                 if total_step.value % _cache_interval < collect_steps and total_step.value > 0:
                     jax.clear_caches()
 

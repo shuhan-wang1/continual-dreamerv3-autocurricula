@@ -145,6 +145,8 @@ def create_layer_callback(mesh, partition_rules):
           if not hasattr(type(y), 'tracer_sharding'):
             type(y).tracer_sharding = property(
                 lambda self: TRACER_SHARDINGS[id(self)])
+          if len(TRACER_SHARDINGS) > 10000:
+            TRACER_SHARDINGS.clear()
           TRACER_SHARDINGS[id(y)] = sharding
           return y
         return jax.tree.map(apply, y)

@@ -289,9 +289,21 @@ def parse_craftax_args(args=None):
     parser.add_argument('--nlr_grid_eps', type=float, default=0.01,
                         help='Non-privileged NLR: epsilon added to bin counts for smoothing.')
 
+    # Intrinsic Reward (Spatial + Craft Novelty)
+    parser.add_argument('--intrinsic_spatial', default=False, action='store_true',
+                        help='Enable spatial + craft novelty intrinsic reward.')
+    parser.add_argument('--no_intrinsic_spatial', dest='intrinsic_spatial', action='store_false',
+                        help='Disable intrinsic reward.')
+    parser.add_argument('--alpha_spatial', type=float, default=0.1,
+                        help='Weight for spatial novelty intrinsic reward (default: 0.1).')
+    parser.add_argument('--alpha_craft', type=float, default=0.3,
+                        help='Weight for craft novelty intrinsic reward (default: 0.3).')
+    parser.add_argument('--alpha_e', type=float, default=1.0,
+                        help='Weight for extrinsic (environment) reward (default: 1.0).')
+
     # Exploration
     parser.add_argument('--plan2explore', default=True, action='store_true',
-                        help='Enable plan2explore exploration strategy (default: enabled).')
+                        help='Enable plan2explore exploration strategy (enabled by default; use --no_plan2explore to disable).')
     parser.add_argument('--no_plan2explore', dest='plan2explore', action='store_false',
                         help='Disable plan2explore exploration strategy.')
     parser.add_argument('--disag_models', type=int, default=10,
@@ -309,7 +321,7 @@ def parse_craftax_args(args=None):
 
     # Online metrics
     parser.add_argument('--online_metrics', default=True, action='store_true',
-                        help='Enable online continual-learning metrics logging.')
+                        help='Enable online continual-learning metrics logging (enabled by default; use --no_online_metrics to disable).')
     parser.add_argument('--no_online_metrics', dest='online_metrics', action='store_false',
                         help='Disable online continual-learning metrics logging.')
     parser.add_argument('--ref_metrics_path', type=str, default=None,
@@ -323,7 +335,7 @@ def parse_craftax_args(args=None):
 
     # Checkpoint resumption
     parser.add_argument('--fresh_start', default=True, action='store_true',
-                        help='Start fresh (delete old checkpoints). Default: True.')
+                        help='Start fresh (delete old checkpoints). Enabled by default; use --resume to disable.')
     parser.add_argument('--resume', dest='fresh_start', action='store_false',
                         help='Resume from existing checkpoint if available.')
 
@@ -331,6 +343,17 @@ def parse_craftax_args(args=None):
     parser.add_argument('--jax_cache_clear_interval', type=int, default=0,
                         help='Clear JAX caches every N steps (0=disabled). '
                              'Needed if dynamic shapes cause cache growth.')
+
+    # Action masking (Craftax feasibility prior)
+    parser.add_argument('--action_mask_enabled', default=False, action='store_true',
+                        help='Enable action feasibility masking at actor sampling time.')
+    parser.add_argument('--action_mask_mode', type=str, default='soft',
+                        choices=['soft', 'hard', 'none'],
+                        help='Mask mode: soft (bias=-lambda*deficit), hard (block), none.')
+    parser.add_argument('--action_mask_lambda_penalty', type=float, default=5.0,
+                        help='Soft mode penalty weight (default 5.0).')
+    parser.add_argument('--action_mask_large_negative', type=float, default=1e9,
+                        help='Hard mode block magnitude (default 1e9).')
 
     args = parser.parse_known_args(args=args)[0]
 
@@ -397,7 +420,7 @@ def parse_navix_args(args=None):
 
     # Online metrics
     parser.add_argument('--online_metrics', default=True, action='store_true',
-                        help='Enable online continual-learning metrics logging.')
+                        help='Enable online continual-learning metrics logging (enabled by default; use --no_online_metrics to disable).')
     parser.add_argument('--no_online_metrics', dest='online_metrics', action='store_false',
                         help='Disable online continual-learning metrics logging.')
     parser.add_argument('--ref_metrics_path', type=str, default=None,
@@ -415,6 +438,10 @@ def parse_navix_args(args=None):
     parser.add_argument('--replay_capacity', type=int, default=2000000)
     parser.add_argument('--batch_size', type=int, default=16,
                         help="mini-batch size")
+    parser.add_argument('--batch_length', type=int, default=32,
+                        help="sequence length for training batches (default 32)")
+    parser.add_argument('--model_size', type=str, default='12m',
+                        help="model size preset (default: '12m')")
     parser.add_argument('--unbalanced_steps', type=str, default=None,
                         help="number of steps per each task (JSON list, e.g. '[100000, 200000]')")
 

@@ -145,8 +145,8 @@ def integrate(
     for i in range(1, dataset.shape[0]):
         delta_t = dataset[i, 0] - dataset[i - 1, 0]
         f = dataset[i, 1:]
-        # let's max 0 the smallest value of the performance
-        f[f <= 0] = 0
+        # Preserve negative values to avoid inflating AUC and masking forgetting
+        # (see _to_float docstring for rationale)
         # take the mean of the performance across seeds
         if aggregate:
             f = np.mean(f)
@@ -207,7 +207,7 @@ def fwd_transfer(
     return ft / num_tasks
 
 
-def _clip_perf(value: float) -> float:
+def _to_float(value: float) -> float:
     """Convert to float without clipping. Negative scores are preserved
     to avoid inflating AUC and masking forgetting."""
     return float(value)
@@ -653,6 +653,10 @@ class OnlineMetrics:
         self.auc = {i: 0.0 for i in range(self.num_tasks)}
         self.last_step = {i: None for i in range(self.num_tasks)}
         self.last_score = {i: None for i in range(self.num_tasks)}
+        self._total_updates = 0
+        self._cached_ap = 0.0
+        self._cached_forgetting = 0.0
+        self._cached_ft = float('nan')
 
     def _steps_for(self, task_id: int) -> int:
         return int(self.steps_per_task[task_id])
@@ -660,7 +664,7 @@ class OnlineMetrics:
     def update(self, task_id: int, step: int, score: float, length: Optional[int] = None) -> Dict[str, float]:
         task_id = int(task_id)
         step = int(step)
-        score = _clip_perf(score)
+        score = _to_float(score)
 
         last_step = self.last_step[task_id]
         last_score = self.last_score[task_id]
@@ -671,15 +675,22 @@ class OnlineMetrics:
         self.last_step[task_id] = step
         self.last_score[task_id] = score
         self.latest[task_id] = score
+        self._total_updates += 1
+
+        # Recompute expensive aggregates periodically (every 100 updates)
+        if self._total_updates % 100 == 0 or self._total_updates == 1:
+            self._cached_ap = float(self.average_performance())
+            self._cached_forgetting = float(self.average_forgetting())
+            self._cached_ft = float(self.forward_transfer())
 
         record = {
             'step': step,
             'task': task_id,
             'score': score,
             'length': None if length is None else int(length),
-            'ap': float(self.average_performance()),
-            'forgetting': float(self.average_forgetting()),
-            'ft': float(self.forward_transfer()),
+            'ap': self._cached_ap,
+            'forgetting': self._cached_forgetting,
+            'ft': self._cached_ft,
             'per_task_latest': self.latest_list(),
             'per_task_auc': self.auc_norm_list(),
         }
@@ -730,9 +741,9 @@ class OnlineMetrics:
             if end_val is None:
                 # Task i hasn't finished its training phase yet — skip
                 continue
-            end_val = float(_clip_perf(end_val))
+            end_val = float(_to_float(end_val))
             cur_val = self.latest.get(i, None)
-            cur_val = 0.0 if cur_val is None else float(_clip_perf(cur_val))
+            cur_val = 0.0 if cur_val is None else float(_to_float(cur_val))
             diffs.append(end_val - cur_val)
         return float(np.mean(diffs)) if diffs else 0.0
 

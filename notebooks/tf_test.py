@@ -169,7 +169,7 @@ def run(no_epochs, data_gen, seed, single_head):
 
     all_acc = np.array([])
     
-    model_list = ListMLP(num_tasks=data_gen.max_iter, input_dim=28*28, output_size=2, hidden_dim=256, single_head=single_head)
+    model_list = ListMLP(num_tasks=data_gen.max_iter, input_dim=in_dim, output_size=out_dim, hidden_dim=256, single_head=single_head)
 
     loss = tf.keras.losses.BinaryCrossentropy(from_logits=True)
 

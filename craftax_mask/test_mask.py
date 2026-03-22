@@ -4,7 +4,7 @@ Run: python -m craftax_mask.test_mask
 """
 import numpy as np
 from .rules import ACTION_RULES, CONTEXT_SIZE, C
-from .mask import compute_logit_bias, compute_mask_details
+from .mask import compute_logit_bias
 
 
 # Helper: look up action_id from ACTION_RULES by rule name

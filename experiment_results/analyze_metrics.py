@@ -110,7 +110,6 @@ class CSVExporter:
     def add_checkpoint(self, figure, metric, checkpoint, method_a, vals_a,
                        method_b, vals_b):
         """Store one checkpoint row for a pair of methods."""
-        from scipy import stats as _st
         t_stat, p_val, sig = welch_t(vals_a, vals_b)
         pooled = np.sqrt((vals_a.std()**2 + vals_b.std()**2) / 2) \
             if len(vals_a) > 0 and len(vals_b) > 0 else 0
@@ -442,6 +441,9 @@ def discover_methods(logs_dir: pathlib.Path):
 
     method_seeds = defaultdict(set)
     # Primary pattern: craftax_dreamerv3-<method>-<seed>
+    # Note: greedy (.+) is correct here -- it consumes up to the LAST hyphen
+    # before the trailing digit group, so method names with embedded hyphens
+    # or digit groups (e.g., "mask-v2-soft") are parsed correctly.
     pattern_primary = re.compile(r"^craftax_dreamerv3-(.+)-(\d+)$")
     # Fallback pattern: craftax_<method>-<seed>  (but NOT craftax_dreamerv3-*)
     pattern_fallback = re.compile(r"^craftax_(.+)-(\d+)$")
@@ -1037,9 +1039,9 @@ def figure_exploration_metrics(data):
 
     # Value overestimation ratio
     stats_lines.append("\n  Value Overestimation (imagined / actual at final point):")
+    imag_curves = build_curves(data, "online", "explore/imagined_value", smooth=30)
+    act_curves = build_curves(data, "online", "explore/actual_value", smooth=30)
     for mk in METHODS:
-        imag_curves = build_curves(data, "online", "explore/imagined_value", smooth=30)
-        act_curves = build_curves(data, "online", "explore/actual_value", smooth=30)
         ig, im = imag_curves[mk]
         ag, am = act_curves[mk]
         if ig is not None and ag is not None and im is not None and am is not None:
@@ -1085,9 +1087,9 @@ def figure_forgetting_and_frontier(data):
 
     # Peak forgetting analysis
     stats_lines.append("  Peak aggregate forgetting (max over training):")
+    forgetting_curves = build_curves(data, "online", "aggregate_forgetting", smooth=20)
     for mk in METHODS:
-        curves = build_curves(data, "online", "aggregate_forgetting", smooth=20)
-        grid, mat = curves[mk]
+        grid, mat = forgetting_curves[mk]
         if grid is not None and mat is not None:
             peak_per_seed = mat.max(axis=1)
             peak_step_per_seed = grid[mat.argmax(axis=1)]

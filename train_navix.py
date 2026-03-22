@@ -11,8 +11,8 @@ from functools import partial as bind
 
 # CRITICAL: Must set BEFORE importing jax (or any lib that imports jax).
 # JAX reads this at import time and will pre-allocate 90% of GPU memory otherwise.
-os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.70'
+os.environ.setdefault('XLA_PYTHON_CLIENT_PREALLOCATE', 'false')
+os.environ.setdefault('XLA_PYTHON_CLIENT_MEM_FRACTION', '0.70')
 
 # Add dreamerv3 to path
 root = pathlib.Path(__file__).parent
@@ -91,7 +91,7 @@ class NavixWrapper(embodied.Env):
         
         # Setup embedding projection on GPU and JIT the processing function
         if use_embedding:
-            rng = np.random.default_rng(42)
+            rng = np.random.default_rng(seed)
             flat_dim = int(np.prod(self._obs_shape))
             projection_np = rng.standard_normal((flat_dim, embedding_dim)).astype(np.float32)
             projection_np /= np.sqrt(flat_dim)
@@ -495,7 +495,8 @@ def train_single(make_env, config, args):
     Args:
         make_env: Callable(seed: int) -> embodied.Env that creates one env instance.
     """
-    np.random.seed(config.seed)
+    # Seed numpy RNG for reproducibility
+    _rng = np.random.default_rng(config.seed)
     logdir = elements.Path(config.logdir)
     logdir.mkdir()
     config.save(logdir / 'config.yaml')
@@ -619,7 +620,8 @@ def cl_train_loop(make_envs, config, args):
     Args:
         make_envs: List of Callable(seed: int) -> embodied.Env, one per task.
     """
-    np.random.seed(config.seed)
+    # Seed global numpy RNG for reproducibility (note: pollutes global state)
+    _rng = np.random.default_rng(config.seed)
 
     unbalanced_steps = None
     if args.unbalanced_steps not in [None, 'None', 'none']:
@@ -640,11 +642,11 @@ def cl_train_loop(make_envs, config, args):
     logger = make_logger(config, total_step)
     online = None
     if getattr(args, 'online_metrics', True):
-        steps_per_task = unbalanced_steps if unbalanced_steps is not None else int(args.steps)  # may be list or int
+        online_steps_per_task = unbalanced_steps if unbalanced_steps is not None else int(args.steps)  # may be list or int
         online = OnlineMetrics(
             logdir=str(logdir),
             num_tasks=len(make_envs),
-            steps_per_task=steps_per_task,
+            steps_per_task=online_steps_per_task,
             ref_metrics_path=getattr(args, 'ref_metrics_path', None),
             ref_metrics_dir=getattr(args, 'ref_metrics_dir', None),
             ref_metrics_root=getattr(args, 'logdir', None),
@@ -663,25 +665,18 @@ def cl_train_loop(make_envs, config, args):
     # Never load checkpoint - always start fresh
     cp.save()
 
-    # NOTE: Resumption position is inferred from replay buffer stats, not a
-    # persisted step counter.  This is fragile -- if the replay is pruned or
-    # its bookkeeping diverges from actual env steps the task_id/rep will be
-    # wrong.  The checkpoint stores `total_step` (elements.Counter) but it is
-    # currently never reloaded (see "Never load checkpoint" above).  If
-    # checkpoint loading is enabled in the future, prefer
-    # `total_steps_done = int(total_step.value)` for an authoritative count.
-    stats = replay.stats()
-    total_steps_done = stats.get('total_steps', 0)
-    steps_per_task = int(args.steps)
+    # Use the authoritative step counter for resume position.
+    total_steps_done = int(total_step.value)
+    default_steps_per_task = int(args.steps)
     num_tasks = len(make_envs)
 
     if unbalanced_steps is not None:
         tot_steps_after_task = np.cumsum(unbalanced_steps)
-        task_id = next((i for i, j in enumerate(total_steps_done < tot_steps_after_task) if j), 0)
+        task_id = next((i for i, j in enumerate(total_steps_done < tot_steps_after_task) if j), len(unbalanced_steps) - 1)
         rep = int(total_steps_done // np.sum(unbalanced_steps))
     else:
-        task_id = int(total_steps_done // steps_per_task) % num_tasks
-        rep = int(total_steps_done // (steps_per_task * num_tasks))
+        task_id = int(total_steps_done // default_steps_per_task) % num_tasks
+        rep = int(total_steps_done // (default_steps_per_task * num_tasks))
 
     print(f"Starting at Task {task_id}, Rep {rep}")
 
@@ -702,6 +697,8 @@ def cl_train_loop(make_envs, config, args):
             step = elements.Counter()
             episodes = collections.defaultdict(elements.Agg)
 
+            current_task = task_id  # Snapshot for closure
+
             def logfn(tran, worker):
                 episode = episodes[worker]
                 tran['is_first'] and episode.reset()
@@ -711,9 +708,9 @@ def cl_train_loop(make_envs, config, args):
                     result = episode.result()
                     score = result.pop('score')
                     length = result.pop('length')
-                    logger.add({'score': score, 'length': length, 'task': task_id}, prefix='episode')
+                    logger.add({'score': score, 'length': length, 'task': current_task}, prefix='episode')
                     if online is not None:
-                        online.update(task_id=task_id, step=int(total_step.value), score=float(score), length=int(length))
+                        online.update(task_id=current_task, step=int(total_step.value), score=float(score), length=int(length))
                     logger.write()
 
             use_parallel = num_envs > 1
@@ -797,6 +794,13 @@ def run_navix(args):
         unbalanced_steps = ast.literal_eval(str(args.unbalanced_steps))
 
     use_embedding = (args.input_type == 'embedding')
+
+    all_envs = [
+        'Navix-Empty-8x8-v0',
+        'Navix-DoorKey-6x6-v0',
+        'Navix-LavaCrossing-9x9-v0',
+        'Navix-Dynamic-Obstacles-6x6-v0',
+    ]
 
     if args.cl:
         # For continual learning

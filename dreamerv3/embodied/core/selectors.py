@@ -125,11 +125,8 @@ class Recency:
           age = int(age / len(self.uprobs) * len(self.items))
         return self.items[self.step - 1 - age]
       except KeyError:
-        # Item might have been deleted very recently.
-        if retry < 9:
-          import time
-          time.sleep(0.01)
-        else:
+        # Item might have been deleted very recently; retry immediately.
+        if retry >= 9:
           raise
 
   def __setitem__(self, key, stepids):
@@ -585,20 +582,26 @@ class PrivilegedNoveltyLearnabilityRecency:
         raise IndexError('Privileged NLR selector is empty')
 
       # Choose which pool to sample from, with proportional redistribution
-      # when a pool is empty.
+      # when a pool is empty.  Redistribute missing weight proportionally
+      # among available pools based on their original fractions.
       self._total_samples += 1
-      novel_avail = self.novel_frac if len(self.novel_pool) > 0 else 0.0
-      learn_avail = self.learnable_frac if len(self.learn_pool) > 0 else 0.0
-      recent_avail = 1.0 - novel_avail - learn_avail
-      total_avail = novel_avail + learn_avail + recent_avail
-      if total_avail <= 0:
-        total_avail = 1.0
+      has_novel = len(self.novel_pool) > 0
+      has_learn = len(self.learn_pool) > 0
+      # Compute total fraction of available pools using original fractions
+      total_frac = ((self.novel_frac if has_novel else 0.0)
+                    + (self.learnable_frac if has_learn else 0.0)
+                    + self.recent_frac)  # recent is always available
+      if total_frac <= 0:
+        total_frac = 1.0
+      novel_weight = (self.novel_frac / total_frac) if has_novel else 0.0
+      learn_weight = (self.learnable_frac / total_frac) if has_learn else 0.0
+      recent_weight = self.recent_frac / total_frac
 
-      r = self.rng.random() * total_avail
-      if r < novel_avail:
+      r = self.rng.random()
+      if r < novel_weight:
         self._sample_counts['novel'] += 1
         return self._sample_novel()
-      elif r < novel_avail + learn_avail:
+      elif r < novel_weight + learn_weight:
         self._sample_counts['learnable'] += 1
         return self._sample_learnable()
       else:
@@ -1085,20 +1088,26 @@ class NoveltyLearnabilityRecency:
         raise IndexError('NLR selector is empty')
 
       # Choose which pool to sample from, with proportional redistribution
-      # when a pool is empty.
+      # when a pool is empty.  Redistribute missing weight proportionally
+      # among available pools based on their original fractions.
       self._total_samples += 1
-      novel_avail = self.novel_frac if len(self.novel_pool) > 0 else 0.0
-      learn_avail = self.learnable_frac if len(self.learn_pool) > 0 else 0.0
-      recent_avail = 1.0 - novel_avail - learn_avail
-      total_avail = novel_avail + learn_avail + recent_avail
-      if total_avail <= 0:
-        total_avail = 1.0
+      has_novel = len(self.novel_pool) > 0
+      has_learn = len(self.learn_pool) > 0
+      # Compute total fraction of available pools using original fractions
+      total_frac = ((self.novel_frac if has_novel else 0.0)
+                    + (self.learnable_frac if has_learn else 0.0)
+                    + self.recent_frac)  # recent is always available
+      if total_frac <= 0:
+        total_frac = 1.0
+      novel_weight = (self.novel_frac / total_frac) if has_novel else 0.0
+      learn_weight = (self.learnable_frac / total_frac) if has_learn else 0.0
+      recent_weight = self.recent_frac / total_frac
 
-      r = self.rng.random() * total_avail
-      if r < novel_avail:
+      r = self.rng.random()
+      if r < novel_weight:
         self._sample_counts['novel'] += 1
         return self._sample_novel()
-      elif r < novel_avail + learn_avail:
+      elif r < novel_weight + learn_weight:
         self._sample_counts['learnable'] += 1
         return self._sample_learnable()
       else:

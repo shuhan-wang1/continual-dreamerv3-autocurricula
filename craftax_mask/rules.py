@@ -18,6 +18,8 @@ Context array schema (CONTEXT_SIZE = 46 float32 values):
 
 from __future__ import annotations
 
+import copy
+
 CONTEXT_SIZE = 46
 
 # --- Named indices into the context array ---
@@ -335,4 +337,4 @@ ACTION_RULES = {
 }
 
 # Backward compatibility alias
-BASIC_ACTION_RULES = dict(ACTION_RULES)
+BASIC_ACTION_RULES = copy.deepcopy(ACTION_RULES)

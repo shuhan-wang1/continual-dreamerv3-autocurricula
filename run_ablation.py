@@ -507,11 +507,20 @@ def main():
                           f"(already complete, status={prev_status})")
                     continue
 
-            # ETA calculation
+            # ETA calculation based on actually-executed runs (not skipped ones)
+            executed_so_far = completed + failed
             if run_times:
                 avg_time = sum(run_times) / len(run_times)
-                remaining = total_runs - run_idx + 1
-                eta = avg_time * remaining
+                remaining_total = total_runs - run_idx
+                # Estimate how many of the remaining runs will actually execute
+                # using the ratio of executed-to-seen so far (excluding current)
+                seen_so_far = run_idx - 1  # runs already processed before this one
+                if seen_so_far > 0:
+                    exec_ratio = executed_so_far / seen_so_far
+                else:
+                    exec_ratio = 1.0
+                remaining_exec = exec_ratio * remaining_total + 1  # +1 for current run
+                eta = avg_time * remaining_exec
                 eta_str = f"  ETA: {format_duration(eta)}"
             else:
                 eta_str = ""
@@ -542,6 +551,7 @@ def main():
 
             # Execute
             result = None
+            status = "unknown"
             try:
                 result = subprocess.run(
                     cmd,
