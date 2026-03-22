@@ -113,7 +113,7 @@ class Agent(embodied.jax.Agent):
       self._disag_models = getattr(config, 'disag_models', 10)
       self._disag_target = getattr(config, 'disag_target', 'feat')
       self._expl_intr_scale = getattr(config, 'expl_intr_scale', 0.9)
-      self._expl_extr_scale = getattr(config, 'expl_extr_scale', 0.9)
+      self._expl_extr_scale = getattr(config, 'expl_extr_scale', 0.0)
       # Determine target dimension based on disag_target
       rssm_cfg = config.dyn.rssm
       if self._disag_target == 'stoch':

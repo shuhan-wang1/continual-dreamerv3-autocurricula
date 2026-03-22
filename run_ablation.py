@@ -78,9 +78,10 @@ EXPERIMENTS = OrderedDict()
 # ---------- Group A: Core Comparison ----------
 EXPERIMENTS["A1_baseline"] = {
     "group": "A",
-    "desc": "Pure DreamerV3 (no P2E, no intrinsic)",
+    "desc": "Pure DreamerV3 (uniform replay, no P2E, no intrinsic)",
     "args": {
         "no_plan2explore": True,
+        "recent_frac": 0.0,
     },
 }
 EXPERIMENTS["A2_p2e"] = {

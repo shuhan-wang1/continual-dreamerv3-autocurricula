@@ -412,6 +412,7 @@ class PrivilegedNoveltyLearnabilityRecency:
     self._key_achievements = {}  # key -> achievements array
     self._key_rewards = {}       # key -> float reward
     self._episodes_since_recompute = 0
+    self._last_old_ema = 0.0  # saved old EMA for learnability across keys
 
     # ---- Sample tracking for pool utilization logging ----
     self._sample_counts = {'novel': 0, 'learnable': 0, 'recent': 0}
@@ -439,11 +440,13 @@ class PrivilegedNoveltyLearnabilityRecency:
   # ------------------------------------------------------------------
   # Public API: update per-episode statistics
   # ------------------------------------------------------------------
-  def update_episode_stats(self, key, achievements, reward):
+  def update_episode_stats(self, key, achievements, reward, _update_globals=True):
     """Feed per-episode metadata to update novelty and learnability pools.
 
-    Must be called once at the end of every episode for the corresponding
-    item *key* that was inserted via ``__setitem__``.
+    When an episode produces multiple item keys, call with
+    ``_update_globals=True`` for the first key and ``False`` for the
+    rest so that global statistics (achievement counts, reward EMA,
+    recompute counter) are updated exactly once per episode.
 
     Parameters
     ----------
@@ -453,6 +456,9 @@ class PrivilegedNoveltyLearnabilityRecency:
         Binary vector of achievements unlocked in this episode.
     reward : float
         Cumulative episodic reward.
+    _update_globals : bool
+        If True (default), update global stats.  Pass False for
+        subsequent keys from the same episode.
     """
     with self.lock:
       if key not in self.indices:
@@ -460,18 +466,19 @@ class PrivilegedNoveltyLearnabilityRecency:
 
       achievements = np.asarray(achievements, dtype=bool)
 
-      # --- Update achievement success rates ---
-      self.achievement_counts += 1  # every episode counts as an attempt
-      self.achievement_successes += achievements.astype(np.float64)
+      if _update_globals:
+        # --- Update achievement success rates (once per episode) ---
+        self.achievement_counts += 1  # every episode counts as an attempt
+        self.achievement_successes += achievements.astype(np.float64)
 
-      # --- Update reward EMA (save old value for learnability) ---
-      old_ema = self.reward_ema
-      if not self.reward_ema_initialised:
-        self.reward_ema = float(reward)
-        self.reward_ema_initialised = True
-      else:
-        self.reward_ema = (self.reward_ema_decay * self.reward_ema
-                           + (1.0 - self.reward_ema_decay) * float(reward))
+        # --- Update reward EMA (save old value for learnability) ---
+        self._last_old_ema = self.reward_ema
+        if not self.reward_ema_initialised:
+          self.reward_ema = float(reward)
+          self.reward_ema_initialised = True
+        else:
+          self.reward_ema = (self.reward_ema_decay * self.reward_ema
+                             + (1.0 - self.reward_ema_decay) * float(reward))
 
       # --- Compute novelty score ---
       # Success rate for each achieved accomplishment
@@ -491,7 +498,7 @@ class PrivilegedNoveltyLearnabilityRecency:
 
       # --- Compute learnability score ---
       # Advantage = reward - baseline (using EMA BEFORE this episode's update).
-      advantage = float(reward) - old_ema
+      advantage = float(reward) - self._last_old_ema
       learnability_score = max(0.0, advantage)
 
       # --- Store metadata for periodic recomputation ---
@@ -506,13 +513,14 @@ class PrivilegedNoveltyLearnabilityRecency:
         self.learn_pool[key] = learnability_score
         self._invalidate_learn_cache()
 
-      # --- Periodic score recomputation ---
-      self._episodes_since_recompute += 1
-      if self._episodes_since_recompute >= self.recompute_interval:
-        self._recompute_all_scores()
-        self._invalidate_novel_cache()
-        self._invalidate_learn_cache()
-        self._episodes_since_recompute = 0
+      if _update_globals:
+        # --- Periodic score recomputation (once per episode) ---
+        self._episodes_since_recompute += 1
+        if self._episodes_since_recompute >= self.recompute_interval:
+          self._recompute_all_scores()
+          self._invalidate_novel_cache()
+          self._invalidate_learn_cache()
+          self._episodes_since_recompute = 0
 
   def _recompute_all_scores(self):
     """Recompute novelty and learnability scores for all pool items.
@@ -865,6 +873,7 @@ class NoveltyLearnabilityRecency:
     self._beta = 1.0             # prior sharpness (adaptive)
     self._episodes_since_recompute = 0
     self._total_episodes = 0
+    self._last_old_ema = 0.0  # saved old EMA for learnability across keys
 
     self._insert_counter = 0
 
@@ -1005,8 +1014,13 @@ class NoveltyLearnabilityRecency:
   # ------------------------------------------------------------------
   # Public API: update per-episode statistics
   # ------------------------------------------------------------------
-  def update_episode_stats(self, key, episode_length, reward):
+  def update_episode_stats(self, key, episode_length, reward, _update_globals=True):
     """Feed per-episode metadata to update novelty and learnability pools.
+
+    When an episode produces multiple item keys, call with
+    ``_update_globals=True`` for the first key and ``False`` for the
+    rest so that global statistics (reward EMA, episode counter,
+    grid recompute trigger) are updated exactly once per episode.
 
     Parameters
     ----------
@@ -1016,6 +1030,9 @@ class NoveltyLearnabilityRecency:
         Number of timesteps in this episode.
     reward : float
         Cumulative episodic reward.
+    _update_globals : bool
+        If True (default), update global stats.  Pass False for
+        subsequent keys from the same episode.
     """
     with self.lock:
       if key not in self.indices:
@@ -1024,52 +1041,51 @@ class NoveltyLearnabilityRecency:
       episode_length = int(episode_length)
       reward = float(reward)
 
-      # Store per-episode metadata (dict-based, not positional)
-      # No parallel list indexing needed — avoids desync after swap-and-pop.
+      if _update_globals:
+        # --- Update reward EMA (save old value for learnability) ---
+        self._last_old_ema = self.reward_ema
+        if not self.reward_ema_initialised:
+          self.reward_ema = reward
+          self.reward_ema_initialised = True
+        else:
+          self.reward_ema = (self.reward_ema_decay * self.reward_ema
+                             + (1.0 - self.reward_ema_decay) * reward)
 
-      # --- Update reward EMA (save old value for learnability) ---
-      old_ema = self.reward_ema
-      if not self.reward_ema_initialised:
-        self.reward_ema = reward
-        self.reward_ema_initialised = True
-      else:
-        self.reward_ema = (self.reward_ema_decay * self.reward_ema
-                           + (1.0 - self.reward_ema_decay) * reward)
-
-      # --- Update episode counter and trigger grid recompute ---
-      self._total_episodes += 1
-      self._episodes_since_recompute += 1
+        # --- Update episode counter (once per episode) ---
+        self._total_episodes += 1
+        self._episodes_since_recompute += 1
 
       # --- Store metadata for periodic recomputation ---
       self._key_rewards[key] = reward
       self._key_lengths[key] = episode_length
 
-      # Bootstrap: initialize grid early once we have enough data,
-      # don't wait for the full recompute interval (default 500 episodes).
-      # Without this, the novel pool stays empty until the first recompute.
-      if self._reward_edges is None and self._total_episodes >= 10:
-        self._recompute_grid()
-        self._episodes_since_recompute = 0
-      elif self._episodes_since_recompute >= self.grid_recompute_every:
-        self._recompute_grid()
-        self._episodes_since_recompute = 0
-      else:
-        # Incremental update: assign to current grid and update count
-        if self._reward_edges is not None:
-          lb = self._get_length_bin(episode_length)
-          rb = self._get_reward_bin(reward)
-          self._key_to_bin[key] = (lb, rb)
-          self._grid_counts[lb, rb] += 1
+      if _update_globals:
+        # Bootstrap: initialize grid early once we have enough data,
+        # don't wait for the full recompute interval (default 500 episodes).
+        # Without this, the novel pool stays empty until the first recompute.
+        if self._reward_edges is None and self._total_episodes >= 10:
+          self._recompute_grid()
+          self._episodes_since_recompute = 0
+        elif self._episodes_since_recompute >= self.grid_recompute_every:
+          self._recompute_grid()
+          self._episodes_since_recompute = 0
 
-          # Compute novelty score for this item
-          score = self._compute_novelty_score_for_cell(lb, rb)
-          if score > 0:
-            self.novel_pool[key] = score
-            self._invalidate_novel_cache()
+      # Incremental update: assign key to current grid bin
+      if self._reward_edges is not None and key not in self._key_to_bin:
+        lb = self._get_length_bin(episode_length)
+        rb = self._get_reward_bin(reward)
+        self._key_to_bin[key] = (lb, rb)
+        self._grid_counts[lb, rb] += 1
+
+        # Compute novelty score for this item
+        score = self._compute_novelty_score_for_cell(lb, rb)
+        if score > 0:
+          self.novel_pool[key] = score
+          self._invalidate_novel_cache()
 
       # --- Compute learnability score ---
       # Use EMA BEFORE this episode's update to avoid systematic attenuation.
-      advantage = reward - old_ema
+      advantage = reward - self._last_old_ema
       learnability_score = max(0.0, advantage)
       if learnability_score > 0:
         self.learn_pool[key] = learnability_score

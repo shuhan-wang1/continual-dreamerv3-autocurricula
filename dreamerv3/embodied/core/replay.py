@@ -496,8 +496,9 @@ class Replay:
         item_keys = [self.last_inserted_itemid]
       else:
         return
-    for key in item_keys:
-      self.sampler.update_episode_stats(key, achievements, reward)
+    for i, key in enumerate(item_keys):
+      self.sampler.update_episode_stats(
+          key, achievements, reward, _update_globals=(i == 0))
 
   def update_nlr_episode_nonpriv(self, episode_length, reward, item_keys=None):
     """Notify the non-privileged NLR/NLU selector about episode-level metadata.
@@ -525,8 +526,9 @@ class Replay:
         item_keys = [self.last_inserted_itemid]
       else:
         return
-    for key in item_keys:
-      self.sampler.update_episode_stats(key, episode_length, reward)
+    for i, key in enumerate(item_keys):
+      self.sampler.update_episode_stats(
+          key, episode_length, reward, _update_globals=(i == 0))
 
   def _notempty(self, reason=False):
     if reason:
