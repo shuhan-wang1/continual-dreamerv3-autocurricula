@@ -13,14 +13,17 @@ set -euo pipefail
 source ~/miniconda3/etc/profile.d/conda.sh 2>/dev/null \
     || source ~/anaconda3/etc/profile.d/conda.sh 2>/dev/null \
     || { echo "ERROR: Cannot find conda. Set your conda path."; exit 1; }
-conda activate dreamer
+conda activate dreamer_cuda13
 
 PYTHON=$(which python)
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR"
 
-export XLA_PYTHON_CLIENT_PREALLOCATE=false
-export XLA_PYTHON_CLIENT_ALLOCATOR=platform
+export XLA_PYTHON_CLIENT_PREALLOCATE=true
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
+
+export XLA_FLAGS="${XLA_FLAGS:-} --xla_gpu_enable_command_buffer= --xla_gpu_force_compilation_parallelism=1"
+
 export PYTHONPATH="${PROJECT_DIR}:${PROJECT_DIR}/dreamerv3:${PYTHONPATH:-}"
 
 mkdir -p logs experiment_results/10m

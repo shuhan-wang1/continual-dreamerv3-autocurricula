@@ -76,7 +76,9 @@ def setup(
           '--xla_gpu_enable_triton_gemm=false',
           '--xla_gpu_enable_triton_softmax_fusion=false',
           '--xla_gpu_enable_while_loop_double_buffering=true',
-          '--xla_gpu_graph_level=0',
+          '--xla_gpu_enable_command_buffer=',           # disable CUDA graphs (Blackwell compat)
+          '--xla_gpu_enable_custom_fusions=false',
+          '--xla_gpu_enable_address_computation_fusion=false',
           '--xla_gpu_reduce_scatter_combine_threshold_bytes=67108864',
       ]
     else:
@@ -86,9 +88,9 @@ def setup(
       xlaflags += [
           '--xla_gpu_enable_triton_gemm=false',
           '--xla_gpu_enable_triton_softmax_fusion=false',
-          '--xla_gpu_graph_level=0',
+          '--xla_gpu_enable_command_buffer=',           # disable CUDA graphs (Blackwell compat)
           '--xla_gpu_enable_custom_fusions=false',
-          '--xla_gpu_enable_dynamic_slice_fusion=false',
+          '--xla_gpu_enable_address_computation_fusion=false',
           '--xla_gpu_enable_while_loop_double_buffering=false',
       ]
   if tpuflags and platform == 'tpu':

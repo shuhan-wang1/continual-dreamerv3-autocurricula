@@ -1,10 +1,89 @@
--r ./dreamerv3/requirements.txt
-python>=3.9
-jax>=0.4.20
-jaxlib>=0.4.20
-craftax>=1.0.0
-navix>=0.6.0
+# =============================================================
+# Continual DreamerV3 Autocurricula
+# RTX 5090 (Blackwell / sm_120a) Deployment Requirements
+# =============================================================
+#
+# Python >= 3.11 required (JAX 0.9.x drops Python 3.10)
+# NVIDIA Driver >= 570 required (must support CUDA 13.0+)
+#
+# JAX 0.9.2 with CUDA 13 provides first-class Blackwell
+# (sm_100a / sm_120a) support. CUDA 13 drops Maxwell/Pascal
+# but fully targets Blackwell as a primary architecture.
+#
+# Install:
+#   pip install -r requirements.txt
+#   pip install -e ./dreamerv3 --no-deps
+# =============================================================
+
+# -------------------------------------------------------
+# JAX + CUDA 13 (first-class Blackwell / sm_120a support)
+# The [cuda13] extra installs jaxlib + jax-cuda13-plugin
+# with bundled NVIDIA CUDA 13 libraries.
+#
+# Known issues (as of Mar 2026):
+#   jax-ml/jax#33910 - XLA compilation crash on RTX 5090
+#   jax-ml/jax#34696 - cuBLASLt segfault with jax.grad+jax.vmap
+# Workaround: XLA_FLAGS=--xla_gpu_force_compilation_parallelism=1
+# -------------------------------------------------------
+jax[cuda13]==0.9.2
+
+# -------------------------------------------------------
+# JAX ecosystem (pinned for JAX 0.9.2 compatibility)
+# -------------------------------------------------------
+flax==0.12.6
+optax==0.2.8
+chex==0.1.91
+jaxtyping>=0.2.34
+
+# -------------------------------------------------------
+# Core numerical
+# JAX 0.9.x requires numpy >= 2.0 (dropped numpy 1.x)
+# -------------------------------------------------------
+numpy>=2.0,<2.2
+scipy>=1.13
+einops>=0.8.0
+
+# -------------------------------------------------------
+# DreamerV3 framework packages (by Danijar Hafner)
+# -------------------------------------------------------
+ninjax==3.6.2
+elements==3.22.0
+portal==3.8.1
+cloudpickle
+
+# -------------------------------------------------------
+# RL environments
+# -------------------------------------------------------
+craftax==1.5.0
+navix==0.7.4
+gymnax==0.0.9
+gymnasium>=1.2.0
+pygame>=2.6.1
+dm-env
+
+# -------------------------------------------------------
+# Experiment tracking & visualization
+# -------------------------------------------------------
+wandb>=0.16.5
+matplotlib>=3.9
+seaborn>=0.13.2
+pandas>=2.2
+imageio>=2.37
+pillow>=10.0
+
+# -------------------------------------------------------
+# Configuration & utilities
+# -------------------------------------------------------
+ruamel.yaml>=0.18
+opencv-python-headless
+tqdm
+rich>=13.0
+tyro>=0.8
 setuptools>=59.5.0
-opencv-python
-ruamel.yaml
-wandb
+
+# -------------------------------------------------------
+# Development tools
+# -------------------------------------------------------
+ipdb
+colored_traceback
+pytest>=8.0
