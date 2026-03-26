@@ -71,6 +71,20 @@ class Replay:
     self.metrics = {'samples': 0, 'inserts': 0, 'updates': 0}
     self.last_inserted_itemid = None  # Track last inserted item for NLR
     self._last_inserted_by_worker = {}  # Per-worker last inserted item ID
+    self._item_insert_step = {}  # itemid -> global step at insertion time
+    self._current_global_step = 0  # Updated by callers via set_global_step()
+
+  def set_global_step(self, step):
+    """Update the current global step (used to timestamp insertions)."""
+    self._current_global_step = int(step)
+
+  def mean_episode_age(self, current_step=None):
+    """Compute mean age (in steps) of items in the buffer."""
+    if not self._item_insert_step:
+      return 0.0
+    step = current_step if current_step is not None else self._current_global_step
+    ages = [step - s for s in self._item_insert_step.values()]
+    return sum(ages) / len(ages)
 
   def get_last_inserted_by_worker(self, worker):
     """Return the last inserted item ID for a given worker."""
@@ -224,6 +238,7 @@ class Replay:
     itemid = self.itemid
     self.itemid += 1
     self.items[itemid] = (chunkid, index)
+    self._item_insert_step[itemid] = self._current_global_step
     stepids = self._getseq(chunkid, index, ['stepid'])['stepid']
     self.sampler[itemid] = stepids
     if self.eviction == 'fifo':
@@ -265,6 +280,7 @@ class Replay:
   def _remove_item(self, itemid):
     """Remove a specific item from the buffer."""
     del self.sampler[itemid]
+    self._item_insert_step.pop(itemid, None)
     chunkid, index = self.items.pop(itemid)
     with self.refs_lock:
       self.refs[chunkid] -= 1

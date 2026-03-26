@@ -411,6 +411,8 @@ class PrivilegedNoveltyLearnabilityRecency:
     # ---- Per-key metadata for periodic score recomputation ----
     self._key_achievements = {}  # key -> achievements array
     self._key_rewards = {}       # key -> float reward
+    self._key_episode_id = {}    # key -> episode_id (for deduplication in recompute)
+    self._episode_counter = 0    # monotonic episode counter
     self._episodes_since_recompute = 0
     self._last_old_ema = 0.0  # saved old EMA for learnability across keys
 
@@ -480,6 +482,12 @@ class PrivilegedNoveltyLearnabilityRecency:
           self.reward_ema = (self.reward_ema_decay * self.reward_ema
                              + (1.0 - self.reward_ema_decay) * float(reward))
 
+        # Assign new episode ID for deduplication during recompute
+        self._episode_counter += 1
+
+      # Tag this key with the current episode ID
+      self._key_episode_id[key] = self._episode_counter
+
       # --- Compute novelty score ---
       # Success rate for each achieved accomplishment
       success_rates = np.where(
@@ -529,11 +537,18 @@ class PrivilegedNoveltyLearnabilityRecency:
     metadata of items *currently in the buffer* so that evicted episodes
     no longer inflate the denominator.
     """
-    # Recompute achievement statistics from current buffer contents
+    # Recompute achievement statistics from current buffer contents.
+    # Deduplicate by episode_id so multi-chunk episodes count once.
     self.achievement_counts = np.zeros(self.num_achievements, dtype=np.float64)
     self.achievement_successes = np.zeros(self.num_achievements, dtype=np.float64)
+    seen_episodes = set()
     for key in self.indices:
       if key in self._key_achievements:
+        ep_id = self._key_episode_id.get(key)
+        if ep_id is not None and ep_id in seen_episodes:
+          continue
+        if ep_id is not None:
+          seen_episodes.add(ep_id)
         self.achievement_counts += 1
         self.achievement_successes += self._key_achievements[key].astype(np.float64)
 
@@ -653,6 +668,7 @@ class PrivilegedNoveltyLearnabilityRecency:
       # Remove stored metadata
       self._key_achievements.pop(key, None)
       self._key_rewards.pop(key, None)
+      self._key_episode_id.pop(key, None)
 
   # ------------------------------------------------------------------
   # Internal sampling methods

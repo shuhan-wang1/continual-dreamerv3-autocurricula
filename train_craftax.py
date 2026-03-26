@@ -105,6 +105,23 @@ NUM_CRAFTAX_ACHIEVEMENTS = 0
 NUM_ACHIEVEMENT_TIERS = 5  # Tiers 0-4
 
 
+def compute_achievement_depth(achievements):
+    """Compute max achievement tier from an achievement vector.
+
+    Works with the module-level CRAFTAX_ACHIEVEMENT_NAMES and ACHIEVEMENT_TIERS
+    globals (populated after Craftax import).  Returns -1 when no achievement
+    maps to a known tier.
+    """
+    max_tier = -1
+    for i, achieved in enumerate(achievements):
+        if achieved and i < len(CRAFTAX_ACHIEVEMENT_NAMES):
+            name = CRAFTAX_ACHIEVEMENT_NAMES[i]
+            tier = ACHIEVEMENT_TIERS.get(name, -1)
+            if tier > max_tier:
+                max_tier = tier
+    return max_tier
+
+
 class CraftaxMetrics:
     """Comprehensive metrics tracker for Craftax training.
 
@@ -298,9 +315,9 @@ class CraftaxMetrics:
         loss_value: float = 0.0,
         td_error_mean: float = 0.0,
         td_error_max: float = 0.0,
-        ensemble_disagreement: float = 0.0,
-        intrinsic_reward: float = 0.0,
-        extrinsic_reward: float = 0.0,
+        ensemble_disagreement: float = None,
+        intrinsic_reward: float = None,
+        extrinsic_reward: float = None,
         **extra_metrics
     ):
         """Log core training metrics."""
@@ -315,11 +332,15 @@ class CraftaxMetrics:
             'loss/value': float(loss_value),
             'td_error/mean': float(td_error_mean),
             'td_error/max': float(td_error_max),
-            'p2e/ensemble_disagreement': float(ensemble_disagreement),
-            'p2e/intrinsic_reward': float(intrinsic_reward),
-            'p2e/extrinsic_reward': float(extrinsic_reward),
             **{k: float(v) for k, v in extra_metrics.items()},
         }
+        # Only include P2E metrics when they are actually provided
+        if ensemble_disagreement is not None:
+            self._latest_training_metrics['p2e/ensemble_disagreement'] = float(ensemble_disagreement)
+        if intrinsic_reward is not None:
+            self._latest_training_metrics['p2e/intrinsic_reward'] = float(intrinsic_reward)
+        if extrinsic_reward is not None:
+            self._latest_training_metrics['p2e/extrinsic_reward'] = float(extrinsic_reward)
 
     # ---- Replay buffer diagnostics ----
     def log_replay_diagnostics(
@@ -1033,23 +1054,12 @@ class VectorCraftaxEnv:
         """Extract action mask context for all envs from vectorized JAX states.
 
         Returns numpy array of shape (num_envs, CONTEXT_SIZE) as float32.
-        Falls back to zeros on error.
+        Uses batched JAX ops on GPU — single device-to-host transfer.
         """
         try:
-            from craftax_mask import extract_mask_context
-        except ImportError:
-            from craftax_mask.rules import CONTEXT_SIZE as _CS
-            return np.zeros((self._num_envs, _CS), dtype=np.float32)
-        try:
-            # De-vectorize: extract per-env state and compute context
-            # TODO: consider vectorizing this loop (e.g. via jax.vmap) for large N
-            # This is a small Python loop (46 floats × N envs), negligible vs GPU step
-            contexts = []
-            for i in range(self._num_envs):
-                env_state = jax.tree_util.tree_map(lambda x: x[i], states)
-                ctx = extract_mask_context(env_state)
-                contexts.append(np.asarray(ctx, dtype=np.float32))
-            return np.stack(contexts, axis=0)
+            from craftax_mask.extractor import extract_mask_context_batch_jax
+            ctx_jax = extract_mask_context_batch_jax(states)
+            return np.asarray(ctx_jax)
         except Exception as e:
             if not hasattr(self, '_mask_ctx_warned'):
                 print(f'[VectorCraftaxEnv] mask context extraction failed: {e}')
@@ -1154,7 +1164,7 @@ class VectorCraftaxEnv:
         # Terminal = died (health <= 0); truncated = timeout (should bootstrap)
         is_terminal = is_last & (np.asarray(health_np, dtype=np.float32) <= 0)
 
-        rewards_out = np.asarray(rewards_np, dtype=np.float32)
+        rewards_out = np.array(rewards_np, dtype=np.float32)  # copy: JAX arrays are read-only
         # Apply intrinsic reward shaping (spatial + craft novelty)
         if self._intrinsic_shaper is not None:
             raw_obs_np = np.asarray(jax.device_get(self._obs_jax), dtype=np.float32)
@@ -1538,6 +1548,29 @@ def make_logger(config, step):
     return elements.Logger(step, outputs, multiplier=1)
 
 
+# Keys in CraftaxMetrics records that are lists/arrays — skip for wandb scalar logging
+_WANDB_SKIP_KEYS = frozenset({
+    'achievements', 'per_achievement_rates', 'per_achievement_forgetting',
+    'score_distribution', 'per_task_return_mean', 'per_task_success_rate',
+    'per_task_max_return', 'per_task_max_depth', 'per_task_episodes',
+    'per_task_achievement_rates', 'replay/depth_distribution',
+})
+
+
+def _wandb_log_record(record, step):
+    """Log scalar metrics from a CraftaxMetrics record to wandb."""
+    if record is None:
+        return
+    payload = {}
+    for k, v in record.items():
+        if k in _WANDB_SKIP_KEYS:
+            continue
+        if isinstance(v, (int, float)):
+            payload[k] = v
+    if payload:
+        wandb.log(payload, step=step)
+
+
 MASK_LOG_SPECS = (
     ('log/mask_penalty_mean', 'mask_penalty_mean', 'mean'),
     ('log/mask_infeasible_frac', 'mask_infeasible_frac', 'mean'),
@@ -1721,15 +1754,18 @@ def train_single(make_env, config, args, env_name=None):
     _rng = np.random.default_rng(config.seed)
     logdir = elements.Path(config.logdir)
 
-    # Always start fresh: remove old logdir contents (replay, checkpoints)
+    # Only clean old logdir contents when starting fresh (not resuming)
     import shutil as _shutil_clean
     logdir_str = str(logdir)
-    if os.path.exists(logdir_str):
-        for sub in ('replay', 'ckpt'):
-            sub_path = os.path.join(logdir_str, sub)
-            if os.path.exists(sub_path):
-                _shutil_clean.rmtree(sub_path, ignore_errors=True)
-        print(f'Cleaned old replay/ckpt from {logdir_str} for fresh start.')
+    if getattr(args, 'fresh_start', True):
+        if os.path.exists(logdir_str):
+            for sub in ('replay', 'ckpt'):
+                sub_path = os.path.join(logdir_str, sub)
+                if os.path.exists(sub_path):
+                    _shutil_clean.rmtree(sub_path, ignore_errors=True)
+            print(f'Cleaned old replay/ckpt from {logdir_str} for fresh start.')
+    else:
+        print(f'Resume mode: keeping existing replay/ckpt in {logdir_str}')
 
     logdir.mkdir()
     config.save(logdir / 'config.yaml')
@@ -1864,11 +1900,12 @@ def train_single(make_env, config, args, env_name=None):
             if online is not None:
                 # Get final achievements for this episode
                 achievements = episode_achievements.get(worker, np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_))
-                achievement_depth = tran.get('log/achievement_depth', -1)
-                if isinstance(achievement_depth, np.ndarray):
-                    achievement_depth = int(achievement_depth.item())
+                # Compute depth from accumulated episode achievements, NOT from
+                # tran['log/achievement_depth'] which comes from the Craftax
+                # auto-reset state (always -1 at terminal timestep).
+                achievement_depth = compute_achievement_depth(achievements)
 
-                online.update(
+                record = online.update(
                     task_id=0,
                     step=int(step.value),
                     score=float(score),
@@ -1880,6 +1917,7 @@ def train_single(make_env, config, args, env_name=None):
                     mask_infeasible_frac=result.get('mask_infeasible_frac'),
                     mask_blocked_frac=result.get('mask_blocked_frac'),
                 )
+                _wandb_log_record(record, int(step.value))
             logger.write()
 
     def log_training_metrics_fn(mets, step_val):
@@ -1905,10 +1943,12 @@ def train_single(make_env, config, args, env_name=None):
             loss_policy = float(mets.get('loss/policy', 0.0))
             loss_value = float(mets.get('loss/value', 0.0))
 
-            # P2E metrics
-            ensemble_disagreement = float(mets.get('loss/disag', 0.0))
-            intrinsic_reward = float(mets.get('p2e/intr_rew', 0.0))
-            extrinsic_reward = float(mets.get('p2e/extr_rew', 0.0))
+            # P2E metrics — only log when P2E is actually active
+            p2e_kwargs = {}
+            if 'p2e/intr_rew' in mets:
+                p2e_kwargs['ensemble_disagreement'] = float(mets.get('loss/disag', 0.0))
+                p2e_kwargs['intrinsic_reward'] = float(mets['p2e/intr_rew'])
+                p2e_kwargs['extrinsic_reward'] = float(mets.get('p2e/extr_rew', 0.0))
 
             # TD-error approximation from advantage stats
             td_error_mean = float(mets.get('adv', 0.0))
@@ -1928,9 +1968,7 @@ def train_single(make_env, config, args, env_name=None):
                 loss_value=loss_value,
                 td_error_mean=td_error_mean,
                 td_error_max=td_error_max,
-                ensemble_disagreement=ensemble_disagreement,
-                intrinsic_reward=intrinsic_reward,
-                extrinsic_reward=extrinsic_reward,
+                **p2e_kwargs,
                 **{'loss/mask_ctx': loss_mask_ctx},
             )
 
@@ -1940,6 +1978,8 @@ def train_single(make_env, config, args, env_name=None):
             dream_accuracy = 1.0 / (1.0 + abs(imagined_value - actual_value))
 
             intr_extr_ratio = 0.0
+            intrinsic_reward = p2e_kwargs.get('intrinsic_reward', 0.0)
+            extrinsic_reward = p2e_kwargs.get('extrinsic_reward', 0.0)
             if extrinsic_reward > 0:
                 intr_extr_ratio = intrinsic_reward / extrinsic_reward
 
@@ -1961,16 +2001,42 @@ def train_single(make_env, config, args, env_name=None):
             stats = replay_buffer.stats()
             buffer_size = stats.get('total_steps', len(replay_buffer))
 
+            # Pass through NLR/NLU pool utilization stats if available
+            pool_stats = {k: v for k, v in stats.items()
+                          if k.endswith('_actual_frac') or k in (
+                              'novel_pool_size', 'learnable_pool_size',
+                              'total_pool_size', 'total_samples')}
             online.log_replay_diagnostics(
                 step=current_step,
                 buffer_size=buffer_size,
+                mean_td_error=training_metrics_state['latest_td_error'],
+                mean_episode_age=replay_buffer.mean_episode_age(current_step),
+                **pool_stats,
             )
 
-    driver.on_step(lambda tran, _: step.increment())
+    def _update_step_and_replay(tran, _):
+        step.increment()
+        replay.set_global_step(int(step.value))
+    driver.on_step(_update_step_and_replay)
     driver.on_step(replay_addfn)
     driver.on_step(logfn)
 
-    # Prefill
+    # Checkpoint setup: load BEFORE prefill so step/agent/replay are restored
+    ckpt_dir = logdir / 'ckpt'
+    cp = elements.Checkpoint(logdir / 'ckpt')
+    cp.step = step
+    cp.agent = agent
+    cp.replay = replay
+    if not getattr(args, 'fresh_start', True):
+        if ckpt_dir.exists() and (ckpt_dir / 'latest').exists():
+            cp.load(keys=['step', 'agent', 'replay'])
+            replay.set_global_step(int(step.value))
+            print(f'Resumed from checkpoint at step {int(step.value)}')
+        else:
+            print('No checkpoint found, starting fresh')
+    cp.save()
+
+    # Prefill (skipped on resume since step is already > prefill)
     prefill = 10000
     if step < prefill:
         print(f'Prefill dataset ({prefill} steps).')
@@ -1984,6 +2050,7 @@ def train_single(make_env, config, args, env_name=None):
         driver.reset()
         driver(random_policy, steps=prefill)
 
+    # Create training stream and carry AFTER checkpoint load so agent weights are restored
     def make_stream(replay, mode):
         fn = bind(replay.sample, batch_size, mode)
         stream = embodied.streams.Stateless(fn)
@@ -1994,22 +2061,6 @@ def train_single(make_env, config, args, env_name=None):
 
     stream_train = iter(agent.stream(make_stream(replay, 'train')))
     carry_train = [agent.init_train(batch_size)]
-
-    # Checkpoint setup: support resuming interrupted runs
-    ckpt_dir = logdir / 'ckpt'
-    if getattr(args, 'fresh_start', True):
-        if ckpt_dir.exists():
-            import shutil as _shutil
-            _shutil.rmtree(str(ckpt_dir), ignore_errors=True)
-            print('Removed old checkpoint directory for fresh start.')
-
-    cp = elements.Checkpoint(logdir / 'ckpt')
-    cp.step = step
-    cp.agent = agent
-    cp.replay = replay
-    if not getattr(args, 'fresh_start', True):
-        cp.load(ckpt_dir, keys=['step', 'agent', 'replay'])
-    cp.save()
 
     print(f'Start training loop (step={int(step.value)})')
     policy = lambda carry, obs: agent.policy(carry, obs, mode='train')
@@ -2083,15 +2134,18 @@ def cl_train_loop(make_envs, config, args, env_names=None):
 
     logdir = elements.Path(config.logdir)
 
-    # Always start fresh: remove old logdir contents (replay, checkpoints)
+    # Only clean old logdir contents when starting fresh (not resuming)
     import shutil as _shutil_clean
     logdir_str = str(logdir)
-    if os.path.exists(logdir_str):
-        for sub in ('replay', 'ckpt'):
-            sub_path = os.path.join(logdir_str, sub)
-            if os.path.exists(sub_path):
-                _shutil_clean.rmtree(sub_path, ignore_errors=True)
-        print(f'Cleaned old replay/ckpt from {logdir_str} for fresh start.')
+    if getattr(args, 'fresh_start', True):
+        if os.path.exists(logdir_str):
+            for sub in ('replay', 'ckpt'):
+                sub_path = os.path.join(logdir_str, sub)
+                if os.path.exists(sub_path):
+                    _shutil_clean.rmtree(sub_path, ignore_errors=True)
+            print(f'Cleaned old replay/ckpt from {logdir_str} for fresh start.')
+    else:
+        print(f'Resume mode: keeping existing replay/ckpt in {logdir_str}')
 
     logdir.mkdir()
     config.save(logdir / 'config.yaml')
@@ -2138,18 +2192,17 @@ def cl_train_loop(make_envs, config, args, env_names=None):
 
     # Checkpoint setup: support resuming interrupted runs
     ckpt_dir = logdir / 'ckpt'
-    if getattr(args, 'fresh_start', True):
-        if ckpt_dir.exists():
-            import shutil as _shutil
-            _shutil.rmtree(str(ckpt_dir), ignore_errors=True)
-            print('Removed old checkpoint directory for fresh start.')
-
     cp = elements.Checkpoint(logdir / 'ckpt')
     cp.step = total_step
     cp.agent = agent
     cp.replay = replay
     if not getattr(args, 'fresh_start', True):
-        cp.load(ckpt_dir, keys=['step', 'agent', 'replay'])
+        if ckpt_dir.exists() and (ckpt_dir / 'latest').exists():
+            cp.load(keys=['step', 'agent', 'replay'])
+            replay.set_global_step(int(total_step.value))
+            print(f'Resumed from checkpoint at step {int(total_step.value)}')
+        else:
+            print('No checkpoint found, starting fresh')
     cp.save()
 
     stats = replay.stats()
@@ -2209,9 +2262,12 @@ def cl_train_loop(make_envs, config, args, env_names=None):
             loss_policy = float(mets.get('loss/policy', 0.0))
             loss_value = float(mets.get('loss/value', 0.0))
 
-            ensemble_disagreement = float(mets.get('loss/disag', 0.0))
-            intrinsic_reward = float(mets.get('p2e/intr_rew', 0.0))
-            extrinsic_reward = float(mets.get('p2e/extr_rew', 0.0))
+            # P2E metrics — only log when P2E is actually active
+            p2e_kwargs = {}
+            if 'p2e/intr_rew' in mets:
+                p2e_kwargs['ensemble_disagreement'] = float(mets.get('loss/disag', 0.0))
+                p2e_kwargs['intrinsic_reward'] = float(mets['p2e/intr_rew'])
+                p2e_kwargs['extrinsic_reward'] = float(mets.get('p2e/extr_rew', 0.0))
 
             td_error_mean = float(mets.get('adv', 0.0))
             td_error_max = float(mets.get('adv_mag', 0.0))
@@ -2228,9 +2284,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                 loss_value=loss_value,
                 td_error_mean=td_error_mean,
                 td_error_max=td_error_max,
-                ensemble_disagreement=ensemble_disagreement,
-                intrinsic_reward=intrinsic_reward,
-                extrinsic_reward=extrinsic_reward,
+                **p2e_kwargs,
                 task_id=current_task_id,
                 **{'loss/mask_ctx': loss_mask_ctx},
             )
@@ -2238,6 +2292,8 @@ def cl_train_loop(make_envs, config, args, env_names=None):
             imagined_value = float(mets.get('val', 0.0))
             actual_value = float(mets.get('ret', 0.0))
             dream_accuracy = 1.0 / (1.0 + abs(imagined_value - actual_value))
+            intrinsic_reward = p2e_kwargs.get('intrinsic_reward', 0.0)
+            extrinsic_reward = p2e_kwargs.get('extrinsic_reward', 0.0)
             intr_extr_ratio = intrinsic_reward / extrinsic_reward if extrinsic_reward > 0 else 0.0
 
             online.log_exploration_diagnostics(
@@ -2258,9 +2314,17 @@ def cl_train_loop(make_envs, config, args, env_names=None):
             stats = replay_buffer.stats()
             buffer_size = stats.get('total_steps', len(replay_buffer))
 
+            # Pass through NLR/NLU pool utilization stats if available
+            pool_stats = {k: v for k, v in stats.items()
+                          if k.endswith('_actual_frac') or k in (
+                              'novel_pool_size', 'learnable_pool_size',
+                              'total_pool_size', 'total_samples')}
             online.log_replay_diagnostics(
                 step=current_step,
                 buffer_size=buffer_size,
+                mean_td_error=training_metrics_state['latest_td_error'],
+                mean_episode_age=replay_buffer.mean_episode_age(current_step),
+                **pool_stats,
             )
 
     while rep < args.num_task_repeats:
@@ -2268,7 +2332,13 @@ def cl_train_loop(make_envs, config, args, env_names=None):
             print(f"\n=== Task {task_id + 1}/{num_tasks}, Rep {rep + 1}/{args.num_task_repeats} ===\n")
 
             make_task_env = make_envs[task_id]
-            step = elements.Counter()
+            # Compute steps already completed for this task on resume
+            if unbalanced_steps is not None:
+                task_start = int(np.sum(unbalanced_steps[:task_id])) + rep * int(np.sum(unbalanced_steps))
+            else:
+                task_start = task_id * steps_per_task + rep * (steps_per_task * num_tasks)
+            steps_already = max(0, total_steps_done - task_start)
+            step = elements.Counter(steps_already)
             episodes = collections.defaultdict(elements.Agg)
             episode_achievements = {}  # Track achievements per worker
             current_task = task_id  # Capture for closure
@@ -2328,11 +2398,12 @@ def cl_train_loop(make_envs, config, args, env_names=None):
 
                     if online is not None:
                         achievements = episode_achievements.get(worker, np.zeros(NUM_CRAFTAX_ACHIEVEMENTS, dtype=np.bool_))
-                        achievement_depth = tran.get('log/achievement_depth', -1)
-                        if isinstance(achievement_depth, np.ndarray):
-                            achievement_depth = int(achievement_depth.item())
+                        # Compute depth from accumulated episode achievements, NOT from
+                        # tran['log/achievement_depth'] which comes from the Craftax
+                        # auto-reset state (always -1 at terminal timestep).
+                        achievement_depth = compute_achievement_depth(achievements)
 
-                        online.update(
+                        record = online.update(
                             task_id=current_task,
                             step=int(total_step.value),
                             score=float(score),
@@ -2344,6 +2415,7 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                             mask_infeasible_frac=result.get('mask_infeasible_frac'),
                             mask_blocked_frac=result.get('mask_blocked_frac'),
                         )
+                        _wandb_log_record(record, int(total_step.value))
                     logger.write()
 
             def replay_addfn(tran, worker):
@@ -2364,8 +2436,11 @@ def cl_train_loop(make_envs, config, args, env_names=None):
                 use_parallel = num_envs > 1
                 driver = embodied.Driver(env_fns, parallel=use_parallel)
 
-            driver.on_step(lambda tran, _: total_step.increment())
-            driver.on_step(lambda tran, _: step.increment())
+            def _update_steps_and_replay(tran, _):
+                total_step.increment()
+                step.increment()
+                replay.set_global_step(int(total_step.value))
+            driver.on_step(_update_steps_and_replay)
             driver.on_step(replay_addfn)
             driver.on_step(logfn)
 
@@ -2494,10 +2569,13 @@ def run_craftax(args):
                 'CraftaxClassicPixels-v1',
             ]
 
+        _wandb_resume = "allow" if not getattr(args, 'fresh_start', True) else False
+        _wandb_id = f"{args.wandb_group}_{tag}" if _wandb_resume == "allow" else None
         wandb.init(
             config=dict(config),
             reinit=True,
-            resume=False,
+            resume=_wandb_resume,
+            id=_wandb_id,
             dir=args.wandb_dir,
             mode=getattr(args, 'wandb_mode', 'online'),
             project=args.wandb_proj_name,
@@ -2523,10 +2601,13 @@ def run_craftax(args):
     else:
         env_name = all_envs[args.env % len(all_envs)]
 
+        _wandb_resume = "allow" if not getattr(args, 'fresh_start', True) else False
+        _wandb_id = f"{args.wandb_group}_{tag}" if _wandb_resume == "allow" else None
         wandb.init(
             config=dict(config),
             reinit=True,
-            resume=False,
+            resume=_wandb_resume,
+            id=_wandb_id,
             dir=args.wandb_dir,
             mode=getattr(args, 'wandb_mode', 'online'),
             project=args.wandb_proj_name,

@@ -8,7 +8,7 @@ Runs a systematic ablation study for:
   3. NLR replay with corrected novelty formula (Eq.9)
 
 Experiment groups:
-  A  Core comparison      (baseline, P2E, intrinsic, P2E+intrinsic)
+  A  Core comparison      (50:50 baseline, uniform baseline, P2E, intrinsic, P2E+intrinsic)
   B  Component ablation     (spatial-only vs craft-only vs both)
   D  Replay strategy       (50:50, NLR, NLU — privileged & non-privileged)
   E  Final model           (NLR replay + Spatial+Craft intrinsic)
@@ -17,22 +17,22 @@ Experiment groups:
 Output directory structure:
   experiment_results/ablation/
   ├── experiment_manifest.json        # run metadata & status for all experiments
-  ├── A1_baseline_seed1/
-  │   └── craftax_A1_baseline/        # DreamerV3 logdir
+  ├── A0_5050_baseline_seed1/
+  │   └── craftax_A0_5050_baseline/   # DreamerV3 logdir
   │       ├── config.yaml             # full training config snapshot
   │       ├── metrics.jsonl           # DreamerV3 training metrics (loss, reward, etc.)
   │       ├── online_metrics.jsonl    # per-episode CL metrics (achievements, forgetting)
   │       ├── metrics_summary.json    # aggregated achievement stats
   │       ├── nlr_args.yaml           # NLR/NLU config (if enabled)
   │       └── ckpt/                   # model weights (kept after run)
-  ├── A1_baseline_seed4/
+  ├── A0_5050_baseline_seed4/
   │   └── ...
   └── ...
 
 Usage:
   python run_ablation.py                          # run all 42 experiments
   python run_ablation.py --dry_run                # print commands only
-  python run_ablation.py --only A                 # run group A only (12 runs)
+  python run_ablation.py --only A                 # run group A only (5 configs, 15 runs)
   python run_ablation.py --only A1,A2             # run specific experiments
   python run_ablation.py --skip D                 # skip group D
   python run_ablation.py --wandb_mode disabled    # no wandb logging
@@ -54,10 +54,10 @@ from pathlib import Path
 # Default training hyperparameters (applied to every experiment)
 # ============================================================================
 DEFAULTS = {
-    "steps":           1_000_000_000,   # 1B steps
+    "steps":           1_000_000,       # 1M steps
     "batch_size":      48,
     "batch_length":    64,
-    "envs":            32,              # A100 has enough VRAM for 32 parallel envs
+    "envs":            64,              # A100-40G: Craftax Symbolic states are tiny, 64 is safe
     "model_size":      "25m",           # ~4GB VRAM, safe on A100-40G/80G
     "wandb_proj_name": "craftax-ablation",
     "wandb_mode":      "online",
@@ -77,9 +77,17 @@ BASE_LOGDIR = "experiment_results/ablation"
 EXPERIMENTS = OrderedDict()
 
 # ---------- Group A: Core Comparison ----------
-EXPERIMENTS["A1_baseline"] = {
+EXPERIMENTS["A0_5050_baseline"] = {
     "group": "A",
-    "desc": "Pure DreamerV3 (uniform replay, no P2E, no intrinsic)",
+    "desc": "DreamerV3 50:50 reservoir+recency baseline (no P2E, no intrinsic)",
+    "args": {
+        "no_plan2explore": True,
+        # recent_frac defaults to 0.5 — the standard Continual-Dreamer strategy
+    },
+}
+EXPERIMENTS["A1_uniform_baseline"] = {
+    "group": "A",
+    "desc": "DreamerV3 pure uniform replay baseline (no P2E, no intrinsic)",
     "args": {
         "no_plan2explore": True,
         "recent_frac": 0.0,
@@ -142,8 +150,8 @@ EXPERIMENTS["B2_craft_only"] = {
 
 # ---------- Group D: Replay Strategy Comparison ----------
 # Pure baseline (no P2E, no intrinsic) — isolate the replay strategy effect.
-# The default 50:50 reservoir+recent baseline is already covered by A1_baseline,
-# so Group D only tests the 4 NLR/NLU variants against it.
+# The 50:50 reservoir+recent baseline is A0_5050_baseline, and the pure uniform
+# baseline is A1_uniform_baseline.  Group D tests 4 NLR/NLU variants against them.
 
 EXPERIMENTS["D1_nlr"] = {
     "group": "D",
@@ -194,11 +202,11 @@ EXPERIMENTS["E1_nlr_intrinsic"] = {
 
 # ---------- Group F: Action Masking ----------
 # Evaluates soft vs hard feasibility masking in isolation.
-# Uses FIFO replay (no NLR/NLU), no intrinsic rewards, no P2E.
+# Uses default 50:50 reservoir+recency replay (no NLR/NLU), no intrinsic, no P2E.
 # This isolates the pure effect of action masking on exploration.
 EXPERIMENTS["F1_mask_soft"] = {
     "group": "F",
-    "desc": "Soft action mask (lambda=5.0, FIFO replay, no intrinsic, no P2E)",
+    "desc": "Soft action mask (lambda=5.0, 50:50 replay, no intrinsic, no P2E)",
     "args": {
         "no_plan2explore": True,
         "no_intrinsic_spatial": True,
@@ -209,7 +217,7 @@ EXPERIMENTS["F1_mask_soft"] = {
 }
 EXPERIMENTS["F2_mask_hard"] = {
     "group": "F",
-    "desc": "Hard action mask (block infeasible, FIFO replay, no intrinsic, no P2E)",
+    "desc": "Hard action mask (block infeasible, 50:50 replay, no intrinsic, no P2E)",
     "args": {
         "no_plan2explore": True,
         "no_intrinsic_spatial": True,
@@ -270,8 +278,45 @@ def build_command(exp_id, exp_cfg, seed, base_logdir, wandb_mode, extra_defaults
     return cmd, logdir
 
 
-def is_run_complete(logdir):
-    """Check if a run already completed by looking for metrics in nested logdir."""
+def _get_max_step(filepath):
+    """Read the max step from the tail of a JSONL file.
+
+    Scans the last 64KB for the highest 'step' value.  This is robust to
+    interrupted re-runs that append low-step entries after the original
+    high-step data.
+    """
+    try:
+        with open(filepath, 'rb') as f:
+            f.seek(0, 2)  # end of file
+            size = f.tell()
+            if size == 0:
+                return 0
+            read_size = min(65536, size)
+            f.seek(-read_size, 2)
+            data = f.read().decode('utf-8', errors='ignore')
+            lines = data.strip().split('\n')
+            max_step = 0
+            for line in lines:
+                try:
+                    record = json.loads(line)
+                    max_step = max(max_step, record.get('step', 0))
+                except (json.JSONDecodeError, ValueError):
+                    continue
+            return max_step
+    except OSError:
+        pass
+    return 0
+
+
+def is_run_complete(logdir, target_steps=None):
+    """Check if a run reached target_steps by reading the max logged step.
+
+    Uses a 1% tolerance because metrics are not logged at every step —
+    the last logged step can be slightly below the target.
+    """
+    if target_steps is None:
+        target_steps = DEFAULTS["steps"]
+    threshold = target_steps * 0.99
     if not os.path.exists(logdir):
         return False
     # DreamerV3 writes into a nested dir: logdir/craftax_<tag>/
@@ -280,9 +325,12 @@ def is_run_complete(logdir):
         os.path.join(logdir, d) for d in os.listdir(logdir)
         if os.path.isdir(os.path.join(logdir, d))
     ]:
-        metrics_path = os.path.join(search_dir, "metrics.jsonl")
-        if os.path.exists(metrics_path) and os.path.getsize(metrics_path) > 100:
-            return True
+        for fname in ("online_metrics.jsonl", "metrics.jsonl"):
+            fpath = os.path.join(search_dir, fname)
+            if os.path.exists(fpath):
+                max_step = _get_max_step(fpath)
+                if max_step >= threshold:
+                    return True
     return False
 
 
@@ -501,16 +549,20 @@ def main():
             cmd, logdir = build_command(
                 exp_id, exp_cfg, seed, args.base_logdir, args.wandb_mode)
 
-            # Skip if already completed
-            if is_run_complete(logdir):
-                prev = manifest.get("runs", {}).get(run_key, {})
-                prev_status = prev.get("status", "unknown")
+            # Skip if already completed (check both metrics AND manifest)
+            prev = manifest.get("runs", {}).get(run_key, {})
+            prev_status = prev.get("status", "unknown")
+            metrics_complete = is_run_complete(logdir)
+            manifest_complete = prev_status == "completed"
+
+            if metrics_complete or manifest_complete:
                 if prev_status == "failed" and args.resume_failed:
                     pass  # Re-run failed experiments
                 else:
                     skipped += 1
+                    reason = "metrics" if metrics_complete else "manifest"
                     print(f"[{run_idx:02d}/{total_runs}] SKIP {run_key} "
-                          f"(already complete, status={prev_status})")
+                          f"(already complete via {reason}, status={prev_status})")
                     continue
 
             # ETA calculation based on actually-executed runs (not skipped ones)

@@ -90,7 +90,7 @@ class Chunk:
       else:
         return None
     chunk = cls(length)
-    chunk.time = float(time)
+    chunk.time = time
     chunk.uuid = elements.UUID(uuid)
     chunk.succ = elements.UUID(succ)
     chunk.length = length

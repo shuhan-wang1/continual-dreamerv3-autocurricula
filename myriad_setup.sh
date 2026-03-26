@@ -88,10 +88,11 @@ STUBEOF
 fi
 
 # Core DreamerV3 dependencies
-# IMPORTANT: pin jax/jaxlib to prevent transitive upgrades (e.g. flax pulling jax 0.7)
+# IMPORTANT: jax/jaxlib 0.4.33 must be installed with --no-deps on Myriad
+# because pip's resolver filters them out due to manylinux tag incompatibility
+# with glibc 2.17, even though the packages are pure Python / work fine.
+${PIP} install "jax==0.4.33" "jaxlib==0.4.33" --no-deps
 ${PIP} install \
-    "jax==0.4.33" \
-    "jaxlib==0.4.33" \
     chex \
     einops \
     "elements>=3.19.1" \
@@ -99,7 +100,7 @@ ${PIP} install \
     optax \
     numpy==1.26.4 \
     jaxtyping \
-    flax \
+    "flax==0.8.5" \
     distrax \
     dm-env \
     dm-tree \
@@ -144,7 +145,7 @@ ${PIP} install \
 # Step 5.5: Force-pin critical versions that get overridden by transitive deps
 # ----------------------------------------------------------
 echo "[5.5/6] Pinning critical package versions..."
-${PIP} install "jax==0.4.33" "jaxlib==0.4.33" "numpy==1.26.4" --force-reinstall --no-deps
+${PIP} install "jax==0.4.33" "jaxlib==0.4.33" "numpy==1.26.4" "flax==0.8.5" --force-reinstall --no-deps
 
 # ----------------------------------------------------------
 # Step 6: Verify installation

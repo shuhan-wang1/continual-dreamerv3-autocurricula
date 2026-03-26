@@ -263,3 +263,219 @@ def _scalar(x) -> float:
             return float(arr[0])
         warnings.warn(f"_scalar received unconvertible value: {type(x)}", RuntimeWarning)
         return 0.0
+
+
+# ===================================================================
+# JAX-batched extraction — runs entirely on GPU, zero CPU round-trips
+# ===================================================================
+
+def _build_block_lut(block_id_set, max_id):
+    """Build a float32 lookup table: lut[block_id] = 1.0 if id in set."""
+    lut = np.zeros(max_id, dtype=np.float32)
+    for bid in block_id_set:
+        if 0 <= bid < max_id:
+            lut[bid] = 1.0
+    return lut
+
+
+# Lazily-initialized JAX constant arrays (built on first call)
+_jax_consts = None
+
+
+def _get_jax_consts():
+    """Build and cache JAX constant arrays for batched extraction."""
+    global _jax_consts
+    if _jax_consts is not None:
+        return _jax_consts
+
+    import jax.numpy as jnp
+
+    max_id = (max(_BLOCK_IDS.values()) + 1) if _BLOCK_IDS else 1
+    max_id = max(max_id, 64)  # minimum LUT size
+
+    fire_id = _BLOCK_IDS.get('ENCHANTMENT_TABLE_FIRE', -1)
+    ice_id = _BLOCK_IDS.get('ENCHANTMENT_TABLE_ICE', -1)
+
+    _jax_consts = {
+        'close_offsets': jnp.array(_CLOSE_OFFSETS_ARR, dtype=jnp.int32),
+        'dir_offsets': jnp.array([
+            [0, 0],   # 0=NOOP
+            [0, -1],  # 1=LEFT
+            [0, 1],   # 2=RIGHT
+            [-1, 0],  # 3=UP
+            [1, 0],   # 4=DOWN
+        ], dtype=jnp.int32),
+        'solid_lut': jnp.array(
+            _build_block_lut(_SOLID_SET, max_id)),
+        'can_place_lut': jnp.array(
+            _build_block_lut(_CAN_PLACE_ITEM_SET, max_id)),
+        'enchant_lut': jnp.array(
+            _build_block_lut(_ENCHANT_TABLE_IDS, max_id)),
+        'fire_lut': jnp.array(
+            _build_block_lut({fire_id} if fire_id >= 0 else set(), max_id)),
+        'ice_lut': jnp.array(
+            _build_block_lut({ice_id} if ice_id >= 0 else set(), max_id)),
+        'grass_id': _GRASS_ID,
+        'max_id': max_id,
+    }
+    return _jax_consts
+
+
+def extract_mask_context_batch_jax(states):
+    """Extract mask context for all envs using pure JAX ops on device.
+
+    Replaces the per-env Python loop + GPU→CPU transfers with a single
+    vectorized computation that stays entirely on GPU.
+
+    Args:
+        states: Vectorized Craftax EnvState with leading (N,) dim on all leaves.
+
+    Returns:
+        jnp.ndarray of shape (N, CONTEXT_SIZE), float32, on device.
+    """
+    import jax.numpy as jnp
+
+    c = _get_jax_consts()
+    inv = states.inventory
+    N = states.player_health.shape[0]
+    ctx = jnp.zeros((N, CONTEXT_SIZE), dtype=jnp.float32)
+
+    # --- Inventory (indices 0-13) ---
+    ctx = ctx.at[:, C.WOOD].set(inv.wood.astype(jnp.float32))
+    ctx = ctx.at[:, C.STONE].set(inv.stone.astype(jnp.float32))
+    ctx = ctx.at[:, C.COAL].set(inv.coal.astype(jnp.float32))
+    ctx = ctx.at[:, C.IRON].set(inv.iron.astype(jnp.float32))
+    ctx = ctx.at[:, C.DIAMOND].set(inv.diamond.astype(jnp.float32))
+    ctx = ctx.at[:, C.SAPLING].set(inv.sapling.astype(jnp.float32))
+    ctx = ctx.at[:, C.PICKAXE].set(inv.pickaxe.astype(jnp.float32))
+    ctx = ctx.at[:, C.SWORD].set(inv.sword.astype(jnp.float32))
+    ctx = ctx.at[:, C.BOW].set(inv.bow.astype(jnp.float32))
+    ctx = ctx.at[:, C.ARROWS].set(inv.arrows.astype(jnp.float32))
+    ctx = ctx.at[:, C.TORCHES].set(inv.torches.astype(jnp.float32))
+    ctx = ctx.at[:, C.BOOKS].set(inv.books.astype(jnp.float32))
+    ctx = ctx.at[:, C.RUBY].set(inv.ruby.astype(jnp.float32))
+    ctx = ctx.at[:, C.SAPPHIRE].set(inv.sapphire.astype(jnp.float32))
+
+    # --- Armour (indices 14-17) ---
+    armour = inv.armour.astype(jnp.float32)              # (N, 4)
+    ctx = ctx.at[:, C.ARMOUR_0:C.ARMOUR_0 + 4].set(armour[:, :4])
+
+    # --- Potions (indices 18-23) ---
+    potions = inv.potions.astype(jnp.float32)             # (N, 6)
+    ctx = ctx.at[:, C.POTION_0:C.POTION_0 + 6].set(potions[:, :6])
+
+    # --- Player state (indices 24-33) ---
+    ctx = ctx.at[:, C.HEALTH].set(
+        jnp.asarray(states.player_health, dtype=jnp.float32))
+    ctx = ctx.at[:, C.ENERGY].set(
+        jnp.asarray(states.player_energy, dtype=jnp.float32))
+    ctx = ctx.at[:, C.MANA].set(
+        jnp.asarray(states.player_mana, dtype=jnp.float32))
+    ctx = ctx.at[:, C.XP].set(
+        jnp.asarray(states.player_xp, dtype=jnp.float32))
+    ctx = ctx.at[:, C.LEVEL].set(
+        jnp.asarray(states.player_level, dtype=jnp.float32))
+    ctx = ctx.at[:, C.DEXTERITY].set(
+        jnp.asarray(states.player_dexterity, dtype=jnp.float32))
+    ctx = ctx.at[:, C.STRENGTH].set(
+        jnp.asarray(states.player_strength, dtype=jnp.float32))
+    ctx = ctx.at[:, C.INTELLIGENCE].set(
+        jnp.asarray(states.player_intelligence, dtype=jnp.float32))
+
+    # --- Learned spells (indices 32-33) ---
+    spells = jnp.asarray(states.learned_spells, dtype=jnp.float32)  # (N, 2)
+    ctx = ctx.at[:, C.SPELL_FIREBALL].set(spells[:, 0])
+    ctx = ctx.at[:, C.SPELL_ICEBALL].set(spells[:, 1])
+
+    # --- Map-based checks ---
+    game_map = states.map                                  # (N, L, H, W)
+    item_map_full = states.item_map                        # (N, L, H, W)
+    L = game_map.shape[1]
+    H, W = game_map.shape[2], game_map.shape[3]
+
+    level_idx = jnp.clip(
+        jnp.asarray(states.player_level, dtype=jnp.int32), 0, L - 1)   # (N,)
+    pos = jnp.asarray(states.player_position, dtype=jnp.int32)         # (N, 2)
+    px, py = pos[:, 0], pos[:, 1]
+    env_idx = jnp.arange(N)
+
+    # Per-env level slices
+    level_maps = game_map[env_idx, level_idx]              # (N, H, W)
+    item_maps = item_map_full[env_idx, level_idx]          # (N, H, W)
+
+    # --- Proximity: 8-cell adjacency ---
+    nbr = pos[:, None, :] + c['close_offsets'][None, :, :]  # (N, 8, 2)
+    nbr_valid = (
+        (nbr[:, :, 0] >= 0) & (nbr[:, :, 0] < H) &
+        (nbr[:, :, 1] >= 0) & (nbr[:, :, 1] < W)
+    )                                                       # (N, 8)
+    nr = jnp.clip(nbr[:, :, 0], 0, H - 1)
+    nc = jnp.clip(nbr[:, :, 1], 0, W - 1)
+    nblocks = level_maps[env_idx[:, None], nr, nc]          # (N, 8)
+
+    ctx = ctx.at[:, C.NEAR_TABLE].set(
+        jnp.any(nbr_valid & (nblocks == _CRAFTING_TABLE_ID), axis=1)
+        .astype(jnp.float32))
+    ctx = ctx.at[:, C.NEAR_FURNACE].set(
+        jnp.any(nbr_valid & (nblocks == _FURNACE_ID), axis=1)
+        .astype(jnp.float32))
+
+    # --- Facing block ---
+    dirs = jnp.asarray(states.player_direction, dtype=jnp.int32)  # (N,)
+    # Clamp to valid index range [0, 4]
+    dirs_safe = jnp.clip(dirs, 0, 4)
+    doff = c['dir_offsets'][dirs_safe]                     # (N, 2)
+    fr, fc = px + doff[:, 0], py + doff[:, 1]
+    fvalid = (dirs > 0) & (fr >= 0) & (fr < H) & (fc >= 0) & (fc < W)
+    fr_s = jnp.clip(fr, 0, H - 1)
+    fc_s = jnp.clip(fc, 0, W - 1)
+    fblock = level_maps[env_idx, fr_s, fc_s]               # (N,)
+    fb_s = jnp.clip(fblock, 0, c['max_id'] - 1)            # safe LUT index
+
+    f_solid = c['solid_lut'][fb_s] > 0.5                    # (N,)
+    f_item = item_maps[env_idx, fr_s, fc_s]                 # (N,)
+    f_has_item = f_item != _ITEM_NONE
+
+    ctx = ctx.at[:, C.FACING_PLACEABLE].set(
+        (fvalid & ~f_solid & ~f_has_item).astype(jnp.float32))
+
+    if c['grass_id'] is not None:
+        ctx = ctx.at[:, C.FACING_GRASS].set(
+            (fvalid & (fblock == c['grass_id']) & ~f_has_item)
+            .astype(jnp.float32))
+
+    ctx = ctx.at[:, C.FACING_ENCHANT_TABLE].set(
+        (fvalid & (c['enchant_lut'][fb_s] > 0.5)).astype(jnp.float32))
+    ctx = ctx.at[:, C.FACING_FIRE_TABLE].set(
+        (fvalid & (c['fire_lut'][fb_s] > 0.5)).astype(jnp.float32))
+    ctx = ctx.at[:, C.FACING_ICE_TABLE].set(
+        (fvalid & (c['ice_lut'][fb_s] > 0.5)).astype(jnp.float32))
+    ctx = ctx.at[:, C.FACING_TORCH_PLACEABLE].set(
+        (fvalid & (c['can_place_lut'][fb_s] > 0.5) & ~f_has_item)
+        .astype(jnp.float32))
+
+    # --- Ladder checks ---
+    px_s = jnp.clip(px, 0, H - 1)
+    py_s = jnp.clip(py, 0, W - 1)
+    p_item = item_maps[env_idx, px_s, py_s]                 # (N,)
+    ctx = ctx.at[:, C.ON_LADDER_DOWN].set(
+        (p_item == _ITEM_LADDER_DOWN).astype(jnp.float32))
+    ctx = ctx.at[:, C.ON_LADDER_UP].set(
+        (p_item == _ITEM_LADDER_UP).astype(jnp.float32))
+
+    # --- Level cleared ---
+    mk = jnp.asarray(states.monsters_killed, dtype=jnp.float32)  # (N, L)
+    ctx = ctx.at[:, C.LEVEL_CLEARED].set(
+        (mk[env_idx, level_idx] >= _MONSTERS_TO_CLEAR).astype(jnp.float32))
+
+    # --- Projectile slots ---
+    pm = states.player_projectiles.mask                     # (N, L, P) or (N, P)
+    if pm.ndim >= 3:
+        lp = pm[env_idx, level_idx]                         # (N, P)
+    else:
+        lp = pm                                             # (N, P)
+    ctx = ctx.at[:, C.PROJECTILE_SLOTS].set(
+        (lp.astype(jnp.float32).sum(axis=-1) < _MAX_PROJECTILES)
+        .astype(jnp.float32))
+
+    return ctx
