@@ -11,31 +11,76 @@ import sys
 
 BASE_DIR = pathlib.Path(__file__).resolve().parent / "10m"
 
-# 67 Craftax achievements in enum-value order (matches the boolean vector in JSONL)
+# 67 Craftax achievements indexed by enum value
+# Source: https://github.com/MichaelTMatthews/Craftax/blob/main/craftax/craftax/constants.py
 ACHIEVEMENT_NAMES = [
-    "collect_wood", "place_table", "eat_cow", "collect_sapling",
-    "collect_drink", "make_wood_pickaxe", "make_wood_sword",
-    "place_plant", "defeat_zombie", "collect_stone", "place_stone",
-    "eat_plant", "defeat_skeleton", "collect_coal", "make_stone_pickaxe",
-    "make_stone_sword", "wake_up", "place_furnace", "collect_iron",
-    "make_iron_pickaxe", "make_iron_sword", "collect_diamond",
-    "make_diamond_pickaxe", "make_diamond_sword",
-    "make_iron_armour", "make_diamond_armour",
-    "make_arrow", "make_torch", "place_torch",
-    "eat_bat", "eat_snail", "find_bow", "fire_bow",
-    "collect_sapphire", "collect_ruby",
-    "enter_gnomish_mines", "enter_dungeon", "enter_sewers",
-    "enter_vault", "enter_troll_mines",
-    "defeat_gnome_warrior", "defeat_gnome_archer",
-    "defeat_orc_solider", "defeat_orc_mage",
-    "defeat_lizard", "defeat_kobold",
-    "learn_fireball", "cast_fireball", "learn_iceball", "cast_iceball",
-    "open_chest", "drink_potion", "enchant_sword", "enchant_armour",
-    "enter_fire_realm", "enter_ice_realm", "enter_graveyard",
-    "defeat_troll", "defeat_deep_thing", "defeat_pigman",
-    "defeat_fire_elemental", "defeat_frost_troll", "defeat_ice_elemental",
-    "defeat_knight", "defeat_archer",
-    "damage_necromancer", "defeat_necromancer",
+    "collect_wood",          # 0
+    "place_table",           # 1
+    "eat_cow",               # 2
+    "collect_sapling",       # 3
+    "collect_drink",         # 4
+    "make_wood_pickaxe",     # 5
+    "make_wood_sword",       # 6
+    "place_plant",           # 7
+    "defeat_zombie",         # 8
+    "collect_stone",         # 9
+    "place_stone",           # 10
+    "eat_plant",             # 11
+    "defeat_skeleton",       # 12
+    "make_stone_pickaxe",    # 13
+    "make_stone_sword",      # 14
+    "wake_up",               # 15
+    "place_furnace",         # 16
+    "collect_coal",          # 17
+    "collect_iron",          # 18
+    "collect_diamond",       # 19
+    "make_iron_pickaxe",     # 20
+    "make_iron_sword",       # 21
+    "make_arrow",            # 22
+    "make_torch",            # 23
+    "place_torch",           # 24
+    "make_diamond_sword",    # 25
+    "make_iron_armour",      # 26
+    "make_diamond_armour",   # 27
+    "enter_gnomish_mines",   # 28
+    "enter_dungeon",         # 29
+    "enter_sewers",          # 30
+    "enter_vault",           # 31
+    "enter_troll_mines",     # 32
+    "enter_fire_realm",      # 33
+    "enter_ice_realm",       # 34
+    "enter_graveyard",       # 35
+    "defeat_gnome_warrior",  # 36
+    "defeat_gnome_archer",   # 37
+    "defeat_orc_solider",    # 38
+    "defeat_orc_mage",       # 39
+    "defeat_lizard",         # 40
+    "defeat_kobold",         # 41
+    "defeat_troll",          # 42
+    "defeat_deep_thing",     # 43
+    "defeat_pigman",         # 44
+    "defeat_fire_elemental", # 45
+    "defeat_frost_troll",    # 46
+    "defeat_ice_elemental",  # 47
+    "damage_necromancer",    # 48
+    "defeat_necromancer",    # 49
+    "eat_bat",               # 50
+    "eat_snail",             # 51
+    "find_bow",              # 52
+    "fire_bow",              # 53
+    "collect_sapphire",      # 54
+    "learn_fireball",        # 55
+    "cast_fireball",         # 56
+    "learn_iceball",         # 57
+    "cast_iceball",          # 58
+    "collect_ruby",          # 59
+    "make_diamond_pickaxe",  # 60
+    "open_chest",            # 61
+    "drink_potion",          # 62
+    "enchant_sword",         # 63
+    "enchant_armour",        # 64
+    "defeat_knight",         # 65
+    "defeat_archer",         # 66
 ]
 
 
