@@ -112,17 +112,17 @@ run_experiment() {
     return 1
 }
 
-run_experiment "G3_mask_craft_nlu_seed1" "experiment_results/10m/G3_mask_craft_nlu_seed1" \
-    --seed 1 --tag G3_mask_craft_nlu --logdir experiment_results/10m/G3_mask_craft_nlu_seed1 \
-    $FLAGS --wandb_group G3_mask_craft_nlu
+run_experiment "G3v2_mask_craft_nlu_seed1" "experiment_results/10m/G3v2_mask_craft_nlu_seed1" \
+    --seed 1 --tag G3v2_mask_craft_nlu --logdir experiment_results/10m/G3v2_mask_craft_nlu_seed1 \
+    $FLAGS --wandb_group G3v2_mask_craft_nlu
 
-run_experiment "G3_mask_craft_nlu_seed4" "experiment_results/10m/G3_mask_craft_nlu_seed4" \
-    --seed 4 --tag G3_mask_craft_nlu --logdir experiment_results/10m/G3_mask_craft_nlu_seed4 \
-    $FLAGS --wandb_group G3_mask_craft_nlu
+run_experiment "G3v2_mask_craft_nlu_seed4" "experiment_results/10m/G3v2_mask_craft_nlu_seed4" \
+    --seed 4 --tag G3v2_mask_craft_nlu --logdir experiment_results/10m/G3v2_mask_craft_nlu_seed4 \
+    $FLAGS --wandb_group G3v2_mask_craft_nlu
 
-run_experiment "G3_mask_craft_nlu_seed42" "experiment_results/10m/G3_mask_craft_nlu_seed42" \
-    --seed 42 --tag G3_mask_craft_nlu --logdir experiment_results/10m/G3_mask_craft_nlu_seed42 \
-    $FLAGS --wandb_group G3_mask_craft_nlu
+run_experiment "G3v2_mask_craft_nlu_seed42" "experiment_results/10m/G3v2_mask_craft_nlu_seed42" \
+    --seed 42 --tag G3v2_mask_craft_nlu --logdir experiment_results/10m/G3v2_mask_craft_nlu_seed42 \
+    $FLAGS --wandb_group G3v2_mask_craft_nlu
 
 # --- Summary ---
 ELAPSED=$((SECONDS - START_TIME))
