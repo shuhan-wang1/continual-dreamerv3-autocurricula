@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Read the last record of each 10m experiment's online_metrics.jsonl
-and print the return-mean-achievements (number of True in achievements vector)."""
+"""Load all records from each 10m experiment's online_metrics.jsonl
+and print mean return-mean-achievements (avg number of True in achievements)."""
 
 import json
 import pathlib
@@ -9,15 +9,15 @@ import sys
 BASE_DIR = pathlib.Path(__file__).resolve().parent / "10m"
 
 
-def last_json_line(path: pathlib.Path) -> dict | None:
-    """Return the last non-empty line of a JSONL file as a dict."""
-    last = None
+def load_jsonl(path: pathlib.Path) -> list[dict]:
+    """Load all records from a JSONL file."""
+    records = []
     with open(path) as f:
         for line in f:
             line = line.strip()
             if line:
-                last = line
-    return json.loads(last) if last else None
+                records.append(json.loads(line))
+    return records
 
 
 def main():
@@ -30,20 +30,26 @@ def main():
         print(f"No online_metrics.jsonl found under {BASE_DIR}")
         sys.exit(1)
 
-    print(f"{'Run':<40} {'Step':>10} {'Achievements':>14} {'Return Mean':>12}")
-    print("-" * 80)
+    print(f"{'Run':<40} {'Records':>8} {'LastStep':>10} {'MeanAch':>10} {'LastAch':>10} {'MeanReturn':>12} {'LastReturn':>12}")
+    print("-" * 106)
 
     for path in jsonl_files:
         run_name = path.parent.name
-        record = last_json_line(path)
-        if record is None:
-            print(f"{run_name:<40} {'(empty)':>10}")
+        records = load_jsonl(path)
+        if not records:
+            print(f"{run_name:<40} {'(empty)':>8}")
             continue
-        achievements = record.get("achievements", [])
-        num_true = sum(1 for v in achievements if v)
-        step = record.get("step", "?")
-        return_mean = record.get("return_mean", float("nan"))
-        print(f"{run_name:<40} {step:>10} {num_true:>14} {return_mean:>12.4f}")
+
+        ach_counts = [sum(1 for v in r.get("achievements", []) if v) for r in records]
+        return_means = [r.get("return_mean", 0.0) for r in records]
+
+        mean_ach = sum(ach_counts) / len(ach_counts)
+        last_ach = ach_counts[-1]
+        mean_ret = sum(return_means) / len(return_means)
+        last_ret = return_means[-1]
+        last_step = records[-1].get("step", "?")
+
+        print(f"{run_name:<40} {len(records):>8} {last_step:>10} {mean_ach:>10.2f} {last_ach:>10} {mean_ret:>12.4f} {last_ret:>12.4f}")
 
 
 if __name__ == "__main__":
