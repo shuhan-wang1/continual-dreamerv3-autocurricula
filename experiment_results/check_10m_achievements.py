@@ -11,16 +11,37 @@ import sys
 
 BASE_DIR = pathlib.Path(__file__).resolve().parent / "10m"
 
+# 67 Craftax achievements in enum-value order (matches the boolean vector in JSONL)
+ACHIEVEMENT_NAMES = [
+    "collect_wood", "place_table", "eat_cow", "collect_sapling",
+    "collect_drink", "make_wood_pickaxe", "make_wood_sword",
+    "place_plant", "defeat_zombie", "collect_stone", "place_stone",
+    "eat_plant", "defeat_skeleton", "collect_coal", "make_stone_pickaxe",
+    "make_stone_sword", "wake_up", "place_furnace", "collect_iron",
+    "make_iron_pickaxe", "make_iron_sword", "collect_diamond",
+    "make_diamond_pickaxe", "make_diamond_sword",
+    "make_iron_armour", "make_diamond_armour",
+    "make_arrow", "make_torch", "place_torch",
+    "eat_bat", "eat_snail", "find_bow", "fire_bow",
+    "collect_sapphire", "collect_ruby",
+    "enter_gnomish_mines", "enter_dungeon", "enter_sewers",
+    "enter_vault", "enter_troll_mines",
+    "defeat_gnome_warrior", "defeat_gnome_archer",
+    "defeat_orc_solider", "defeat_orc_mage",
+    "defeat_lizard", "defeat_kobold",
+    "learn_fireball", "cast_fireball", "learn_iceball", "cast_iceball",
+    "open_chest", "drink_potion", "enchant_sword", "enchant_armour",
+    "enter_fire_realm", "enter_ice_realm", "enter_graveyard",
+    "defeat_troll", "defeat_deep_thing", "defeat_pigman",
+    "defeat_fire_elemental", "defeat_frost_troll", "defeat_ice_elemental",
+    "defeat_knight", "defeat_archer",
+    "damage_necromancer", "defeat_necromancer",
+]
+
 
 def get_achievement_names(n: int) -> list[str]:
-    """Try to load names from Craftax enum; fall back to index-based names."""
-    try:
-        from craftax.craftax_env import CraftaxAchievement
-        names = [a.name.lower() for a in sorted(CraftaxAchievement, key=lambda a: a.value)]
-        if len(names) == n:
-            return names
-    except Exception:
-        pass
+    if n == len(ACHIEVEMENT_NAMES):
+        return ACHIEVEMENT_NAMES
     return [f"achievement_{i}" for i in range(n)]
 
 
