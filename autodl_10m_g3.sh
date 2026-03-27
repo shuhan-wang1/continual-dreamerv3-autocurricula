@@ -51,8 +51,8 @@ echo "---"
 COMMON="--steps 10000000 --batch_size 48 --batch_length 64 --envs 64 --model_size 25m --wandb_proj_name craftax-10m --wandb_mode online --resume"
 # Soft mask
 MASK="--action_mask_enabled --action_mask_mode soft --action_mask_lambda_penalty 5.0"
-# Craft intrinsic ONLY (no --intrinsic_spatial, alpha_spatial=0)
-INTRINSIC="--alpha_spatial 0.0 --alpha_craft 0.3 --alpha_e 1.0"
+# Craft intrinsic ONLY (need --intrinsic_spatial to enable the shaper, but zero out spatial weight)
+INTRINSIC="--intrinsic_spatial --alpha_spatial 0.0 --alpha_craft 0.3 --alpha_e 1.0"
 # NLU non-privileged sampling
 NLU="--nlu_sampling"
 # No P2E (harmful)
