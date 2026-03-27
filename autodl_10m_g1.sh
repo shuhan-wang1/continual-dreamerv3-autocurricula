@@ -112,17 +112,17 @@ run_experiment() {
     return 1
 }
 
-run_experiment "G1_mask_intr_nlu_seed1" "experiment_results/10m/G1_mask_intr_nlu_seed1" \
-    --seed 1 --tag G1_mask_intr_nlu --logdir experiment_results/10m/G1_mask_intr_nlu_seed1 \
-    $FLAGS --wandb_group G1_mask_intr_nlu
+run_experiment "G1v2_mask_intr_nlu_seed1" "experiment_results/10m/G1v2_mask_intr_nlu_seed1" \
+    --seed 1 --tag G1v2_mask_intr_nlu --logdir experiment_results/10m/G1v2_mask_intr_nlu_seed1 \
+    $FLAGS --wandb_group G1v2_mask_intr_nlu
 
-run_experiment "G1_mask_intr_nlu_seed4" "experiment_results/10m/G1_mask_intr_nlu_seed4" \
-    --seed 4 --tag G1_mask_intr_nlu --logdir experiment_results/10m/G1_mask_intr_nlu_seed4 \
-    $FLAGS --wandb_group G1_mask_intr_nlu
+run_experiment "G1v2_mask_intr_nlu_seed4" "experiment_results/10m/G1v2_mask_intr_nlu_seed4" \
+    --seed 4 --tag G1v2_mask_intr_nlu --logdir experiment_results/10m/G1v2_mask_intr_nlu_seed4 \
+    $FLAGS --wandb_group G1v2_mask_intr_nlu
 
-run_experiment "G1_mask_intr_nlu_seed42" "experiment_results/10m/G1_mask_intr_nlu_seed42" \
-    --seed 42 --tag G1_mask_intr_nlu --logdir experiment_results/10m/G1_mask_intr_nlu_seed42 \
-    $FLAGS --wandb_group G1_mask_intr_nlu
+run_experiment "G1v2_mask_intr_nlu_seed42" "experiment_results/10m/G1v2_mask_intr_nlu_seed42" \
+    --seed 42 --tag G1v2_mask_intr_nlu --logdir experiment_results/10m/G1v2_mask_intr_nlu_seed42 \
+    $FLAGS --wandb_group G1v2_mask_intr_nlu
 
 # --- Summary ---
 ELAPSED=$((SECONDS - START_TIME))
