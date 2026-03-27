@@ -2,8 +2,12 @@
 # =============================================================
 # G2: A0 baseline (50:50 reservoir+recency) @ 10M steps, 3 seeds
 # Control experiment: same as A0 but 10x longer training.
-# Target: AutoDL consumer GPU (RTX 3090/4090, 24GB VRAM)
-# Estimated: ~24h/seed on RTX 4090, ~72h total sequential
+# Target: AutoDL consumer GPU (RTX 5090, 32GB VRAM)
+#
+# Resume-safe: re-run this script after interruption and it will
+#   - skip seeds that already finished (DONE marker)
+#   - resume in-progress seeds from checkpoint (--resume)
+#   - retry failed seeds up to MAX_RETRIES times
 # =============================================================
 
 set -euo pipefail
@@ -28,9 +32,12 @@ export PYTHONPATH="${PROJECT_DIR}:${PROJECT_DIR}/dreamerv3:${PYTHONPATH:-}"
 
 mkdir -p logs experiment_results/10m
 
+MAX_RETRIES=3
+
 echo "============================================"
 echo "  G2: A0 baseline @ 10M steps"
 echo "  50:50 reservoir+recency, no P2E, no intrinsic"
+echo "  Resume-safe (max $MAX_RETRIES retries/seed)"
 echo "  (AutoDL)"
 echo "============================================"
 echo "Host: $(hostname) | GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'unknown') | Start: $(date)"
@@ -44,6 +51,7 @@ NO_P2E="--no_plan2explore"
 
 FLAGS="$COMMON $NO_P2E"
 
+SKIPPED=0
 FAILED=0
 COMPLETED=0
 TOTAL=3
@@ -51,35 +59,58 @@ START_TIME=$SECONDS
 
 run_experiment() {
     local NAME=$1
-    shift
+    local LOGDIR=$2
+    shift 2
+
     echo ""
     echo "======================================================================"
-    echo "  [$((COMPLETED + FAILED + 1))/$TOTAL] $NAME"
-    echo "  Start: $(date)"
+    echo "  [$((COMPLETED + SKIPPED + FAILED + 1))/$TOTAL] $NAME"
     echo "======================================================================"
 
-    $PYTHON train_craftax.py "$@"
-    local RC=$?
-
-    if [ $RC -eq 0 ]; then
-        COMPLETED=$((COMPLETED + 1))
-        echo "  [OK] $NAME completed (exit $RC)"
-    else
-        FAILED=$((FAILED + 1))
-        echo "  [FAIL] $NAME failed (exit $RC)"
+    # Skip if already completed
+    if [ -f "$LOGDIR/DONE" ]; then
+        echo "  [SKIP] $NAME already completed (DONE marker found)"
+        SKIPPED=$((SKIPPED + 1))
+        return 0
     fi
-    return $RC
+
+    # Retry loop
+    local ATTEMPT=0
+    while [ $ATTEMPT -lt $MAX_RETRIES ]; do
+        ATTEMPT=$((ATTEMPT + 1))
+        echo "  Attempt $ATTEMPT/$MAX_RETRIES | Start: $(date)"
+
+        $PYTHON train_craftax.py "$@"
+        local RC=$?
+
+        if [ $RC -eq 0 ]; then
+            touch "$LOGDIR/DONE"
+            COMPLETED=$((COMPLETED + 1))
+            echo "  [OK] $NAME completed (exit $RC)"
+            return 0
+        fi
+
+        echo "  [WARN] $NAME attempt $ATTEMPT failed (exit $RC)"
+        if [ $ATTEMPT -lt $MAX_RETRIES ]; then
+            echo "  Retrying in 10s..."
+            sleep 10
+        fi
+    done
+
+    FAILED=$((FAILED + 1))
+    echo "  [FAIL] $NAME failed after $MAX_RETRIES attempts"
+    return 1
 }
 
-run_experiment "G2_baseline_10m_seed1" \
+run_experiment "G2_baseline_10m_seed1" "experiment_results/10m/G2_baseline_10m_seed1" \
     --seed 1 --tag G2_baseline_10m --logdir experiment_results/10m/G2_baseline_10m_seed1 \
     $FLAGS --wandb_group G2_baseline_10m
 
-run_experiment "G2_baseline_10m_seed4" \
+run_experiment "G2_baseline_10m_seed4" "experiment_results/10m/G2_baseline_10m_seed4" \
     --seed 4 --tag G2_baseline_10m --logdir experiment_results/10m/G2_baseline_10m_seed4 \
     $FLAGS --wandb_group G2_baseline_10m
 
-run_experiment "G2_baseline_10m_seed42" \
+run_experiment "G2_baseline_10m_seed42" "experiment_results/10m/G2_baseline_10m_seed42" \
     --seed 42 --tag G2_baseline_10m --logdir experiment_results/10m/G2_baseline_10m_seed42 \
     $FLAGS --wandb_group G2_baseline_10m
 
@@ -93,6 +124,7 @@ echo "======================================================================"
 echo "  G2 COMPLETE (AutoDL)"
 echo "======================================================================"
 echo "  Completed: $COMPLETED / $TOTAL"
+echo "  Skipped:   $SKIPPED / $TOTAL"
 echo "  Failed:    $FAILED / $TOTAL"
 echo "  Duration:  ${HOURS}h ${MINS}m"
 echo "  End:       $(date)"
