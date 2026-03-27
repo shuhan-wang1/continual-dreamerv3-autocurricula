@@ -25,7 +25,7 @@ def main():
         print(f"Directory not found: {BASE_DIR}")
         sys.exit(1)
 
-    jsonl_files = sorted(BASE_DIR.glob("*/online_metrics.jsonl"))
+    jsonl_files = sorted(BASE_DIR.glob("**/online_metrics.jsonl"))
     if not jsonl_files:
         print(f"No online_metrics.jsonl found under {BASE_DIR}")
         sys.exit(1)
@@ -34,7 +34,7 @@ def main():
     print("-" * 106)
 
     for path in jsonl_files:
-        run_name = path.parent.name
+        run_name = str(path.relative_to(BASE_DIR))
         records = load_jsonl(path)
         if not records:
             print(f"{run_name:<40} {'(empty)':>8}")
