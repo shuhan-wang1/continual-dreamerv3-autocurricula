@@ -34,13 +34,20 @@ echo "  Package Myriad Experiment Results"
 echo "  $(date)"
 echo "========================================"
 
+# ── 0. Generate figures first ─────────────────────────────────
+echo "[0/4] Generating figures from ${RESULTS_DIR}..."
+$PYTHON experiment_results/plot_neurips_figures.py \
+    --results_dir "$RESULTS_DIR" \
+    --output_dir "$FIGURES_DIR"
+echo "  Figures generated"
+
 # ── 1. Copy figures ───────────────────────────────────────────
 if [ -d "$FIGURES_DIR" ]; then
-    echo "[1/4] Copying figures..."
+    echo "[1/4] Copying figures into package..."
     cp -r "$FIGURES_DIR" "$STAGING/figures"
     echo "  $(ls "$STAGING/figures/" | wc -l) files copied"
 else
-    echo "[1/4] No figures directory found — skipping"
+    echo "[1/4] WARNING: Figure generation produced no output"
     mkdir -p "$STAGING/figures"
 fi
 
