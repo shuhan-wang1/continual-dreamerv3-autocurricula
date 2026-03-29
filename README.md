@@ -34,16 +34,15 @@ continual-dreamerv3-autocurricula/
 ├── train_navix.py            # NAVIX training script
 ├── input_args.py             # All argument parsers (craftax, navix)
 ├── intrinsic_reward.py       # Spatial + Craft novelty reward shaping
-├── run_ablation.py           # Ablation experiment runner (16 configs × 3 seeds)
+├── run_ablation.py           # Ablation experiment runner (14 configs × 3 seeds)
 ├── plot_ablation.py          # Result visualization & analysis
 ├── analyze_all_results.py    # Final results aggregation for publication
 ├── analyze_mask_effect.py    # Action masking analysis
 │
 ├── dreamerv3/                # ENHANCED DreamerV3 (our modified version)
 │   ├── dreamerv3/
-│   │   ├── agent.py          # Agent with integrated Plan2Explore + action masking
-│   │   ├── rssm.py           # RSSM encoder/decoder
-│   │   └── expl.py           # Plan2Explore ensemble implementation
+│   │   ├── agent.py          # Agent with Plan2Explore + action masking
+│   │   └── rssm.py           # RSSM encoder/decoder
 │   └── embodied/core/
 │       ├── selectors.py      # All replay sampling selectors (key innovation)
 │       └── replay.py         # Replay buffer with selector integration
@@ -89,7 +88,7 @@ Episodes achieving rare skills (low $s_i$) score highest. The pool samples propo
 
 *Non-privileged variant* (`--nlr_sampling`): replaces the achievement vector with a 2-D quantile histogram over (episode length, cumulative reward). Bin edges are recomputed from quantiles every 500 episodes. For bin $b$ with count $n_b$ and reward midpoint $R_b$:
 
-$$\text{novelty}(e \in b) = \sigma\!\left(\frac{R_b - R_{\min}}{\beta}\right) \cdot \frac{R_b}{n_b + \epsilon}$$
+$$\text{novelty}(e \in b) = \sigma\left(\frac{R_b - R_{\min}}{\beta}\right) \cdot \frac{R_b}{n_b + \epsilon}$$
 
 where $R_{\min} = Q_{0.20}(\text{rewards})$, $\beta = \max(0.1, \; (Q_{0.50}(\text{rewards}) - R_{\min})/4)$, and $\sigma$ is the sigmoid. The sigmoid gates out low-reward bins; $R_b / n_b$ up-weights rare, high-reward trajectories.
 
@@ -113,7 +112,7 @@ Environment-level episodic intrinsic rewards, independently normalized so rare c
 
 **Spatial novelty.** The agent's $9 \times 11$ visible tile grid is hashed by block-type ID. A per-episode visit counter $N(\mathbf{h})$ tracks hash occurrences:
 
-$$r_{\text{spatial}} = \frac{1}{\sqrt{N(\mathbf{h})}}, \quad \mathbf{h} = (\arg\max_{k} \, \text{tile}_{r,c}[0{:}37])_{r,c}$$
+$$r_{\text{spatial}} = \frac{1}{\sqrt{N(\mathbf{h})}}, \quad \mathbf{h} = \left(\operatorname{argmax}_{k} \; \text{tile}_{r,c}[0{:}37]\right)_{r,c}$$
 
 This decays smoothly with revisitation, unlike a binary indicator, and is immune to circle-walking exploitation (same tile layout = same hash).
 
@@ -125,7 +124,7 @@ This fires only on meaningful inventory changes (pick up, craft, equip).
 
 **Adaptive normalization.** Each component has its own cross-episode EMA normalizer that matches intrinsic scale to extrinsic:
 
-$$\hat{\mu}_{\text{intr}} = \gamma \hat{\mu}_{\text{intr}} + (1-\gamma)|r_{\text{intr}}|, \quad \hat{\mu}_{\text{extr}} = \gamma \hat{\mu}_{\text{extr}} + (1-\gamma)|r_{\text{extr}}|, \quad \text{norm}(r) = r \cdot \min\!\left(\frac{\hat{\mu}_{\text{extr}}}{\hat{\mu}_{\text{intr}}}, 100\right)$$
+$$\hat{\mu}_{\text{intr}} = \gamma \hat{\mu}_{\text{intr}} + (1-\gamma)|r_{\text{intr}}|, \quad \hat{\mu}_{\text{extr}} = \gamma \hat{\mu}_{\text{extr}} + (1-\gamma)|r_{\text{extr}}|, \quad \text{norm}(r) = r \cdot \min\left(\frac{\hat{\mu}_{\text{extr}}}{\hat{\mu}_{\text{intr}}},\; 100\right)$$
 
 This ensures $\alpha_{\text{spatial}}$ and $\alpha_{\text{craft}}$ act as true relative-importance weights regardless of firing frequency.
 
@@ -143,20 +142,20 @@ $$\mathcal{L}_{\text{mask}} = \| \hat{\mathbf{c}} - \text{sg}(\mathbf{c}) \|^2$$
 
 At action selection, a bias vector $\mathbf{b} \in \mathbb{R}^{|\mathcal{A}|}$ is computed from the predicted context and applied to raw policy logits:
 
-$$\pi_{\text{adj}}(a | s) \propto \exp\!\left(\ell_a + b_a\right)$$
+$$\pi_{\text{adj}}(a \mid s) \propto \exp\left(\ell_a + b_a\right)$$
 
-where $\ell_a$ are the raw logits from the policy network. Two modes:
+where $\ell_a$ are the raw logits from the policy network. For each action rule, a deficit $\delta_a \geq 0$ is computed as the sum of all condition shortfalls (e.g. missing resources, absent proximity). Two modes:
 
-- **Soft** ($b_a = -\lambda \cdot (1 - f_a)$): penalty proportional to infeasibility, $\lambda = 5.0$ by default.
-- **Hard** ($b_a = -M \cdot \mathbb{1}[f_a < 0.5]$): large negative $M = 10^9$ blocks infeasible actions entirely.
+- **Soft** ($b_a = -\lambda \cdot \delta_a$): penalty proportional to total deficit, $\lambda = 5.0$ by default.
+- **Hard** ($b_a = -M \cdot \mathbb{1}[\delta_a > 0]$): large negative $M = 10^9$ blocks any action with non-zero deficit.
 
 During imagination (policy optimisation in latent space), the mask is applied using the *predicted* context $\hat{\mathbf{c}}$, allowing the agent to plan with feasibility awareness without access to the true game state.
 
-#### 4. Integrated Plan2Explore (`dreamerv3/dreamerv3/expl.py`)
+#### 4. Integrated Plan2Explore (`dreamerv3/dreamerv3/agent.py`)
 
-[Plan2Explore](https://arxiv.org/abs/2005.05960) integrated into DreamerV3. An ensemble of $K$ MLP heads predicts a target $\phi(z)$ in latent space; their disagreement forms an intrinsic reward:
+[Plan2Explore](https://arxiv.org/abs/2005.05960) integrated into DreamerV3. An ensemble of $K$ MLP heads predicts a target $\phi(z) \in \mathbb{R}^D$ in latent space; the mean per-dimension variance across heads forms the intrinsic reward:
 
-$$r_{\text{p2e}} = \text{Var}_{k=1}^{K}\!\left[\hat{\phi}_k(z)\right]$$
+$$r_{\text{p2e}} = \frac{1}{D}\sum_{d=1}^{D} \text{Var}_{k=1}^{K}\left[\hat{\phi}_{k,d}(z)\right]$$
 
 Key parameters: `--disag_models` ($K$, default 10), `--disag_target` (`feat`|`stoch`|`deter`), `--expl_intr_scale` (default 0.9).
 
@@ -165,7 +164,7 @@ Key parameters: `--disag_models` ($K$, default 10), `--disag_target` (`feat`|`st
 Per-episode metrics tracking 67 Craftax achievements across 5 tiers:
 
 - **Per-achievement forgetting**: $F_a(t) = \max_{t' < t} \, p_a(t') - p_a(t)$
-- **Aggregate forgetting**: $\bar{F}(t) = \frac{1}{|\mathcal{A}_{\text{seen}}|}\sum_{a \in \mathcal{A}_{\text{seen}}} F_a(t)$
+- **Aggregate forgetting**: $\bar{F}(t) = \frac{1}{|\mathcal{A}|}\sum_{a \in \mathcal{A}} F_a(t)$ (mean over all 67 achievements; unseen achievements contribute 0)
 - **Achievement depth**: mean tier of achieved skills (0 = basic, 4 = endgame)
 - **Frontier rate**: fraction of recent episodes reaching the agent's personal-best depth
 
@@ -282,7 +281,7 @@ Choose **one** of the following strategies (they are mutually exclusive):
 
 | Argument | Description | Default |
 |---|---|---|
-| `--reservoir_sampling` | Reservoir sampling (random eviction, uniform coverage) | `True` |
+| `--reservoir_eviction` | Use reservoir eviction (random) instead of FIFO | `False` |
 | `--reward_sampling` | Reward-weighted episode sampling | `False` |
 | `--recency_sampling` | Recency-biased triangular sampling | `False` |
 | `--recent_frac` | Fraction of each mini-batch from recent experience (50:50 strategy) | `0.5` |
@@ -306,6 +305,7 @@ Choose **one** of the following strategies (they are mutually exclusive):
 | `--nlr_novelty_temp` | Temperature for novelty pool softmax | `1.0` |
 | `--nlr_learnability_temp` | Temperature for learnability pool softmax | `1.0` |
 | `--nlr_novelty_eps` | (Privileged only) Epsilon smoothing for achievement success rates | `0.01` |
+| `--nlr_recompute_interval` | (Privileged only) Recompute all pool scores every N episodes | `500` |
 | `--nlr_grid_reward_bins` | (Non-privileged) Number of quantile bins on the reward axis | `5` |
 | `--nlr_grid_length_bins` | (Non-privileged) Number of quantile bins on the length axis | `10` |
 | `--nlr_grid_recompute_every` | (Non-privileged) Recompute grid bin edges every N episodes | `500` |
@@ -385,12 +385,12 @@ A systematic ablation study is provided via `run_ablation.py` (groups A-F, 1M st
 
 ### Default Hyperparameters
 
-All experiments use: `--steps 1000000 --batch_size 16 --batch_length 64 --envs 16 --model_size 25m`
+All experiments use: `--steps 1000000 --batch_size 48 --batch_length 64 --envs 64 --model_size 25m`
 
 ### Running Experiments
 
 ```sh
-# Run all 1M ablation experiments (groups A-F, 16 configs × 3 seeds)
+# Run all 1M ablation experiments (groups A-F, 14 configs × 3 seeds)
 python run_ablation.py
 
 # Dry run - print commands without executing
