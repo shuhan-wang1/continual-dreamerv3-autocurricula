@@ -53,6 +53,10 @@ EXPERIMENT_CONFIGS = {
     "E1_nlr_intrinsic":  ("NLR + Intrinsic (ours)",  "#e377c2", "-"),
     "F1_mask_soft":      ("Soft Mask",               "#bcbd22", "-"),
     "F2_mask_hard":      ("Hard Mask",               "#17becf", "--"),
+    # G-series: 10M-step extended runs
+    "G1v2_mask_intr_nlu":  ("Mask+Intr+NLU (ours)",  "#e41a1c", "-"),
+    "G2_baseline_10m":     ("Baseline 10M",           "#377eb8", "--"),
+    "G3v3_mask_craft_nlu": ("Mask+Craft+NLU",         "#4daf4a", "-."),
 }
 
 # Achievement tier definitions (authoritative, matching train_craftax.py)
@@ -105,22 +109,49 @@ def get_tier(name):
 
 # ── Data loading ───────────────────────────────────────────────────────────
 
-def load_achievement_names(results_dir):
-    """Load achievement names from the first available metrics_summary.json."""
-    for p in sorted(results_dir.rglob("metrics_summary.json")):
-        d = json.loads(p.read_text())
-        if "achievement_names" in d:
-            return d["achievement_names"]
-    raise FileNotFoundError("No metrics_summary.json with achievement_names found")
+# Canonical achievement names: one-hot index i -> name.
+# Source: craftax.craftax.constants.Achievement enum (67 achievements, values 0-66).
+ACHIEVEMENT_NAMES = [
+    "collect_wood", "place_table", "eat_cow", "collect_sapling",
+    "collect_drink", "make_wood_pickaxe", "make_wood_sword", "place_plant",
+    "defeat_zombie", "collect_stone", "place_stone", "eat_plant",
+    "defeat_skeleton", "make_stone_pickaxe", "make_stone_sword", "wake_up",
+    "place_furnace", "collect_coal", "collect_iron", "collect_diamond",
+    "make_iron_pickaxe", "make_iron_sword", "make_arrow", "make_torch",
+    "place_torch", "make_diamond_sword", "make_iron_armour", "make_diamond_armour",
+    "enter_gnomish_mines", "enter_dungeon", "enter_sewers", "enter_vault",
+    "enter_troll_mines", "enter_fire_realm", "enter_ice_realm", "enter_graveyard",
+    "defeat_gnome_warrior", "defeat_gnome_archer", "defeat_orc_solider",
+    "defeat_orc_mage", "defeat_lizard", "defeat_kobold", "defeat_troll",
+    "defeat_deep_thing", "defeat_pigman", "defeat_fire_elemental",
+    "defeat_frost_troll", "defeat_ice_elemental", "damage_necromancer",
+    "defeat_necromancer", "eat_bat", "eat_snail", "find_bow", "fire_bow",
+    "collect_sapphire", "learn_fireball", "cast_fireball", "learn_iceball",
+    "cast_iceball", "collect_ruby", "make_diamond_pickaxe", "open_chest",
+    "drink_potion", "enchant_sword", "enchant_armour", "defeat_knight",
+    "defeat_archer",
+]
+assert len(ACHIEVEMENT_NAMES) == 67
 
 
 def find_online_metrics(results_dir, exp_id, seed):
-    """Locate online_metrics.jsonl for a given experiment config and seed."""
+    """Locate online_metrics.jsonl for a given experiment config and seed.
+
+    Supports two layouts:
+      1. Flat files:  {results_dir}/{exp_id}_seed{seed}_online_metrics.jsonl
+      2. Subdirectory: {results_dir}/{exp_id}_seed{seed}/online_metrics.jsonl
+    """
+    # Flat file layout (all_results/)
+    flat = results_dir / f"{exp_id}_seed{seed}_online_metrics.jsonl"
+    if flat.exists():
+        return flat
+    # Subdirectory layout (original)
     seed_dir = results_dir / f"{exp_id}_seed{seed}"
-    if not seed_dir.exists():
-        return None
-    jsonl_files = list(seed_dir.rglob("online_metrics.jsonl"))
-    return jsonl_files[0] if jsonl_files else None
+    if seed_dir.exists():
+        jsonl_files = list(seed_dir.rglob("online_metrics.jsonl"))
+        if jsonl_files:
+            return jsonl_files[0]
+    return None
 
 
 def load_jsonl(path):
@@ -635,7 +666,7 @@ def figure_summary_bars(results_dir, output_dir, configs):
 # ── Figure 9: Ablation group comparisons ──────────────────────────────────
 
 def figure_ablation_groups(results_dir, output_dir, grid):
-    """Separate learning curve panels for each ablation group."""
+    """Separate learning curve panels for each ablation group (1M runs)."""
     groups = {
         "Group A: Core Methods": ["A0_5050_baseline", "A1_uniform_baseline",
                                    "A2_p2e", "A3_intrinsic", "A4_p2e_intrinsic"],
@@ -677,15 +708,183 @@ def figure_ablation_groups(results_dir, output_dir, grid):
     print("  [done] fig9_ablation_groups")
 
 
+# ── Figure 10: Extended 10M Runs ────────────────────────────────────────────
+
+def figure_extended_10m(results_dir, output_dir, long_configs, long_grid):
+    """Learning curves for 10M-step extended runs (G-series)."""
+    if not long_configs:
+        return
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 4.5))
+    metric_info = [
+        ("Mean Achievement Rate", None),      # computed from per_achievement_rates
+        ("# Achievements Unlocked", None),     # computed from per_achievement_rates
+        ("Aggregate Forgetting", "aggregate_forgetting"),
+    ]
+
+    for ax, (title, metric_key) in zip(axes, metric_info):
+        for exp_id in long_configs:
+            if exp_id not in EXPERIMENT_CONFIGS:
+                continue
+            display, color, ls = EXPERIMENT_CONFIGS[exp_id]
+
+            if metric_key is not None:
+                curves = build_seed_curves(results_dir, exp_id, metric_key, long_grid)
+                if curves is None:
+                    continue
+                plot_curve_with_uncertainty(ax, long_grid, curves, display, color, ls)
+            else:
+                seed_data = build_seed_achievement_curves(results_dir, exp_id, long_grid)
+                if seed_data is None:
+                    continue
+                if "Unlocked" in title:
+                    vals = np.sum(seed_data > 0.01, axis=2).astype(np.float64)
+                else:
+                    vals = np.mean(seed_data, axis=2)
+                for i in range(vals.shape[0]):
+                    vals[i] = smooth(vals[i], SMOOTH_WINDOW)
+                plot_curve_with_uncertainty(ax, long_grid, vals, display, color, ls)
+
+        ax.set_title(title, fontsize=10)
+        ax.set_xlabel("Training Steps")
+        format_step_axis(ax)
+        ax.legend(loc="best", fontsize=8, framealpha=0.9)
+
+    fig.suptitle("Extended Training (10M Steps): G-Series Comparison", fontsize=13)
+    fig.tight_layout()
+    fig.savefig(output_dir / "fig10_extended_10m.pdf")
+    fig.savefig(output_dir / "fig10_extended_10m.png")
+    plt.close(fig)
+    print("  [done] fig10_extended_10m")
+
+
+# ── Figure 11: 10M Per-Tier Curves ──────────────────────────────────────────
+
+def figure_extended_per_tier(results_dir, output_dir, long_configs, ach_names, long_grid):
+    """Per-tier success rate breakdown for 10M-step extended runs."""
+    if not long_configs:
+        return
+
+    fig, axes = plt.subplots(1, 5, figsize=(18, 3.5), sharey=True)
+
+    for tier_idx in range(5):
+        ax = axes[tier_idx]
+        tier_set = _ALL_TIERS[tier_idx]
+        tier_ach_idx = [i for i, name in enumerate(ach_names) if name in tier_set]
+
+        if not tier_ach_idx:
+            ax.set_title(TIER_NAMES[tier_idx])
+            continue
+
+        for exp_id in long_configs:
+            if exp_id not in EXPERIMENT_CONFIGS:
+                continue
+            display, color, ls = EXPERIMENT_CONFIGS[exp_id]
+            seed_data = build_seed_achievement_curves(results_dir, exp_id, long_grid)
+            if seed_data is None:
+                continue
+            tier_rates = np.mean(seed_data[:, :, tier_ach_idx], axis=2)
+            for i in range(tier_rates.shape[0]):
+                tier_rates[i] = smooth(tier_rates[i], SMOOTH_WINDOW)
+            plot_curve_with_uncertainty(ax, long_grid, tier_rates, display, color, ls)
+
+        ax.set_title(TIER_NAMES[tier_idx], fontsize=10)
+        ax.set_xlabel("Steps")
+        format_step_axis(ax)
+        if tier_idx == 0:
+            ax.set_ylabel("Mean Success Rate")
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=len(long_configs), fontsize=8,
+               bbox_to_anchor=(0.5, -0.12), framealpha=0.9)
+    fig.suptitle("Extended Training (10M): Per-Tier Achievement Success Rate", fontsize=12, y=1.02)
+    fig.tight_layout()
+    fig.savefig(output_dir / "fig11_extended_per_tier.pdf", bbox_inches="tight")
+    fig.savefig(output_dir / "fig11_extended_per_tier.png", bbox_inches="tight")
+    plt.close(fig)
+    print("  [done] fig11_extended_per_tier")
+
+
+# ── Figure 12: 10M Achievement Heatmap ──────────────────────────────────────
+
+def figure_extended_heatmap(results_dir, output_dir, long_configs, ach_names, long_grid):
+    """Achievement heatmap for 10M-step runs."""
+    heatmap_configs = [c for c in long_configs if c in EXPERIMENT_CONFIGS]
+    if not heatmap_configs:
+        return
+
+    n_plots = len(heatmap_configs)
+    fig, axes = plt.subplots(n_plots, 1, figsize=(14, 3.0 * n_plots + 0.5))
+    if n_plots == 1:
+        axes = [axes]
+
+    tier_of = [get_tier(name) for name in ach_names]
+    sort_order = np.argsort(tier_of)
+
+    for plot_idx, exp_id in enumerate(heatmap_configs):
+        ax = axes[plot_idx]
+        seed_data = build_seed_achievement_curves(results_dir, exp_id, long_grid)
+        if seed_data is None:
+            ax.set_title(f"{EXPERIMENT_CONFIGS[exp_id][0]} (no data)")
+            continue
+
+        mean_rates = np.mean(seed_data, axis=0)[:, sort_order]
+        im = ax.imshow(mean_rates.T, aspect="auto", cmap="YlOrRd",
+                       vmin=0, vmax=1.0, interpolation="nearest",
+                       extent=[long_grid[0], long_grid[-1], len(ach_names) - 0.5, -0.5])
+
+        sorted_names = [ach_names[i] for i in sort_order]
+        ax.set_yticks(range(0, 67, 3))
+        ax.set_yticklabels([sorted_names[i] for i in range(0, 67, 3)], fontsize=5)
+        ax.set_title(EXPERIMENT_CONFIGS[exp_id][0], fontsize=10)
+        format_step_axis(ax)
+
+        tiers_sorted = [tier_of[i] for i in sort_order]
+        for j in range(1, 67):
+            if tiers_sorted[j] != tiers_sorted[j - 1]:
+                ax.axhline(y=j - 0.5, color="white", linewidth=1.5)
+
+    fig.colorbar(im, ax=axes, label="Success Rate", shrink=0.6)
+    fig.suptitle("Extended Training (10M): Per-Achievement Heatmap", fontsize=12)
+    fig.tight_layout()
+    fig.savefig(output_dir / "fig12_extended_heatmap.pdf", bbox_inches="tight")
+    fig.savefig(output_dir / "fig12_extended_heatmap.png", bbox_inches="tight")
+    plt.close(fig)
+    print("  [done] fig12_extended_heatmap")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────
+
+def _get_max_step(results_dir, exp_id):
+    """Get the max step for an experiment (from any seed)."""
+    max_step = 0
+    for seed in SEEDS:
+        path = find_online_metrics(results_dir, exp_id, seed)
+        if path is None:
+            continue
+        with open(path, "rb") as f:
+            # Seek to end and read last line efficiently
+            f.seek(0, 2)
+            end = f.tell()
+            pos = max(0, end - 4096)
+            f.seek(pos)
+            lines = f.read().decode("utf-8", errors="replace").strip().split("\n")
+            last = json.loads(lines[-1])
+            max_step = max(max_step, last["step"])
+    return max_step
+
+
+# 10M-step experiment IDs (G-series)
+_LONG_RUN_IDS = {"G1v2_mask_intr_nlu", "G2_baseline_10m", "G3v3_mask_craft_nlu"}
+
 
 def main():
     parser = argparse.ArgumentParser(description="Generate NeurIPS figures")
     parser.add_argument("--results_dir", type=str,
-                        default="experiment_results/ablation",
-                        help="Path to ablation results directory")
+                        default="all_results",
+                        help="Path to results directory")
     parser.add_argument("--output_dir", type=str,
-                        default="experiment_results/figures",
+                        default="all_results/figures",
                         help="Path to output directory for figures")
     args = parser.parse_args()
 
@@ -695,49 +894,68 @@ def main():
 
     _style()
 
-    print("Loading achievement names from data...")
-    ach_names = load_achievement_names(results_dir)
-    print(f"  {len(ach_names)} achievements loaded from metrics_summary.json")
+    ach_names = ACHIEVEMENT_NAMES
+    print(f"  {len(ach_names)} achievements (hardcoded from Craftax enum)")
 
-    # Discover available configs
+    # Discover available configs (supports both flat files and subdirectories)
     available = set()
     for p in sorted(results_dir.iterdir()):
-        if p.is_dir() and p.name != "figures":
-            # Strip _seed{N} suffix
-            name = p.name
+        name = p.name
+        if p.is_file() and name.endswith("_online_metrics.jsonl"):
+            base = name.replace("_online_metrics.jsonl", "")
+            for seed in SEEDS:
+                suffix = f"_seed{seed}"
+                if base.endswith(suffix):
+                    available.add(base[:-len(suffix)])
+        elif p.is_dir() and name != "figures":
             for seed in SEEDS:
                 suffix = f"_seed{seed}"
                 if name.endswith(suffix):
                     available.add(name[:-len(suffix)])
-    configs = [c for c in EXPERIMENT_CONFIGS if c in available]
-    print(f"  Found {len(configs)} experiment configs: {configs}")
 
-    # Build interpolation grid
-    # Determine max steps from data
-    max_step = 0
-    for exp_id in configs:
-        for seed in SEEDS:
-            path = find_online_metrics(results_dir, exp_id, seed)
-            if path is None:
-                continue
-            with open(path) as f:
-                for line in f:
-                    pass
-                last = json.loads(line)
-                max_step = max(max_step, last["step"])
-    grid = np.linspace(0, max_step, INTERP_STEPS)
-    print(f"  Step range: 0 -> {max_step}, grid size: {INTERP_STEPS}")
+    all_configs = [c for c in EXPERIMENT_CONFIGS if c in available]
+    short_configs = [c for c in all_configs if c not in _LONG_RUN_IDS]
+    long_configs = [c for c in all_configs if c in _LONG_RUN_IDS]
 
-    print("\nGenerating figures...")
-    figure_mean_achievement_rate(results_dir, output_dir, configs, grid)
-    figure_num_achievements_unlocked(results_dir, output_dir, configs, grid)
-    figure_aggregate_forgetting(results_dir, output_dir, configs, grid)
-    figure_achievement_depth(results_dir, output_dir, configs, grid)
-    figure_per_achievement_bars(results_dir, output_dir, configs, ach_names)
-    figure_per_tier_curves(results_dir, output_dir, configs, ach_names, grid)
-    figure_achievement_heatmap(results_dir, output_dir, configs, ach_names, grid)
-    figure_summary_bars(results_dir, output_dir, configs)
-    figure_ablation_groups(results_dir, output_dir, grid)
+    print(f"  Found {len(short_configs)} short-run (1M) configs: {short_configs}")
+    print(f"  Found {len(long_configs)} long-run (10M) configs: {long_configs}")
+
+    # Build grids for short and long runs
+    short_max = max((_get_max_step(results_dir, c) for c in short_configs), default=0)
+    short_grid = np.linspace(0, short_max, INTERP_STEPS)
+    print(f"  Short grid: 0 -> {short_max}")
+
+    if long_configs:
+        long_max = max(_get_max_step(results_dir, c) for c in long_configs)
+        long_grid = np.linspace(0, long_max, INTERP_STEPS * 2)  # finer grid for 10x longer runs
+        print(f"  Long grid:  0 -> {long_max}")
+
+    # ── Short-run figures (1M ablation study) ──
+    print("\nGenerating 1M ablation figures...")
+    figure_mean_achievement_rate(results_dir, output_dir, short_configs, short_grid)
+    figure_num_achievements_unlocked(results_dir, output_dir, short_configs, short_grid)
+    figure_aggregate_forgetting(results_dir, output_dir, short_configs, short_grid)
+    figure_achievement_depth(results_dir, output_dir, short_configs, short_grid)
+    figure_per_achievement_bars(results_dir, output_dir, short_configs, ach_names)
+    figure_per_tier_curves(results_dir, output_dir, short_configs, ach_names, short_grid)
+    figure_achievement_heatmap(results_dir, output_dir, short_configs, ach_names, short_grid)
+    figure_summary_bars(results_dir, output_dir, short_configs)
+    figure_ablation_groups(results_dir, output_dir, short_grid)
+
+    # ── Long-run figures (10M extended training) ──
+    if long_configs:
+        print("\nGenerating 10M extended-training figures...")
+        figure_extended_10m(results_dir, output_dir, long_configs, long_grid)
+        figure_extended_per_tier(results_dir, output_dir, long_configs, ach_names, long_grid)
+        figure_extended_heatmap(results_dir, output_dir, long_configs, ach_names, long_grid)
+        figure_per_achievement_bars(results_dir, output_dir, long_configs, ach_names)
+        # Rename the long-run bar chart
+        for ext in ("pdf", "png"):
+            src = output_dir / f"fig5_per_achievement_bars.{ext}"
+            dst = output_dir / f"fig13_extended_per_achievement_bars.{ext}"
+            if src.exists():
+                src.rename(dst)
+        print("  [done] fig13_extended_per_achievement_bars")
 
     print(f"\nAll figures saved to: {output_dir}/")
 

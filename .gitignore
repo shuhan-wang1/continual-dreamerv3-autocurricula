@@ -4,6 +4,7 @@ __pycache__/
 dist
 MUJOCO_LOG.TXT
 .idea/
+.claude/
 logs/
 path/
 wandb/
@@ -21,3 +22,9 @@ procgen
 *.png
 *.gif
 *.mp4
+*.zip
+*.npy
+
+# Experiment data (too large for git)
+all_results/
+experiment_results/*.jsonl

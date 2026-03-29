@@ -32,70 +32,144 @@ continual-dreamerv3-autocurricula/
 ├── train.py                  # Unified entry point (routes to craftax or navix)
 ├── train_craftax.py          # Main Craftax training script (primary focus)
 ├── train_navix.py            # NAVIX training script
-├── input_args.py             # All argument parsers
+├── input_args.py             # All argument parsers (craftax, navix)
+├── intrinsic_reward.py       # Spatial + Craft novelty reward shaping
 ├── run_ablation.py           # Ablation experiment runner (16 configs × 3 seeds)
-├── plot_ablation.py          # Result visualization
+├── plot_ablation.py          # Result visualization & analysis
+├── analyze_all_results.py    # Final results aggregation for publication
+├── analyze_mask_effect.py    # Action masking analysis
+│
 ├── dreamerv3/                # ENHANCED DreamerV3 (our modified version)
 │   ├── dreamerv3/
-│   │   ├── agent.py          # Agent with integrated Plan2Explore
+│   │   ├── agent.py          # Agent with integrated Plan2Explore + action masking
 │   │   ├── rssm.py           # RSSM encoder/decoder
 │   │   └── expl.py           # Plan2Explore ensemble implementation
 │   └── embodied/core/
 │       ├── selectors.py      # All replay sampling selectors (key innovation)
 │       └── replay.py         # Replay buffer with selector integration
 ├── dreamerv3-main/           # Original DreamerV3 (baseline, --use_original_dreamer)
-├── experiment_results/       # Saved CSVs and analysis scripts
-└── notebooks/                # Metric plotting utilities
+│
+├── craftax_mask/             # Craftax action feasibility masking
+│   ├── extractor.py          # Extract mask context from game state
+│   ├── mask.py               # Compute logit bias for feasible actions
+│   ├── rules.py              # Action feasibility rules + constants
+│   └── test_mask.py          # Unit tests
+│
+├── notebooks/
+│   └── metrics.py            # OnlineMetrics class (used by train_navix.py)
+│
+├── experiment_results/       # Analysis scripts + saved metrics
+│   ├── analyze_metrics.py    # Comparative analysis across experiments
+│   └── plot_neurips_figures.py  # Publication-quality figure generation
+│
+├── all_results/              # Pre-computed experiment metrics (JSONL)
+│   └── figures/              # Generated figures (output of plot_neurips_figures.py)
+│
+├── myriad_*.sh               # UCL Myriad HPC job submission scripts
+├── autodl_*.sh               # AutoDL GPU cloud submission scripts
+├── package_results_*.sh      # Results packaging scripts
+│
+├── docs/                     # Design documents & meeting notes
+└── Report.tex                # LaTeX report
 ```
 
 ### Our Innovations
 
-#### 1. Advanced Replay Sampling Strategies (`dreamerv3/embodied/core/selectors.py`)
+#### 1. NLR / NLU Replay Sampling (`dreamerv3/embodied/core/selectors.py`)
 
-We introduce several new replay buffer sampling selectors designed for continual learning:
+Our primary contribution. Each mini-batch element is drawn from one of three pools with probabilities $(\omega_N, \omega_L, \omega_R)$ (default 0.35, 0.35, 0.30). If a pool is empty its weight is redistributed proportionally.
 
-- **Reservoir sampling** — Random eviction (Algorithm 2, Vitter 1985). Prevents the buffer from becoming dominated by the most recent task, ensuring uniform coverage across all past experience.
-- **50:50 Recent/Uniform mixture** — Half of each mini-batch comes from the most recent `--recent_window` episodes; the other half is uniformly sampled from the full buffer. This balances plasticity (learning the current task) with stability (retaining past experience).
-- **Reward-weighted sampling** — Episodes are sampled proportionally to their cumulative return (softmax). This focuses learning on high-quality trajectories.
-- **NLR / NLU (Novelty-Learnability-Recency/Uniform)** — Our primary novel contribution. Each mini-batch is split into three pools:
-  - **Novelty pool** — Trajectories containing rarely accomplished achievements, prioritising skills the agent has not yet mastered.
-  - **Learnability pool** — Trajectories whose reward exceeds a running EMA baseline (GRPO-style advantage), prioritising episodes that are "hard but solvable".
-  - **Recency / Uniform pool** — Recent experience (NLR) or uniform random (NLU) to maintain coverage.
+**Novelty pool** — prioritises trajectories exhibiting rare behaviour.
 
-  Two variants are provided:
-  - `--nlr_privileged_sampling` / `--nlu_privileged_sampling` — Use Craftax per-achievement success rates (privileged info, not available to the policy).
-  - `--nlr_sampling` / `--nlu_sampling` — Use a Bayesian 2-D (reward x episode-length) grid to estimate rarity without accessing privileged info.
+*Privileged variant* (`--nlr_privileged_sampling`): uses the per-achievement success rate vector $\mathbf{s} \in [0,1]^{67}$ maintained across training. For an episode whose achieved set is $\mathcal{A}$:
 
-#### 2. Integrated Plan2Explore (`dreamerv3/dreamerv3/expl.py`, `agent.py`)
+$$\text{novelty}(e) = \frac{1}{|\mathcal{A}|}\sum_{i \in \mathcal{A}} \frac{1}{s_i + \epsilon}, \quad \epsilon = 0.01$$
 
-[Plan2Explore](https://arxiv.org/abs/2005.05960) is integrated directly into the DreamerV3 agent. An ensemble of `--disag_models` MLP heads predicts a target in the world model's latent space; their disagreement (standard deviation) forms an intrinsic reward. This encourages the agent to visit novel states and supports exploration in the sparse-reward Craftax environment.
+Episodes achieving rare skills (low $s_i$) score highest. The pool samples proportionally to $\text{novelty}(e)^{1/\tau_N}$ where $\tau_N$ is the novelty temperature.
 
-Key parameters: `--disag_models`, `--disag_target` (`feat` | `stoch` | `deter`), `--expl_intr_scale`.
+*Non-privileged variant* (`--nlr_sampling`): replaces the achievement vector with a 2-D quantile histogram over (episode length, cumulative reward). Bin edges are recomputed from quantiles every 500 episodes. For bin $b$ with count $n_b$ and reward midpoint $R_b$:
 
-#### 3. Independently-Normalized Spatial + Craft Intrinsic Reward (`train_craftax.py`)
+$$\text{novelty}(e \in b) = \sigma\!\left(\frac{R_b - R_{\min}}{\beta}\right) \cdot \frac{R_b}{n_b + \epsilon}$$
 
-Environment-level intrinsic rewards that shape the reward signal before it enters the world model. The two components are **independently normalized** so that rare craft events receive a proportionally larger signal:
+where $R_{\min} = Q_{0.20}(\text{rewards})$, $\beta = \max(0.1, \; (Q_{0.50}(\text{rewards}) - R_{\min})/4)$, and $\sigma$ is the sigmoid. The sigmoid gates out low-reward bins; $R_b / n_b$ up-weights rare, high-reward trajectories.
 
-- **Spatial novelty** (Eq.10) — `r_spatial = I[hash(visible_tiles) not in S_seen]`. Binary first-visit indicator: 1.0 if the current 9x11 tile-view (block-type layout) has never been seen this episode, 0.0 otherwise. Immune to circle-walking exploitation.
-- **Craft novelty** (Eq.11) — `r_craft = I[inv_craft not in H_inv]`. Binary bonus when the craft-relevant inventory (16 dims: materials + equipment) enters a state never seen this episode. Only fires on meaningful events (pick up item, craft tool, upgrade equipment).
-- **Independent adaptive normalization** (Eq.13) — Each component has its own EMA normalizer that tracks `E[|r_extr|] / E[r_component]`. This ensures:
-  - Spatial (fires ~11% of steps) and craft (fires ~0.5% of steps) are each scaled to match extrinsic reward magnitude
-  - `alpha_spatial` and `alpha_craft` become true relative-importance weights
-  - Craft events, though rare, produce a signal ~20x larger per firing than spatial, making them equally impactful in training
-- **Combined reward** — `r = alpha_spatial * norm_sp(r_spatial) + alpha_craft * norm_cr(r_craft) + alpha_e * r_extr`
+**Learnability pool** — GRPO-style advantage filtering. An EMA baseline tracks expected reward:
 
-Key parameters: `--intrinsic_spatial`, `--alpha_spatial` (default 0.1), `--alpha_craft` (default 0.3), `--alpha_e` (default 1.0).
+$$\bar{R}_t = \gamma_{\text{ema}} \cdot \bar{R}_{t-1} + (1 - \gamma_{\text{ema}}) \cdot R_t, \quad \gamma_{\text{ema}} = 0.99$$
 
-#### 4. Online Continual-Learning Metrics (`train_craftax.py` - `CraftaxMetrics`)
+An episode enters the learnable pool iff its advantage is positive, and is sampled proportionally to the advantage magnitude:
 
-A comprehensive metrics tracker records:
-- **Per-achievement success rates** — 67 binary achievements tracked per task per episode.
-- **Forgetting** — $F_a = \max_{t' < t} p_a(t') - p_a(t)$, measuring performance degradation on previously mastered achievements.
-- **Frontier rate** — Fraction of recent episodes reaching the agent's personal-best exploration depth.
-- **Score tier distribution** — Episodes bucketed by achievement tier (0-4).
-- **Replay buffer diagnostics** — Buffer composition, sampling statistics.
+$$\text{learnability}(e) = \max(0, \; R_e - \bar{R}_{t-1}), \quad \text{sampled} \propto \text{learnability}(e)^{1/\tau_L}$$
 
-All metrics are written to `online_metrics.jsonl` and summarised in `metrics_summary.json` under the log directory, and streamed to W&B.
+Note: $\bar{R}_{t-1}$ is the EMA *before* the current episode's update, preventing systematic attenuation.
+
+**Third pool** — NLR uses triangular recency weighting over the most recent $W$ episodes ($w_i \propto W - i$); NLU samples uniformly from the entire buffer.
+
+**Baseline selectors.** We also provide reservoir sampling (Vitter 1985), 50:50 recent/uniform mixture, and reward-weighted sampling for comparison.
+
+#### 2. Independently-Normalized Spatial + Craft Intrinsic Reward (`intrinsic_reward.py`)
+
+Environment-level episodic intrinsic rewards, independently normalized so rare craft events receive proportionally larger signal.
+
+**Spatial novelty.** The agent's $9 \times 11$ visible tile grid is hashed by block-type ID. A per-episode visit counter $N(\mathbf{h})$ tracks hash occurrences:
+
+$$r_{\text{spatial}} = \frac{1}{\sqrt{N(\mathbf{h})}}, \quad \mathbf{h} = (\arg\max_{k} \, \text{tile}_{r,c}[0{:}37])_{r,c}$$
+
+This decays smoothly with revisitation, unlike a binary indicator, and is immune to circle-walking exploitation (same tile layout = same hash).
+
+**Craft novelty.** The 51-dimensional inventory vector is discretized to 1 decimal place. A per-episode set $\mathcal{H}_{\text{inv}}$ tracks seen states:
+
+$$r_{\text{craft}} = \mathbb{1}[\text{disc}(\mathbf{inv}) \notin \mathcal{H}_{\text{inv}}]$$
+
+This fires only on meaningful inventory changes (pick up, craft, equip).
+
+**Adaptive normalization.** Each component has its own cross-episode EMA normalizer that matches intrinsic scale to extrinsic:
+
+$$\hat{\mu}_{\text{intr}} = \gamma \hat{\mu}_{\text{intr}} + (1-\gamma)|r_{\text{intr}}|, \quad \hat{\mu}_{\text{extr}} = \gamma \hat{\mu}_{\text{extr}} + (1-\gamma)|r_{\text{extr}}|, \quad \text{norm}(r) = r \cdot \min\!\left(\frac{\hat{\mu}_{\text{extr}}}{\hat{\mu}_{\text{intr}}}, 100\right)$$
+
+This ensures $\alpha_{\text{spatial}}$ and $\alpha_{\text{craft}}$ act as true relative-importance weights regardless of firing frequency.
+
+**Combined reward:**
+
+$$r = \alpha_{\text{spatial}} \cdot \text{norm}_{\text{sp}}(r_{\text{spatial}}) + \alpha_{\text{craft}} \cdot \text{norm}_{\text{cr}}(r_{\text{craft}}) + \alpha_e \cdot r_{\text{extr}}$$
+
+Default: $\alpha_{\text{spatial}} = 0.1$, $\alpha_{\text{craft}} = 0.3$, $\alpha_e = 1.0$.
+
+#### 3. Action Feasibility Masking (`craftax_mask/`, `dreamerv3/dreamerv3/agent.py`)
+
+A learned masking system that biases the policy away from infeasible actions. A 46-dimensional mask context $\mathbf{c}$ is extracted from the Craftax game state encoding action feasibility. The world model learns to predict $\hat{\mathbf{c}}$ from latent features via a 2-layer MLP head, trained with:
+
+$$\mathcal{L}_{\text{mask}} = \| \hat{\mathbf{c}} - \text{sg}(\mathbf{c}) \|^2$$
+
+At action selection, a bias vector $\mathbf{b} \in \mathbb{R}^{|\mathcal{A}|}$ is computed from the predicted context and applied to raw policy logits:
+
+$$\pi_{\text{adj}}(a | s) \propto \exp\!\left(\ell_a + b_a\right)$$
+
+where $\ell_a$ are the raw logits from the policy network. Two modes:
+
+- **Soft** ($b_a = -\lambda \cdot (1 - f_a)$): penalty proportional to infeasibility, $\lambda = 5.0$ by default.
+- **Hard** ($b_a = -M \cdot \mathbb{1}[f_a < 0.5]$): large negative $M = 10^9$ blocks infeasible actions entirely.
+
+During imagination (policy optimisation in latent space), the mask is applied using the *predicted* context $\hat{\mathbf{c}}$, allowing the agent to plan with feasibility awareness without access to the true game state.
+
+#### 4. Integrated Plan2Explore (`dreamerv3/dreamerv3/expl.py`)
+
+[Plan2Explore](https://arxiv.org/abs/2005.05960) integrated into DreamerV3. An ensemble of $K$ MLP heads predicts a target $\phi(z)$ in latent space; their disagreement forms an intrinsic reward:
+
+$$r_{\text{p2e}} = \text{Var}_{k=1}^{K}\!\left[\hat{\phi}_k(z)\right]$$
+
+Key parameters: `--disag_models` ($K$, default 10), `--disag_target` (`feat`|`stoch`|`deter`), `--expl_intr_scale` (default 0.9).
+
+#### 5. Online Continual-Learning Metrics (`train_craftax.py`)
+
+Per-episode metrics tracking 67 Craftax achievements across 5 tiers:
+
+- **Per-achievement forgetting**: $F_a(t) = \max_{t' < t} \, p_a(t') - p_a(t)$
+- **Aggregate forgetting**: $\bar{F}(t) = \frac{1}{|\mathcal{A}_{\text{seen}}|}\sum_{a \in \mathcal{A}_{\text{seen}}} F_a(t)$
+- **Achievement depth**: mean tier of achieved skills (0 = basic, 4 = endgame)
+- **Frontier rate**: fraction of recent episodes reaching the agent's personal-best depth
+
+All metrics written to `online_metrics.jsonl` and streamed to W&B.
 
 ---
 
@@ -238,6 +312,15 @@ Choose **one** of the following strategies (they are mutually exclusive):
 | `--nlr_grid_prior_percentile` | (Non-privileged) Percentile of reward distribution for prior R_min | `0.20` |
 | `--nlr_grid_eps` | (Non-privileged) Smoothing epsilon for bin counts | `0.01` |
 
+### Action Masking
+
+| Argument | Description | Default |
+|---|---|---|
+| `--action_mask_enabled` | Enable action feasibility masking | `False` |
+| `--action_mask_mode` | Masking mode: `soft`, `hard`, or `none` | `soft` |
+| `--action_mask_lambda_penalty` | Penalty weight for soft masking | `5.0` |
+| `--action_mask_large_negative` | Hard mask blocking magnitude | `1e9` |
+
 ### Exploration (Plan2Explore)
 
 | Argument | Description | Default |
@@ -280,21 +363,25 @@ JAX pre-allocates GPU memory at startup. The default allocation is 70% of VRAM (
 
 ## Ablation Experiments
 
-A systematic ablation study is provided via `run_ablation.py`. It covers 11 experiment configurations across 4 groups, each run with 3 seeds (33 total runs).
+A systematic ablation study is provided via `run_ablation.py` (groups A-F, 1M steps) and dedicated shell scripts (group G, 10M steps). All experiments use 3 seeds (1, 4, 42).
 
 ### Experiment Groups
 
-| Group | Focus | Experiments |
-|---|---|---|
-| **A** | Core comparison | A1 baseline, A2 P2E, A3 intrinsic, A4 P2E+intrinsic |
-| **B** | Component ablation | B1 spatial-only, B2 craft-only |
-| **D** | Replay strategy comparison | D1 NLR, D2 NLU, D3 NLR-privileged, D4 NLU-privileged |
-| **E** | Final model | E1 NLR replay + Spatial+Craft intrinsic |
+| Group | Focus | Experiments | Steps |
+|---|---|---|---|
+| **A** | Core comparison | A0 50:50 baseline, A1 uniform baseline, A2 P2E, A3 intrinsic, A4 P2E+intrinsic | 1M |
+| **B** | Intrinsic component ablation | B1 spatial-only, B2 craft-only | 1M |
+| **D** | Replay strategy comparison | D1 NLR, D2 NLU, D3 NLR-privileged, D4 NLU-privileged | 1M |
+| **E** | Combined model | E1 NLR + intrinsic (no P2E) | 1M |
+| **F** | Action masking | F1 soft mask, F2 hard mask | 1M |
+| **G** | Extended training | G1v2 mask+intrinsic+NLU, G2 baseline 10M, G3v3 mask+craft+NLU | 10M |
 
 - **Group A** answers: Does intrinsic reward help? Does P2E help? Do they combine well?
-- **Group B** answers: Is each component necessary? (spatial-only vs craft-only vs both in A3)
+- **Group B** answers: Is each intrinsic component necessary? (spatial-only vs craft-only vs both in A3)
 - **Group D** uses pure baseline (no intrinsic) to isolate the replay strategy effect.
 - **Group E** combines the best replay strategy (NLR) with intrinsic rewards.
+- **Group F** tests learned action masking (soft penalty vs hard blocking of infeasible actions).
+- **Group G** runs the most promising configurations for 10M steps to evaluate long-horizon scaling.
 
 ### Default Hyperparameters
 
@@ -303,7 +390,7 @@ All experiments use: `--steps 1000000 --batch_size 16 --batch_length 64 --envs 1
 ### Running Experiments
 
 ```sh
-# Run all 33 experiments (11 configs x 3 seeds)
+# Run all 1M ablation experiments (groups A-F, 16 configs × 3 seeds)
 python run_ablation.py
 
 # Dry run - print commands without executing
@@ -316,7 +403,7 @@ python run_ablation.py --only A
 python run_ablation.py --only A1_baseline,D3_nlr_priv
 
 # Skip a group
-python run_ablation.py --skip C,D
+python run_ablation.py --skip D
 
 # Disable W&B logging
 python run_ablation.py --wandb_mode disabled
@@ -326,6 +413,11 @@ python run_ablation.py --gpu 0
 
 # Keep replay buffer after each run (default: replay deleted, ckpt kept)
 python run_ablation.py --no_cleanup
+
+# Run 10M extended experiments (G-series, via dedicated scripts)
+bash autodl_10m_g1.sh   # G1v2: mask + intrinsic + NLU
+bash autodl_10m_g2.sh   # G2: baseline @ 10M
+bash autodl_10m_g3.sh   # G3v3: mask + craft + NLU
 ```
 
 ### Output Directory Structure
@@ -365,6 +457,40 @@ Training logs are saved to:
 
 - `{logdir}/craftax_{tag}/` — Config YAML, checkpoints, `online_metrics.jsonl`, `metrics_summary.json`
 - W&B dashboard — Real-time curves for reward, achievements, forgetting, and replay diagnostics
+
+---
+
+## Results Analysis & Figure Generation
+
+Pre-computed experiment metrics (67 per-achievement success rates, forgetting, depth, etc.) for all seeds are stored as JSONL files in `all_results/`.
+
+### Generating Publication Figures
+
+```sh
+# Generate all NeurIPS figures (1M ablation + 10M extended runs)
+python experiment_results/plot_neurips_figures.py \
+    --results_dir all_results \
+    --output_dir all_results/figures
+```
+
+This produces:
+- **Fig 1-4** — Learning curves: mean achievement rate, # achievements unlocked, aggregate forgetting, achievement depth
+- **Fig 5** — Per-achievement success rates (grouped bar chart by tier)
+- **Fig 6** — Per-tier success rate breakdown (5 subplots)
+- **Fig 7** — Achievement heatmap over training
+- **Fig 8** — Summary bar chart (final checkpoint comparison)
+- **Fig 9** — Ablation group panels (A, B, D, E+F)
+- **Fig 10-12** — Extended 10M training (G-series): learning curves, per-tier, heatmap
+
+### Other Analysis Scripts
+
+```sh
+# Comprehensive statistical analysis across all experiments
+python analyze_all_results.py --results_dir all_results
+
+# Comparative metrics analysis
+python experiment_results/analyze_metrics.py
+```
 
 ---
 
