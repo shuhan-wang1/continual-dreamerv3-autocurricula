@@ -80,29 +80,36 @@ Our primary contribution. Each mini-batch element is drawn from one of three poo
 
 **Novelty pool** — prioritises trajectories exhibiting rare behaviour.
 
-*Privileged variant* (`--nlr_privileged_sampling`): uses the per-achievement success rate vector $\mathbf{s} \in [0,1]^{67}$ maintained across training. For an episode whose achieved set is $\mathcal{A}$:
+*Privileged variant* (`--nlr_privileged_sampling`): uses the per-achievement success rate vector $\mathbf{s} \in [0,1]^{67}$ maintained across training. Each component $s_i$ is the fraction of all episodes in which achievement $i$ was unlocked: $s_i = n_i^{\text{success}} / n_i^{\text{total}}$. For an episode whose achieved set is $\mathcal{A} \subseteq \{1, \ldots, 67\}$:
 
-$$\text{novelty}(e) = \frac{1}{|\mathcal{A}|}\sum_{i \in \mathcal{A}} \frac{1}{s_i + \epsilon}, \quad \epsilon = 0.01$$
+$$\text{novelty}(e) = \frac{1}{|\mathcal{A}|}\sum_{i \in \mathcal{A}} \frac{1}{s_i + \epsilon}$$
 
-Episodes achieving rare skills (low $s_i$) score highest. The pool samples proportionally to $\text{novelty}(e)^{1/\tau_N}$ where $\tau_N$ is the novelty temperature.
+where $\epsilon = 0.01$ (`--nlr_novelty_eps`) prevents division by zero. Episodes achieving rare skills (low $s_i$) score highest. The pool samples episode $e$ with probability proportional to $\text{novelty}(e)^{1/\tau_N}$ where $\tau_N$ is the novelty temperature (`--nlr_novelty_temp`, default 1.0).
 
-*Non-privileged variant* (`--nlr_sampling`): replaces the achievement vector with a 2-D quantile histogram over (episode length, cumulative reward). Bin edges are recomputed from quantiles every 500 episodes. For bin $b$ with count $n_b$ and reward midpoint $R_b$:
+*Non-privileged variant* (`--nlr_sampling`): replaces the achievement vector with a 2-D quantile histogram over (episode length, cumulative reward). Let $\{R_j\}_{j=1}^{n}$ be the cumulative rewards of all $n$ episodes currently in the buffer. The reward axis is partitioned into `--nlr_grid_reward_bins` (default 5) quantile bins and the length axis into `--nlr_grid_length_bins` (default 10) quantile bins. Bin edges are recomputed every 500 episodes (`--nlr_grid_recompute_every`). For an episode assigned to grid cell with reward-axis midpoint $R_b$ and bin count $n_b$:
 
-$$\text{novelty}(e \in b) = \sigma\left(\frac{R_b - R_{\min}}{\beta}\right) \cdot \frac{R_b}{n_b + \epsilon}$$
+$$\text{novelty}(e \in b) = \frac{\sigma\left(\dfrac{R_b - R_{\min}}{\beta}\right) \cdot R_b}{n_b + \epsilon}$$
 
-where $R_{\min} = Q_{0.20}(\text{rewards})$, $\beta = \max(0.1, \; (Q_{0.50}(\text{rewards}) - R_{\min})/4)$, and $\sigma$ is the sigmoid. The sigmoid gates out low-reward bins; $R_b / n_b$ up-weights rare, high-reward trajectories.
+where:
+- $\sigma(x) = \dfrac{1}{1 + e^{-x}}$ is the logistic sigmoid
+- $R_{\min}$ is the 20th percentile of $\{R_j\}$, i.e. the value below which 20% of episodic rewards fall (`np.quantile(rewards, 0.20)`)
+- $R_{50}$ is the 50th percentile (median) of $\{R_j\}$
+- $\beta = \max(0.1, \; (R_{50} - R_{\min}) / 4)$ controls sigmoid sharpness
+- $\epsilon = 0.01$ prevents division by zero (`--nlr_grid_eps`)
+
+The sigmoid gates out low-reward bins (those with $R_b \ll R_{\min}$ get $\sigma \approx 0$); the $R_b / n_b$ term up-weights rare, high-reward trajectories.
 
 **Learnability pool** — GRPO-style advantage filtering. An EMA baseline tracks expected reward:
 
 $$\bar{R}_t = \gamma_{\text{ema}} \cdot \bar{R}_{t-1} + (1 - \gamma_{\text{ema}}) \cdot R_t, \quad \gamma_{\text{ema}} = 0.99$$
 
-An episode enters the learnable pool iff its advantage is positive, and is sampled proportionally to the advantage magnitude:
+An episode $e$ with cumulative reward $R_e$ enters the learnable pool iff its advantage over the baseline is positive:
 
-$$\text{learnability}(e) = \max(0, \; R_e - \bar{R}_{t-1}), \quad \text{sampled} \propto \text{learnability}(e)^{1/\tau_L}$$
+$$\text{learnability}(e) = \max(0, \; R_e - \bar{R}_{t-1})$$
 
-Note: $\bar{R}_{t-1}$ is the EMA *before* the current episode's update, preventing systematic attenuation.
+Episodes in the pool are sampled with probability proportional to $\text{learnability}(e)^{1/\tau_L}$, where $\tau_L$ is the learnability temperature (`--nlr_learnability_temp`, default 1.0). Note: $\bar{R}_{t-1}$ is the EMA computed *before* incorporating $R_e$, preventing systematic attenuation of the advantage signal.
 
-**Third pool** — NLR uses triangular recency weighting over the most recent $W$ episodes ($w_i \propto W - i$); NLU samples uniformly from the entire buffer.
+**Third pool** — NLR uses triangular recency weighting over the most recent $W$ episodes (`--nlr_recent_window`, default 1000). The $i$-th most recent episode (where $i = 0$ is the newest) is sampled with weight $w_i \propto W - i$, linearly decreasing to zero. NLU instead samples uniformly from the entire buffer.
 
 **Baseline selectors.** We also provide reservoir sampling (Vitter 1985), 50:50 recent/uniform mixture, and reward-weighted sampling for comparison.
 
@@ -110,23 +117,31 @@ Note: $\bar{R}_{t-1}$ is the EMA *before* the current episode's update, preventi
 
 Environment-level episodic intrinsic rewards, independently normalized so rare craft events receive proportionally larger signal.
 
-**Spatial novelty.** The agent's $9 \times 11$ visible tile grid is hashed by block-type ID. A per-episode visit counter $N(\mathbf{h})$ tracks hash occurrences:
+**Spatial novelty.** The agent's $9 \times 11$ visible tile grid is hashed by block-type ID. Each tile has 83 channels; the first 37 are a one-hot encoding of the block type. The hash $\mathbf{h}$ is the tuple of block-type IDs across all 99 tiles:
 
-$$r_{\text{spatial}} = \frac{1}{\sqrt{N(\mathbf{h})}}, \quad \mathbf{h} = \left(\operatorname{argmax}_{k} \; \text{tile}_{r,c}[0{:}37]\right)_{r,c}$$
+$$\mathbf{h} = \big(b_{r,c}\big)_{r \in [9],\, c \in [11]}, \quad b_{r,c} = \arg\max_{k \in \{0,\ldots,36\}} \; \text{tile}_{r,c}[k]$$
+
+A per-episode visit counter $N(\mathbf{h})$ tracks how many times each hash has been seen. The spatial intrinsic reward is:
+
+$$r_{\text{spatial}} = \frac{1}{\sqrt{N(\mathbf{h})}}$$
 
 This decays smoothly with revisitation, unlike a binary indicator, and is immune to circle-walking exploitation (same tile layout = same hash).
 
-**Craft novelty.** The 51-dimensional inventory vector is discretized to 1 decimal place. A per-episode set $\mathcal{H}_{\text{inv}}$ tracks seen states:
+**Craft novelty.** The 51-dimensional inventory vector $\mathbf{inv} \in \mathbb{R}^{51}$ is discretized by rounding each component to 1 decimal place: $\text{disc}(\mathbf{inv})_i = \lfloor \mathbf{inv}_i \times 10 \rfloor$. A per-episode set $\mathcal{H}_{\text{inv}}$ accumulates all discretized inventory states seen so far within the episode:
 
 $$r_{\text{craft}} = \mathbb{1}[\text{disc}(\mathbf{inv}) \notin \mathcal{H}_{\text{inv}}]$$
 
-This fires only on meaningful inventory changes (pick up, craft, equip).
+where $\mathbb{1}[\cdot]$ is the indicator function (returns 1 if true, 0 otherwise). This fires only on meaningful inventory changes (pick up, craft, equip). After evaluation, $\text{disc}(\mathbf{inv})$ is added to $\mathcal{H}_{\text{inv}}$.
 
-**Adaptive normalization.** Each component has its own cross-episode EMA normalizer that matches intrinsic scale to extrinsic:
+**Adaptive normalization.** Each intrinsic component (spatial, craft) has its own cross-episode EMA normalizer with decay $\gamma = 0.99$ and warmup of 100 steps. The EMA tracks the mean absolute value of each signal:
 
-$$\hat{\mu}_{\text{intr}} = \gamma \hat{\mu}_{\text{intr}} + (1-\gamma)|r_{\text{intr}}|, \quad \hat{\mu}_{\text{extr}} = \gamma \hat{\mu}_{\text{extr}} + (1-\gamma)|r_{\text{extr}}|, \quad \text{norm}(r) = r \cdot \min\left(\frac{\hat{\mu}_{\text{extr}}}{\hat{\mu}_{\text{intr}}},\; 100\right)$$
+$$\hat{\mu}_{\text{intr}} \leftarrow \gamma \, \hat{\mu}_{\text{intr}} + (1-\gamma)\,|r_{\text{intr}}|, \quad \hat{\mu}_{\text{extr}} \leftarrow \gamma \, \hat{\mu}_{\text{extr}} + (1-\gamma)\,|r_{\text{extr}}|$$
 
-This ensures $\alpha_{\text{spatial}}$ and $\alpha_{\text{craft}}$ act as true relative-importance weights regardless of firing frequency.
+The normalized intrinsic reward is then:
+
+$$\text{norm}(r_{\text{intr}}) = r_{\text{intr}} \cdot \min\left(\frac{\hat{\mu}_{\text{extr}}}{\hat{\mu}_{\text{intr}}},\; 100\right)$$
+
+The ratio $\hat{\mu}_{\text{extr}} / \hat{\mu}_{\text{intr}}$ rescales the intrinsic signal to match the extrinsic scale, capped at 100 to prevent extreme amplification. This ensures $\alpha_{\text{spatial}}$ and $\alpha_{\text{craft}}$ act as true relative-importance weights regardless of firing frequency.
 
 **Combined reward:**
 
@@ -136,7 +151,7 @@ Default: $\alpha_{\text{spatial}} = 0.1$, $\alpha_{\text{craft}} = 0.3$, $\alpha
 
 #### 3. Action Feasibility Masking (`craftax_mask/`, `dreamerv3/dreamerv3/agent.py`)
 
-A learned masking system that biases the policy away from infeasible actions. A 46-dimensional mask context $\mathbf{c}$ is extracted from the Craftax game state encoding action feasibility. The world model learns to predict $\hat{\mathbf{c}}$ from latent features via a 2-layer MLP head, trained with:
+A learned masking system that biases the policy away from infeasible actions. A 46-dimensional mask context vector $\mathbf{c} \in \mathbb{R}^{46}$ is extracted from the Craftax game state (see `craftax_mask/rules.py` for the full schema: indices 0-13 inventory, 14-23 armour/potions, 24-33 player state, 34-45 proximity/facing/ladder flags). The world model learns to predict $\hat{\mathbf{c}}$ from RSSM latent features via a 2-layer MLP head (SiLU activation, RMSNorm), trained with mean squared error against the stop-gradient ground truth:
 
 $$\mathcal{L}_{\text{mask}} = \| \hat{\mathbf{c}} - \text{sg}(\mathbf{c}) \|^2$$
 
@@ -144,10 +159,15 @@ At action selection, a bias vector $\mathbf{b} \in \mathbb{R}^{|\mathcal{A}|}$ i
 
 $$\pi_{\text{adj}}(a \mid s) \propto \exp\left(\ell_a + b_a\right)$$
 
-where $\ell_a$ are the raw logits from the policy network. For each action rule, a deficit $\delta_a \geq 0$ is computed as the sum of all condition shortfalls (e.g. missing resources, absent proximity). Two modes:
+where $\ell_a$ are the raw logits from the policy network. Each maskable action $a$ has a set of declarative conditions (e.g. "requires $\geq 2$ wood AND facing a placeable tile"). The deficit $\delta_a \geq 0$ is the sum of all condition shortfalls:
+- `"min"` conditions contribute $\max(0, \; \text{threshold} - \mathbf{c}[\text{idx}])$ (resource shortfall)
+- `"bool"` conditions contribute $1$ if the flag is false, $0$ otherwise
+- Other condition types (see `craftax_mask/mask.py`) follow analogous logic
 
-- **Soft** ($b_a = -\lambda \cdot \delta_a$): penalty proportional to total deficit, $\lambda = 5.0$ by default.
-- **Hard** ($b_a = -M \cdot \mathbb{1}[\delta_a > 0]$): large negative $M = 10^9$ blocks any action with non-zero deficit.
+Two masking modes:
+
+- **Soft** (`--action_mask_mode soft`): $b_a = -\lambda \cdot \delta_a$, where $\lambda = 5.0$ (`--action_mask_lambda_penalty`). Actions with higher deficit receive larger penalty but are never fully blocked.
+- **Hard** (`--action_mask_mode hard`): $b_a = -M \cdot \mathbb{1}[\delta_a > 0]$, where $M = 10^9$ (`--action_mask_large_negative`). Any action with non-zero deficit is effectively blocked.
 
 During imagination (policy optimisation in latent space), the mask is applied using the *predicted* context $\hat{\mathbf{c}}$, allowing the agent to plan with feasibility awareness without access to the true game state.
 
