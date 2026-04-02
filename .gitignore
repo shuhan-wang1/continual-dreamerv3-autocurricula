@@ -16,6 +16,7 @@ notebooks/data
 procgen
 *.drawio
 *.ipynb
+!demo_notebook.ipynb
 *.csv
 *.pdf
 *.svg
