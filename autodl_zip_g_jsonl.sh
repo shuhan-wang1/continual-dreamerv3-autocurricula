@@ -2,9 +2,12 @@
 # =============================================================
 # Package G-group online_metrics.jsonl files for local download.
 #
+# Actual path on AutoDL (DreamerV3 appends craftax_{tag} to logdir):
+#   experiment_results/10m/<exp_name>/craftax_<tag>/online_metrics.jsonl
+#
 # Output:  g_group_jsonl_<timestamp>.zip
 #
-# Zip layout:
+# Zip layout mirrors the server structure, rooted at all_results/:
 #   all_results/<exp_name>/craftax_<tag>/online_metrics.jsonl
 #
 # Local unzip workflow:
@@ -33,8 +36,6 @@ if [ ! -d "$RESULTS_DIR" ]; then
     exit 1
 fi
 
-# Build the zip with all_results/ prefix so unzipping locally
-# produces the correct directory layout.
 STAGING=$(mktemp -d)
 trap 'rm -rf "$STAGING"' EXIT
 
@@ -45,20 +46,24 @@ for exp_dir in "$RESULTS_DIR"/*/; do
     [ -d "$exp_dir" ] || continue
     exp_name=$(basename "$exp_dir")
 
-    # Collect every online_metrics.jsonl under the experiment dir
-    # (typically one file at craftax_<tag>/online_metrics.jsonl)
-    while IFS= read -r -d '' jsonl_file; do
-        # Relative path inside the experiment dir, e.g. craftax_G1v2.../online_metrics.jsonl
-        rel="${jsonl_file#${exp_dir}}"
-        dest_dir="$STAGING/all_results/$exp_name/$(dirname "$rel")"
+    # DreamerV3 saves into <logdir>/craftax_<tag>/
+    # Find online_metrics.jsonl exactly one level deep inside craftax_*/
+    found=0
+    for craftax_dir in "$exp_dir"craftax_*/; do
+        [ -d "$craftax_dir" ] || continue
+        jsonl_file="$craftax_dir/online_metrics.jsonl"
+        [ -f "$jsonl_file" ] || continue
+
+        craftax_name=$(basename "$craftax_dir")
+        dest_dir="$STAGING/all_results/$exp_name/$craftax_name"
         mkdir -p "$dest_dir"
         cp "$jsonl_file" "$dest_dir/"
-        echo "  [+] $exp_name/$rel"
+        echo "  [+] $exp_name/$craftax_name/online_metrics.jsonl"
         COUNT=$((COUNT + 1))
-    done < <(find "$exp_dir" -name "online_metrics.jsonl" -print0 2>/dev/null)
+        found=1
+    done
 
-    # Warn if an experiment directory has no metrics yet
-    if ! find "$exp_dir" -name "online_metrics.jsonl" -quit 2>/dev/null | grep -q .; then
+    if [ "$found" -eq 0 ]; then
         echo "  [!] $exp_name — no online_metrics.jsonl found (training not started?)"
         MISSING=$((MISSING + 1))
     fi
